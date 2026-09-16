@@ -92,9 +92,13 @@ fn draw_sessions(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(focused_style(focused));
 
     if app.snapshot.sessions.is_empty() {
-        let msg = match &app.server_error {
-            Some(err) => format!("no tmux server\n\nstart tmux or check -L/-S\n\n{err}"),
-            None => "no tmux server\n\nstart tmux or check -L/-S".into(),
+        let msg = if app.is_loading() {
+            "loading…".into()
+        } else {
+            match &app.server_error {
+                Some(err) => format!("no tmux server\n\nstart tmux or check -L/-S\n\n{err}"),
+                None => "no tmux server\n\nstart tmux or check -L/-S".into(),
+            }
         };
         frame.render_widget(
             Paragraph::new(msg)

@@ -92,9 +92,12 @@ pub struct App {
     pub(crate) inside: bool,
     pub(crate) exit: Option<ExitAction>,
     pub(crate) config: Config,
+    loaded: bool,
     force_snapshot: bool,
     pending_snapshot: bool,
     last_snapshot_at: Option<Instant>,
+    snapshot_job: Option<tokio::task::JoinHandle<sparkmux_core::Result<Snapshot>>>,
+    snapshot_deadline: Option<tokio::time::Instant>,
     preview_target_tx: watch::Sender<Option<String>>,
     preview_rx: watch::Receiver<PreviewState>,
 }
@@ -136,9 +139,12 @@ impl App {
             inside,
             exit: None,
             config,
+            loaded: false,
             force_snapshot: true,
             pending_snapshot: false,
             last_snapshot_at: None,
+            snapshot_job: None,
+            snapshot_deadline: None,
             preview_target_tx,
             preview_rx,
         };
@@ -164,9 +170,25 @@ impl App {
                 return Ok(exit);
             }
 
-            self.flush_snapshot().await;
+            self.start_snapshot_if_needed();
 
             tokio::select! {
+                biased;
+                Some(result) = await_snapshot(&mut self.snapshot_job) => {
+                    self.snapshot_job = None;
+                    self.snapshot_deadline = None;
+                    self.loaded = true;
+                    match result {
+                        Ok(Ok(snap)) => self.apply_snapshot(snap),
+                        Ok(Err(e)) => self.apply_snapshot_err(e),
+                        Err(e) => self.toast(format!("snapshot task failed: {e}")),
+                    }
+                }
+                () = await_deadline(self.snapshot_deadline) => {
+                    self.snapshot_job = None;
+                    self.snapshot_deadline = None;
+                    self.toast("timed out listing tmux tree");
+                }
                 _ = refresh.tick() => {
                     self.force_snapshot = true;
                 }
@@ -199,27 +221,30 @@ impl App {
         }
     }
 
-    async fn flush_snapshot(&mut self) {
-        if self.force_snapshot {
+    fn start_snapshot_if_needed(&mut self) {
+        if self.snapshot_job.is_some() {
+            return;
+        }
+        let go = if self.force_snapshot {
             self.force_snapshot = false;
             self.pending_snapshot = false;
-            self.reload_snapshot().await;
+            true
+        } else if self.pending_snapshot {
+            let min = Duration::from_millis(self.config.refresh_ms.max(100));
+            if self.last_snapshot_at.is_some_and(|at| at.elapsed() < min) {
+                return;
+            }
+            self.pending_snapshot = false;
+            true
+        } else {
+            false
+        };
+        if !go {
             return;
         }
-        if !self.pending_snapshot {
-            return;
-        }
-        let min = Duration::from_millis(self.config.refresh_ms.max(100));
-        if self.last_snapshot_at.is_some_and(|at| at.elapsed() < min) {
-            return;
-        }
-        self.pending_snapshot = false;
-        self.reload_snapshot().await;
-    }
-
-    async fn reload_snapshot(&mut self) {
         self.last_snapshot_at = Some(Instant::now());
-        let Some(client) = self.client.as_ref() else {
+        let Some(client) = self.client.clone() else {
+            self.loaded = true;
             if self.server_error.is_none() {
                 self.server_error = Some("tmux binary not found".into());
             }
@@ -228,18 +253,12 @@ impl App {
             self.update_preview_target();
             return;
         };
-        let client = client.clone();
-        let result = tokio::time::timeout(
-            SNAPSHOT_TIMEOUT,
-            tokio::task::spawn_blocking(move || client.snapshot()),
-        )
-        .await;
-        match result {
-            Ok(Ok(Ok(snap))) => self.apply_snapshot(snap),
-            Ok(Ok(Err(e))) => self.apply_snapshot_err(e),
-            Ok(Err(e)) => self.toast(format!("snapshot task failed: {e}")),
-            Err(_) => self.toast("timed out listing tmux tree"),
-        }
+        self.snapshot_deadline = Some(tokio::time::Instant::now() + SNAPSHOT_TIMEOUT);
+        self.snapshot_job = Some(tokio::task::spawn_blocking(move || client.snapshot()));
+    }
+
+    pub(crate) fn is_loading(&self) -> bool {
+        self.client.is_some() && !self.loaded
     }
 
     fn apply_snapshot(&mut self, snap: Snapshot) {
@@ -485,6 +504,22 @@ impl App {
             }
         }
         None
+    }
+}
+
+async fn await_snapshot(
+    job: &mut Option<tokio::task::JoinHandle<sparkmux_core::Result<Snapshot>>>,
+) -> Option<std::result::Result<sparkmux_core::Result<Snapshot>, tokio::task::JoinError>> {
+    match job.as_mut() {
+        Some(handle) => Some(handle.await),
+        None => std::future::pending().await,
+    }
+}
+
+async fn await_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
     }
 }
 
