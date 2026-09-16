@@ -4,7 +4,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
-use sparkmux_core::strip_ansi;
 
 use crate::app::{App, InputKind, KillTarget, MiddleItem, Modal, Panel};
 
@@ -200,7 +199,9 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::Gray));
 
     let inner_h = area.height.saturating_sub(2) as usize;
-    let body = if app.preview.text.is_empty() {
+    let current = app.resolve_preview_pane();
+    let stale = app.preview.pane_id.as_deref() != current;
+    let body = if stale || !app.preview.ok || app.preview.text.is_empty() {
         "(no preview)"
     } else {
         app.preview.text.as_str()
@@ -212,9 +213,8 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(text).block(block).scroll((lines as u16, 0))
         }
         Err(_) => {
-            let plain = strip_ansi(body);
-            let lines = plain.lines().count().saturating_sub(inner_h.max(1));
-            Paragraph::new(plain).block(block).scroll((lines as u16, 0))
+            let lines = body.lines().count().saturating_sub(inner_h.max(1));
+            Paragraph::new(body).block(block).scroll((lines as u16, 0))
         }
     };
     frame.render_widget(paragraph, area);
@@ -234,13 +234,21 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 InputKind::RenameSession => "rename session",
                 InputKind::RenameWindow => "rename window",
             };
-            let line = format!(" {prompt}: {buffer}");
+            let mut lines = vec![Line::from(vec![
+                Span::styled(
+                    format!(" {prompt}: {buffer}"),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled("█", Style::default().fg(Color::Yellow)),
+            ])];
+            if let Some(msg) = &app.toast_msg {
+                lines.push(Line::from(Span::styled(
+                    format!(" {msg}"),
+                    Style::default().fg(Color::Red),
+                )));
+            }
             frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(line, Style::default().fg(Color::Yellow)),
-                    Span::styled("█", Style::default().fg(Color::Yellow)),
-                ]))
-                .block(Block::default().borders(Borders::TOP)),
+                Paragraph::new(lines).block(Block::default().borders(Borders::TOP)),
                 area,
             );
         }

@@ -57,7 +57,10 @@ impl TmuxClient {
     }
 
     pub fn version(&self) -> Result<TmuxVersion> {
-        let output = Command::new(&self.bin).arg("-V").output()?;
+        let output = Command::new(&self.bin)
+            .arg("-V")
+            .stdin(Stdio::null())
+            .output()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return Err(Error::Command(err));
@@ -72,10 +75,6 @@ impl TmuxClient {
         crate::snapshot::parse_snapshot(&sessions, &windows, &panes)
     }
 
-    pub fn capture_pane(&self, pane_id: &str) -> Result<String> {
-        self.run(&["capture-pane", "-p", "-e", "-t", pane_id])
-    }
-
     pub async fn capture_pane_timeout(&self, pane_id: &str, timeout: Duration) -> Result<String> {
         let mut cmd = tokio::process::Command::new(&self.bin);
         self.apply_socket_tokio(&mut cmd);
@@ -85,6 +84,7 @@ impl TmuxClient {
             .arg("-t")
             .arg(pane_id)
             .kill_on_drop(true)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         match tokio::time::timeout(timeout, cmd.output()).await {
@@ -155,7 +155,7 @@ impl TmuxClient {
     fn run(&self, args: &[&str]) -> Result<String> {
         let mut cmd = Command::new(&self.bin);
         self.apply_socket(&mut cmd);
-        cmd.args(args);
+        cmd.args(args).stdin(Stdio::null());
         tracing::debug!(bin = %self.bin.display(), ?args, "tmux");
         let output = cmd.output()?;
         if output.status.success() {
@@ -269,17 +269,27 @@ mod tests {
     #[test]
     fn decide_attach_when_outside() {
         let cursor = Cursor {
-            session_id: "work".into(),
-            window_id: None,
-            pane_id: None,
+            session_id: "$0".into(),
+            window_id: Some("@1".into()),
+            pane_id: Some("%2".into()),
         };
         assert_eq!(
             decide_attach(false, &cursor),
             AttachAction::Attach {
-                session: "work".into(),
-                window: None,
-                pane: None,
+                session: "$0".into(),
+                window: Some("@1".into()),
+                pane: Some("%2".into()),
             }
         );
+    }
+
+    #[test]
+    fn server_down_from_stderr() {
+        assert!(is_server_down("no server running on /tmp/tmux-501/default"));
+        assert!(is_server_down("error connecting to /tmp/tmux-501/default"));
+        assert!(is_server_down(
+            "error connecting to /tmp/tmux.sock (No such file or directory)"
+        ));
+        assert!(!is_server_down("duplicate session: foo"));
     }
 }

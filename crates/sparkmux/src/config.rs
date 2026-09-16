@@ -14,7 +14,6 @@ pub struct Config {
     pub refresh_ms: u64,
     pub preview_ms: u64,
     pub preview_lines: usize,
-    pub verbose: bool,
 }
 
 impl Default for Config {
@@ -26,7 +25,6 @@ impl Default for Config {
             refresh_ms: 1000,
             preview_ms: 400,
             preview_lines: 200,
-            verbose: false,
         }
     }
 }
@@ -44,20 +42,27 @@ struct FileConfig {
     preview_lines: Option<usize>,
 }
 
-pub fn load(cli: &Cli) -> Config {
+pub fn load(cli: &Cli) -> (Config, Option<String>) {
     let mut cfg = Config::default();
+    let mut warning = None;
     let path = cli.config.clone().or_else(default_config_path);
     if let Some(path) = path {
         match fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<FileConfig>(&text) {
                 Ok(file) => apply_file(&mut cfg, file),
                 Err(e) => {
-                    tracing::warn!(error = %e, path = %path.display(), "invalid config, using defaults")
+                    warning = Some(format!(
+                        "invalid config {}, using defaults: {e}",
+                        path.display()
+                    ));
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && cli.config.is_none() => {}
             Err(e) => {
-                tracing::warn!(error = %e, path = %path.display(), "could not read config, using defaults")
+                warning = Some(format!(
+                    "could not read config {}, using defaults: {e}",
+                    path.display()
+                ));
             }
         }
     }
@@ -67,12 +72,13 @@ pub fn load(cli: &Cli) -> Config {
     }
     if let Some(name) = &cli.socket_name {
         cfg.socket_name = Some(name.clone());
+        cfg.socket_path = None;
     }
     if let Some(path) = &cli.socket_path {
         cfg.socket_path = Some(path.clone());
+        cfg.socket_name = None;
     }
-    cfg.verbose = cli.verbose;
-    cfg
+    (cfg, warning)
 }
 
 fn apply_file(cfg: &mut Config, file: FileConfig) {
@@ -102,4 +108,54 @@ pub fn default_config_path() -> Option<PathBuf> {
 
 pub fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from("", "", "sparkmux")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_file_ignores_empty_and_zero() {
+        let mut cfg = Config::default();
+        apply_file(
+            &mut cfg,
+            FileConfig {
+                tmux_bin: String::new(),
+                socket_name: String::new(),
+                socket_path: String::new(),
+                refresh_ms: Some(0),
+                preview_ms: Some(0),
+                preview_lines: Some(0),
+            },
+        );
+        assert!(cfg.tmux_bin.is_none());
+        assert!(cfg.socket_name.is_none());
+        assert_eq!(cfg.refresh_ms, 1000);
+        assert_eq!(cfg.preview_ms, 400);
+        assert_eq!(cfg.preview_lines, 200);
+    }
+
+    #[test]
+    fn apply_file_positive_overrides() {
+        let mut cfg = Config::default();
+        apply_file(
+            &mut cfg,
+            FileConfig {
+                tmux_bin: "/usr/bin/tmux".into(),
+                socket_name: "other".into(),
+                socket_path: String::new(),
+                refresh_ms: Some(2500),
+                preview_ms: Some(100),
+                preview_lines: Some(50),
+            },
+        );
+        assert_eq!(
+            cfg.tmux_bin.as_deref(),
+            Some(std::path::Path::new("/usr/bin/tmux"))
+        );
+        assert_eq!(cfg.socket_name.as_deref(), Some("other"));
+        assert_eq!(cfg.refresh_ms, 2500);
+        assert_eq!(cfg.preview_ms, 100);
+        assert_eq!(cfg.preview_lines, 50);
+    }
 }

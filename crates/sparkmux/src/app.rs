@@ -5,7 +5,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::{self, Event};
 use ratatui::prelude::{CrosstermBackend, Terminal};
 use sparkmux_core::{
-    cap_lines, first_cursor, restore_cursor, Cursor, Session, Snapshot, TmuxClient, Window,
+    cap_lines, first_cursor, restore_cursor, Cursor, Error, Session, Snapshot, TmuxClient, Window,
 };
 use tokio::sync::watch;
 use tokio::time::{interval_at, MissedTickBehavior};
@@ -17,6 +17,8 @@ use crate::ui;
 
 const TOAST_TTL: Duration = Duration::from_secs(4);
 const CAPTURE_TIMEOUT: Duration = Duration::from_millis(300);
+// list-* is usually <50ms; 2s is a hang ceiling so a stuck tmux cannot freeze the TUI.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Panel {
@@ -68,6 +70,7 @@ pub(crate) enum MiddleItem<'a> {
     Pane(&'a Window, &'a sparkmux_core::Pane),
 }
 
+#[derive(Debug, Clone)]
 pub enum ExitAction {
     Quit,
     Attach(String),
@@ -87,9 +90,11 @@ pub struct App {
     pub(crate) version_banner: Option<String>,
     pub(crate) read_only: bool,
     pub(crate) inside: bool,
-    pub(crate) should_quit: bool,
-    pub(crate) pending_exec: Option<String>,
+    pub(crate) exit: Option<ExitAction>,
     pub(crate) config: Config,
+    force_snapshot: bool,
+    pending_snapshot: bool,
+    last_snapshot_at: Option<Instant>,
     preview_target_tx: watch::Sender<Option<String>>,
     preview_rx: watch::Receiver<PreviewState>,
 }
@@ -102,6 +107,7 @@ impl App {
         read_only: bool,
         version_banner: Option<String>,
         server_error: Option<String>,
+        config_warning: Option<String>,
     ) -> Self {
         let (preview_target_tx, preview_target_rx) = watch::channel(None);
         let (preview_tx, preview_rx) = watch::channel(PreviewState::default());
@@ -114,7 +120,7 @@ impl App {
                 config.preview_lines,
             );
         }
-        Self {
+        let mut app = Self {
             client,
             snapshot: Snapshot::empty(),
             cursor: None,
@@ -128,40 +134,41 @@ impl App {
             version_banner,
             read_only,
             inside,
-            should_quit: false,
-            pending_exec: None,
+            exit: None,
             config,
+            force_snapshot: true,
+            pending_snapshot: false,
+            last_snapshot_at: None,
             preview_target_tx,
             preview_rx,
+        };
+        if let Some(msg) = config_warning {
+            app.toast(msg);
         }
+        app
     }
 
     pub async fn run(
         mut self,
         terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     ) -> Result<ExitAction> {
-        self.reload_snapshot_sync();
-        let start = tokio::time::Instant::now() + Duration::from_millis(self.config.refresh_ms);
-        let mut refresh = interval_at(
-            start,
-            Duration::from_millis(self.config.refresh_ms.max(100)),
-        );
+        let period = Duration::from_millis(self.config.refresh_ms.max(100));
+        let mut refresh = interval_at(tokio::time::Instant::now() + period, period);
         refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             self.expire_toast();
             terminal.draw(|f| ui::draw(f, &self))?;
 
-            if self.should_quit {
-                return Ok(ExitAction::Quit);
+            if let Some(exit) = self.exit.take() {
+                return Ok(exit);
             }
-            if let Some(session) = self.pending_exec.take() {
-                return Ok(ExitAction::Attach(session));
-            }
+
+            self.flush_snapshot().await;
 
             tokio::select! {
                 _ = refresh.tick() => {
-                    self.reload_snapshot_sync();
+                    self.force_snapshot = true;
                 }
                 _ = self.preview_rx.changed() => {
                     self.preview = self.preview_rx.borrow().clone();
@@ -184,8 +191,35 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn reload_snapshot_sync(&mut self) {
-        let Some(client) = self.client.clone() else {
+    pub(crate) fn request_snapshot(&mut self, force: bool) {
+        if force {
+            self.force_snapshot = true;
+        } else {
+            self.pending_snapshot = true;
+        }
+    }
+
+    async fn flush_snapshot(&mut self) {
+        if self.force_snapshot {
+            self.force_snapshot = false;
+            self.pending_snapshot = false;
+            self.reload_snapshot().await;
+            return;
+        }
+        if !self.pending_snapshot {
+            return;
+        }
+        let min = Duration::from_millis(self.config.refresh_ms.max(100));
+        if self.last_snapshot_at.is_some_and(|at| at.elapsed() < min) {
+            return;
+        }
+        self.pending_snapshot = false;
+        self.reload_snapshot().await;
+    }
+
+    async fn reload_snapshot(&mut self) {
+        self.last_snapshot_at = Some(Instant::now());
+        let Some(client) = self.client.as_ref() else {
             if self.server_error.is_none() {
                 self.server_error = Some("tmux binary not found".into());
             }
@@ -194,27 +228,60 @@ impl App {
             self.update_preview_target();
             return;
         };
-        match client.snapshot() {
-            Ok(snap) => {
-                let new_cursor = match &self.cursor {
-                    Some(c) => restore_cursor(&self.snapshot, &snap, c),
-                    None => first_cursor(&snap),
-                };
-                self.snapshot = snap;
-                self.cursor = new_cursor;
-                self.server_error = None;
-                if let Some(wid) = self.cursor.as_ref().and_then(|c| c.window_id.clone()) {
-                    self.expanded.insert(wid);
-                }
-                self.update_preview_target();
-            }
-            Err(e) => {
-                self.server_error = Some(e.to_string());
-                self.snapshot = Snapshot::empty();
-                self.cursor = None;
-                self.update_preview_target();
+        let client = client.clone();
+        let result = tokio::time::timeout(
+            SNAPSHOT_TIMEOUT,
+            tokio::task::spawn_blocking(move || client.snapshot()),
+        )
+        .await;
+        match result {
+            Ok(Ok(Ok(snap))) => self.apply_snapshot(snap),
+            Ok(Ok(Err(e))) => self.apply_snapshot_err(e),
+            Ok(Err(e)) => self.toast(format!("snapshot task failed: {e}")),
+            Err(_) => self.toast("timed out listing tmux tree"),
+        }
+    }
+
+    fn apply_snapshot(&mut self, snap: Snapshot) {
+        let had_cursor = self.cursor.is_some();
+        let new_cursor = match &self.cursor {
+            Some(c) => restore_cursor(&self.snapshot, &snap, c),
+            None => first_cursor(&snap),
+        };
+        self.snapshot = snap;
+        self.cursor = new_cursor;
+        self.server_error = None;
+        self.prune_expanded();
+        if !had_cursor {
+            if let Some(wid) = self.cursor.as_ref().and_then(|c| c.window_id.clone()) {
+                self.expanded.insert(wid);
             }
         }
+        self.update_preview_target();
+    }
+
+    fn apply_snapshot_err(&mut self, e: Error) {
+        let clear = matches!(
+            e,
+            Error::TmuxNotFound | Error::TmuxNotExecutable(_) | Error::ServerDown(_)
+        );
+        self.server_error = Some(e.to_string());
+        if clear {
+            self.snapshot = Snapshot::empty();
+            self.cursor = None;
+            self.update_preview_target();
+        } else {
+            self.toast(e.to_string());
+        }
+    }
+
+    fn prune_expanded(&mut self) {
+        self.expanded.retain(|id| {
+            self.snapshot
+                .sessions
+                .iter()
+                .any(|s| s.windows.iter().any(|w| w.id == *id))
+        });
     }
 
     pub(crate) fn toast(&mut self, msg: impl Into<String>) {
@@ -273,7 +340,6 @@ impl App {
             .or(session.windows.first())
         {
             cursor.window_id = Some(window.id.clone());
-            self.expanded.insert(window.id.clone());
             if let Some(pane) = window
                 .panes
                 .iter()
@@ -284,7 +350,7 @@ impl App {
             }
         }
         self.cursor = Some(cursor);
-        self.update_preview_target();
+        self.note_focus_change();
     }
 
     pub(crate) fn middle_items(&self) -> Vec<MiddleItem<'_>> {
@@ -350,6 +416,11 @@ impl App {
             cursor.window_id = Some(window_id);
             cursor.pane_id = pane_id;
         }
+        self.note_focus_change();
+    }
+
+    pub(crate) fn note_focus_change(&mut self) {
+        self.request_snapshot(false);
         self.update_preview_target();
     }
 
@@ -444,6 +515,9 @@ fn spawn_preview_worker(
             };
             match client.capture_pane_timeout(&id, CAPTURE_TIMEOUT).await {
                 Ok(text) => {
+                    if target_rx.borrow().as_deref() != Some(id.as_str()) {
+                        continue;
+                    }
                     let text = cap_lines(&text, preview_lines);
                     last_good = Some((id.clone(), text.clone()));
                     let _ = preview_tx.send(PreviewState {
@@ -453,6 +527,9 @@ fn spawn_preview_worker(
                     });
                 }
                 Err(_) => {
+                    if target_rx.borrow().as_deref() != Some(id.as_str()) {
+                        continue;
+                    }
                     if last_good.as_ref().map(|(p, _)| p.as_str()) == Some(id.as_str()) {
                         continue;
                     }

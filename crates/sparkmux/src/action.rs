@@ -1,11 +1,11 @@
 use sparkmux_core::{decide_attach, AttachAction};
 
-use crate::app::{App, InputKind, KillTarget, Modal, Panel};
+use crate::app::{App, ExitAction, InputKind, KillTarget, Modal, Panel};
 use crate::event::Action;
 
 pub fn dispatch(app: &mut App, action: Action) {
     match action {
-        Action::Quit => app.should_quit = true,
+        Action::Quit => app.exit = Some(ExitAction::Quit),
         Action::MoveNext => move_list(app, 1),
         Action::MovePrev => move_list(app, -1),
         Action::MoveParent => move_parent(app),
@@ -17,7 +17,7 @@ pub fn dispatch(app: &mut App, action: Action) {
         Action::New => start_new(app),
         Action::Rename => start_rename(app),
         Action::Kill => start_kill(app),
-        Action::Refresh => app.reload_snapshot_sync(),
+        Action::Refresh => app.request_snapshot(true),
         Action::ToggleHelp => toggle_help(app),
         Action::ToggleExpand => toggle_expand(app),
         Action::ConfirmYes => confirm_kill(app),
@@ -51,6 +51,7 @@ fn toggle_panel(app: &mut App) {
         Panel::Sessions => Panel::Windows,
         Panel::Windows => Panel::Sessions,
     };
+    app.request_snapshot(false);
 }
 
 fn move_list(app: &mut App, delta: i32) {
@@ -102,7 +103,10 @@ fn move_end(app: &mut App, first: bool) {
 
 fn move_child(app: &mut App) {
     match app.panel {
-        Panel::Sessions => app.panel = Panel::Windows,
+        Panel::Sessions => {
+            app.panel = Panel::Windows;
+            app.request_snapshot(false);
+        }
         Panel::Windows => {
             let Some(idx) = app.middle_index() else {
                 return;
@@ -152,12 +156,15 @@ fn move_parent(app: &mut App) {
                         c.window_id = Some(wid);
                         c.pane_id = None;
                     }
-                    app.update_preview_target();
+                    app.note_focus_change();
                 }
                 ParentMove::Collapse(id) => {
                     app.expanded.remove(&id);
                 }
-                ParentMove::ToSessions => app.panel = Panel::Sessions,
+                ParentMove::ToSessions => {
+                    app.panel = Panel::Sessions;
+                    app.request_snapshot(false);
+                }
             }
         }
     }
@@ -196,7 +203,7 @@ fn toggle_expand(app: &mut App) {
             c.window_id = Some(id);
             c.pane_id = None;
         }
-        app.update_preview_target();
+        app.note_focus_change();
     }
 }
 
@@ -205,7 +212,7 @@ fn attach(app: &mut App) {
         app.toast("no session");
         return;
     };
-    let Some(client) = app.client.clone() else {
+    let Some(client) = app.client.as_ref() else {
         app.toast("tmux binary not found");
         return;
     };
@@ -220,18 +227,12 @@ fn attach(app: &mut App) {
                 return;
             }
             if let Some(w) = window {
-                if let Err(e) = client.select_window(&w) {
-                    app.toast(e.to_string());
-                    return;
-                }
+                let _ = client.select_window(&w);
             }
             if let Some(p) = pane {
-                if let Err(e) = client.select_pane(&p) {
-                    app.toast(e.to_string());
-                    return;
-                }
+                let _ = client.select_pane(&p);
             }
-            app.should_quit = true;
+            app.exit = Some(ExitAction::Quit);
         }
         AttachAction::Attach {
             session,
@@ -239,18 +240,12 @@ fn attach(app: &mut App) {
             pane,
         } => {
             if let Some(w) = window {
-                if let Err(e) = client.select_window(&w) {
-                    app.toast(e.to_string());
-                    return;
-                }
+                let _ = client.select_window(&w);
             }
             if let Some(p) = pane {
-                if let Err(e) = client.select_pane(&p) {
-                    app.toast(e.to_string());
-                    return;
-                }
+                let _ = client.select_pane(&p);
             }
-            app.pending_exec = Some(session);
+            app.exit = Some(ExitAction::Attach(session));
         }
     }
 }
@@ -369,7 +364,7 @@ fn confirm_kill(app: &mut App) {
         return;
     };
     app.modal = Modal::None;
-    let Some(client) = app.client.clone() else {
+    let Some(client) = app.client.as_ref() else {
         app.toast("tmux binary not found");
         return;
     };
@@ -381,7 +376,7 @@ fn confirm_kill(app: &mut App) {
     if let Err(e) = result {
         app.toast(e.to_string());
     }
-    app.reload_snapshot_sync();
+    app.request_snapshot(true);
 }
 
 fn submit_input(app: &mut App) {
@@ -394,7 +389,7 @@ fn submit_input(app: &mut App) {
         return;
     }
     app.modal = Modal::None;
-    let Some(client) = app.client.clone() else {
+    let Some(client) = app.client.as_ref() else {
         app.toast("tmux binary not found");
         return;
     };
@@ -425,5 +420,5 @@ fn submit_input(app: &mut App) {
     if let Err(e) = result {
         app.toast(e.to_string());
     }
-    app.reload_snapshot_sync();
+    app.request_snapshot(true);
 }

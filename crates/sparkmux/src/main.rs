@@ -69,7 +69,10 @@ async fn main() -> eyre::Result<ExitCode> {
     let cli = Cli::parse();
     let is_tui = cli.command.is_none();
     init_tracing(cli.verbose, is_tui);
-    let cfg = config::load(&cli);
+    let (cfg, config_warning) = config::load(&cli);
+    if let Some(ref msg) = config_warning {
+        eprintln!("warning: {msg}");
+    }
 
     match cli.command {
         Some(Commands::Dump) => {
@@ -80,7 +83,7 @@ async fn main() -> eyre::Result<ExitCode> {
         }
         Some(Commands::Version) => Ok(cmd_version(&cfg)),
         None => {
-            run_tui(cfg).await?;
+            run_tui(cfg, config_warning).await?;
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -125,7 +128,7 @@ fn cmd_version(cfg: &Config) -> ExitCode {
     }
 }
 
-async fn run_tui(cfg: Config) -> eyre::Result<()> {
+async fn run_tui(cfg: Config, config_warning: Option<String>) -> eyre::Result<()> {
     let inside = is_inside_tmux();
     let mut read_only = false;
     let mut version_banner = None;
@@ -152,7 +155,15 @@ async fn run_tui(cfg: Config) -> eyre::Result<()> {
     let exit = {
         let _guard = TuiGuard;
         let mut terminal = setup_terminal()?;
-        let app = App::new(client, cfg, inside, read_only, version_banner, server_error);
+        let app = App::new(
+            client,
+            cfg,
+            inside,
+            read_only,
+            version_banner,
+            server_error,
+            config_warning,
+        );
         app.run(&mut terminal).await?
     };
 

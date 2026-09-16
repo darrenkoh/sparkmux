@@ -21,40 +21,20 @@ pub fn parse_version(s: &str) -> Result<TmuxVersion> {
     let raw = s.trim().to_string();
     let rest = raw.strip_prefix("tmux").unwrap_or(raw.as_str()).trim();
     let rest = rest.strip_prefix("next-").unwrap_or(rest).trim();
-
-    let mut chars = rest.chars().peekable();
-    let mut major = String::new();
-    while let Some(c) = chars.peek().copied() {
-        if c.is_ascii_digit() {
-            major.push(c);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-    if major.is_empty() || chars.next() != Some('.') {
+    let Some((maj, min)) = rest.split_once('.') else {
+        return Err(Error::Parse(format!("unrecognized tmux version: {raw}")));
+    };
+    let maj: String = maj.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let min: String = min.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if maj.is_empty() || min.is_empty() {
         return Err(Error::Parse(format!("unrecognized tmux version: {raw}")));
     }
-    let mut minor = String::new();
-    while let Some(c) = chars.peek().copied() {
-        if c.is_ascii_digit() {
-            minor.push(c);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-    if minor.is_empty() {
-        return Err(Error::Parse(format!("unrecognized tmux version: {raw}")));
-    }
-
-    let major: u32 = major
+    let major: u32 = maj
         .parse()
         .map_err(|_| Error::Parse(format!("unrecognized tmux version: {raw}")))?;
-    let minor: u32 = minor
+    let minor: u32 = min
         .parse()
         .map_err(|_| Error::Parse(format!("unrecognized tmux version: {raw}")))?;
-
     Ok(TmuxVersion { major, minor, raw })
 }
 
@@ -96,5 +76,13 @@ mod tests {
         let v = parse_version("tmux 3.1a").unwrap();
         assert_eq!((v.major, v.minor), (3, 1));
         assert!(!v.is_supported());
+    }
+
+    #[test]
+    fn parse_version_rejects_junk() {
+        assert!(parse_version("tmux").is_err());
+        assert!(parse_version("tmux abc").is_err());
+        assert!(parse_version("tmux 3").is_err());
+        assert!(parse_version("").is_err());
     }
 }

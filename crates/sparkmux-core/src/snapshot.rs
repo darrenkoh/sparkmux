@@ -157,7 +157,7 @@ fn parse_sessions(blob: &str) -> Result<Vec<RawSession>> {
         out.push(RawSession {
             id,
             name: field(&f, 1).to_string(),
-            attached: parse_flag(field(&f, 2)),
+            attached: parse_u32(field(&f, 2)) > 0,
             created_epoch: parse_i64(field(&f, 4)),
             activity_epoch: parse_i64(field(&f, 5)),
             path: PathBuf::from(field(&f, 6)),
@@ -368,24 +368,77 @@ fn fill_active_or_first(session: &Session, cursor: &mut Cursor) {
 mod tests {
     use super::*;
 
-    const SESS: &str = "$0\u{1f}work project\u{1f}1\u{1f}2\u{1f}1700000000\u{1f}1700000100\u{1f}/Users/foo/work\n$1\u{1f}spark\u{1f}0\u{1f}1\u{1f}1700000001\u{1f}1700000200\u{1f}/Users/foo/spark\n";
+    const SESS: &str = "$0\u{1f}work project\u{1f}2\u{1f}2\u{1f}1700000000\u{1f}1700000100\u{1f}/Users/foo/work dir\n$1\u{1f}spark\u{1f}0\u{1f}1\u{1f}1700000001\u{1f}1700000200\u{1f}/Users/foo/spark\n";
     const WINS: &str = "$0\u{1f}@1\u{1f}0\u{1f}editor\u{1f}1\u{1f}2\u{1f}xxx\n$0\u{1f}@2\u{1f}1\u{1f}agents extra\u{1f}0\u{1f}1\u{1f}yyy\n$1\u{1f}@3\u{1f}0\u{1f}zsh\u{1f}1\u{1f}1\u{1f}zzz\n";
-    const PANES: &str = "$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}nvim\u{1f}/Users/foo/work\u{1f}123\u{1f}1\u{1f}80\u{1f}24\u{1f}main\n$0\u{1f}@1\u{1f}%1\u{1f}1\u{1f}claude\u{1f}/Users/foo/work\u{1f}124\u{1f}0\u{1f}80\u{1f}24\u{1f}\n$0\u{1f}@2\u{1f}%2\u{1f}0\u{1f}zsh\u{1f}/Users/foo/work\u{1f}125\u{1f}1\u{1f}80\u{1f}24\u{1f}\n$1\u{1f}@3\u{1f}%3\u{1f}0\u{1f}zsh\u{1f}/Users/foo/spark\u{1f}126\u{1f}1\u{1f}120\u{1f}40\u{1f}\n";
+    const PANES: &str = "$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}nvim\u{1f}/Users/foo/work dir\u{1f}123\u{1f}1\u{1f}80\u{1f}24\u{1f}main editor\n$0\u{1f}@1\u{1f}%1\u{1f}1\u{1f}claude\u{1f}/Users/foo/work dir\u{1f}124\u{1f}0\u{1f}80\u{1f}24\u{1f}\n$0\u{1f}@2\u{1f}%2\u{1f}0\u{1f}zsh\u{1f}/Users/foo/work dir\u{1f}125\u{1f}1\u{1f}80\u{1f}24\u{1f}\n$1\u{1f}@3\u{1f}%3\u{1f}0\u{1f}zsh\u{1f}/Users/foo/spark\u{1f}126\u{1f}1\u{1f}120\u{1f}40\u{1f}\n";
 
     #[test]
     fn parses_three_list_blobs_with_spaces() {
         let snap = parse_snapshot(SESS, WINS, PANES).unwrap();
         assert_eq!(snap.sessions.len(), 2);
+        assert_eq!(snap.sessions[0].id, "$0");
         assert_eq!(snap.sessions[0].name, "work project");
         assert!(snap.sessions[0].attached);
+        assert_eq!(snap.sessions[0].created_epoch, 1_700_000_000);
+        assert_eq!(snap.sessions[0].activity_epoch, 1_700_000_100);
+        assert_eq!(snap.sessions[0].path, PathBuf::from("/Users/foo/work dir"));
         assert_eq!(snap.sessions[0].windows.len(), 2);
+        assert_eq!(snap.sessions[0].windows[0].id, "@1");
+        assert_eq!(snap.sessions[0].windows[0].index, 0);
+        assert!(snap.sessions[0].windows[0].active);
+        assert_eq!(snap.sessions[0].windows[0].layout, "xxx");
         assert_eq!(snap.sessions[0].windows[1].name, "agents extra");
+        assert!(!snap.sessions[0].windows[1].active);
         assert_eq!(snap.sessions[0].windows[0].panes.len(), 2);
-        assert_eq!(snap.sessions[0].windows[0].panes[0].command, "nvim");
-        assert_eq!(snap.sessions[0].windows[0].panes[0].id, "%0");
-        assert!(snap.sessions[0].windows[0].panes[0].active);
+        let pane0 = &snap.sessions[0].windows[0].panes[0];
+        assert_eq!(pane0.id, "%0");
+        assert_eq!(pane0.command, "nvim");
+        assert_eq!(pane0.pid, 123);
+        assert_eq!((pane0.width, pane0.height), (80, 24));
+        assert_eq!(pane0.title, "main editor");
+        assert!(pane0.active);
+        assert!(!snap.sessions[0].windows[0].panes[1].active);
+        assert_eq!(snap.sessions[1].id, "$1");
         assert_eq!(snap.sessions[1].name, "spark");
+        assert!(!snap.sessions[1].attached);
         assert_eq!(snap.sessions[1].windows[0].panes[0].id, "%3");
+    }
+
+    #[test]
+    fn truncated_pane_line_defaults() {
+        let sessions = "$0\u{1f}s\u{1f}1\u{1f}1\u{1f}1\u{1f}1\u{1f}/\n";
+        let windows = "$0\u{1f}@1\u{1f}0\u{1f}w\u{1f}1\u{1f}1\u{1f}l\n";
+        let panes = "$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}nvim\n";
+        let snap = parse_snapshot(sessions, windows, panes).unwrap();
+        let pane = &snap.sessions[0].windows[0].panes[0];
+        assert_eq!(pane.command, "nvim");
+        assert_eq!(pane.title, "");
+        assert_eq!(pane.width, 0);
+        assert_eq!(pane.height, 0);
+        assert_eq!(pane.pid, 0);
+    }
+
+    #[test]
+    fn missing_session_id_is_error() {
+        let err =
+            parse_snapshot("\u{1f}name\u{1f}1\u{1f}1\u{1f}1\u{1f}1\u{1f}/\n", "", "").unwrap_err();
+        assert!(err.to_string().contains("missing id"));
+    }
+
+    #[test]
+    fn empty_blobs_yield_no_sessions() {
+        let snap = parse_snapshot("", "", "").unwrap();
+        assert!(snap.sessions.is_empty());
+    }
+
+    #[test]
+    fn first_cursor_prefers_active() {
+        let snap = parse_snapshot(SESS, WINS, PANES).unwrap();
+        let c = first_cursor(&snap).unwrap();
+        assert_eq!(c.session_id, "$0");
+        assert_eq!(c.window_id.as_deref(), Some("@1"));
+        assert_eq!(c.pane_id.as_deref(), Some("%0"));
+        assert!(first_cursor(&Snapshot::empty()).is_none());
     }
 
     fn session(id: &str, windows: Vec<Window>) -> Session {
@@ -451,5 +504,119 @@ mod tests {
         assert_eq!(restored.session_id, "$2");
         assert_eq!(restored.window_id.as_deref(), Some("@3"));
         assert_eq!(restored.pane_id.as_deref(), Some("%2"));
+    }
+
+    #[test]
+    fn restore_cursor_clamps_when_last_session_gone() {
+        let old = Snapshot {
+            sessions: vec![
+                session("$0", vec![window("@1", vec![pane("%0")])]),
+                session("$1", vec![window("@2", vec![pane("%1")])]),
+                session("$2", vec![window("@3", vec![pane("%2")])]),
+            ],
+            fetched_at: Instant::now(),
+        };
+        let new = Snapshot {
+            sessions: vec![
+                session("$0", vec![window("@1", vec![pane("%0")])]),
+                session("$1", vec![window("@2", vec![pane("%1")])]),
+            ],
+            fetched_at: Instant::now(),
+        };
+        let cursor = Cursor {
+            session_id: "$2".into(),
+            window_id: Some("@3".into()),
+            pane_id: Some("%2".into()),
+        };
+        let restored = restore_cursor(&old, &new, &cursor).unwrap();
+        assert_eq!(restored.session_id, "$1");
+    }
+
+    #[test]
+    fn restore_cursor_none_when_empty() {
+        let old = Snapshot {
+            sessions: vec![session("$0", vec![window("@1", vec![pane("%0")])])],
+            fetched_at: Instant::now(),
+        };
+        let cursor = Cursor {
+            session_id: "$0".into(),
+            window_id: Some("@1".into()),
+            pane_id: Some("%0".into()),
+        };
+        assert!(restore_cursor(&old, &Snapshot::empty(), &cursor).is_none());
+    }
+
+    #[test]
+    fn restore_cursor_window_neighbor() {
+        let old = Snapshot {
+            sessions: vec![session(
+                "$0",
+                vec![
+                    window("@1", vec![pane("%0")]),
+                    window("@2", vec![pane("%1")]),
+                    window("@3", vec![pane("%2")]),
+                ],
+            )],
+            fetched_at: Instant::now(),
+        };
+        let new = Snapshot {
+            sessions: vec![session(
+                "$0",
+                vec![
+                    window("@1", vec![pane("%0")]),
+                    window("@3", vec![pane("%2")]),
+                ],
+            )],
+            fetched_at: Instant::now(),
+        };
+        let cursor = Cursor {
+            session_id: "$0".into(),
+            window_id: Some("@2".into()),
+            pane_id: Some("%1".into()),
+        };
+        let restored = restore_cursor(&old, &new, &cursor).unwrap();
+        assert_eq!(restored.window_id.as_deref(), Some("@3"));
+        assert_eq!(restored.pane_id.as_deref(), Some("%2"));
+    }
+
+    #[test]
+    fn restore_cursor_pane_neighbor() {
+        let old = Snapshot {
+            sessions: vec![session(
+                "$0",
+                vec![window("@1", vec![pane("%0"), pane("%1"), pane("%2")])],
+            )],
+            fetched_at: Instant::now(),
+        };
+        let new = Snapshot {
+            sessions: vec![session(
+                "$0",
+                vec![window("@1", vec![pane("%0"), pane("%2")])],
+            )],
+            fetched_at: Instant::now(),
+        };
+        let cursor = Cursor {
+            session_id: "$0".into(),
+            window_id: Some("@1".into()),
+            pane_id: Some("%1".into()),
+        };
+        let restored = restore_cursor(&old, &new, &cursor).unwrap();
+        assert_eq!(restored.window_id.as_deref(), Some("@1"));
+        assert_eq!(restored.pane_id.as_deref(), Some("%2"));
+    }
+
+    #[test]
+    fn restore_cursor_identity_when_still_valid() {
+        let snap = Snapshot {
+            sessions: vec![session("$0", vec![window("@1", vec![pane("%0")])])],
+            fetched_at: Instant::now(),
+        };
+        let cursor = Cursor {
+            session_id: "$0".into(),
+            window_id: Some("@1".into()),
+            pane_id: Some("%0".into()),
+        };
+        let restored = restore_cursor(&snap, &snap, &cursor).unwrap();
+        assert_eq!(restored, cursor);
     }
 }

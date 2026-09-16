@@ -77,3 +77,67 @@ pub fn map_key(key: KeyEvent, modal: &Modal) -> Option<Action> {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{InputKind, Modal};
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn map_key_navigation_and_quit() {
+        assert_eq!(
+            map_key(press(KeyCode::Char('j')), &Modal::None),
+            Some(Action::MoveNext)
+        );
+        assert_eq!(
+            map_key(press(KeyCode::Enter), &Modal::None),
+            Some(Action::Attach)
+        );
+        assert_eq!(
+            map_key(press(KeyCode::Char('q')), &Modal::None),
+            Some(Action::Quit)
+        );
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(map_key(ctrl_c, &Modal::None), Some(Action::Quit));
+    }
+
+    #[test]
+    fn map_key_input_modal_overrides() {
+        let modal = Modal::Input {
+            kind: InputKind::NewSession,
+            buffer: String::new(),
+        };
+        assert_eq!(
+            map_key(press(KeyCode::Char('q')), &modal),
+            Some(Action::InputChar('q'))
+        );
+        assert_eq!(
+            map_key(press(KeyCode::Enter), &modal),
+            Some(Action::InputSubmit)
+        );
+        assert_eq!(
+            map_key(press(KeyCode::Esc), &modal),
+            Some(Action::InputCancel)
+        );
+    }
+
+    #[test]
+    fn map_key_confirm_modal() {
+        let modal = Modal::ConfirmKill {
+            target: crate::app::KillTarget::Session("$0".into()),
+            name: "work".into(),
+        };
+        assert_eq!(
+            map_key(press(KeyCode::Char('y')), &modal),
+            Some(Action::ConfirmYes)
+        );
+        assert_eq!(
+            map_key(press(KeyCode::Esc), &modal),
+            Some(Action::ConfirmNo)
+        );
+    }
+}
