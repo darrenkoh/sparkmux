@@ -28,7 +28,7 @@ pub async fn connect(
     let mut inner = state.inner.lock().await;
     inner.ensure_client()?;
     let client = inner.client.as_ref().unwrap();
-    let (bin, args) = client.control_argv();
+    let (bin, args) = client.control_argv(&session);
 
     if let Some(ctl) = inner.control.clone() {
         if inner.attached_session.as_deref() == Some(session.as_str()) {
@@ -60,10 +60,6 @@ pub async fn connect(
         .await
         .map_err(|e| map_error(&e))?;
     if let Err(e) = ctl.refresh_size(cols.max(2), rows.max(1)).await {
-        let _ = ctl.shutdown().await;
-        return Err(map_error(&e));
-    }
-    if let Err(e) = ctl.attach_session(&session).await {
         let _ = ctl.shutdown().await;
         return Err(map_error(&e));
     }

@@ -376,7 +376,7 @@ mod tests {
         if client.ensure_ready(&spawn, crate::DEFAULT_SESSION).is_err() {
             return;
         }
-        let (bin, args) = client.control_argv();
+        let (bin, args) = client.control_argv(crate::DEFAULT_SESSION);
         let ctl = match ControlClient::spawn(bin, args).await {
             Ok(c) => c,
             Err(_) => {
@@ -385,12 +385,20 @@ mod tests {
             }
         };
         let body = ctl.command("list-sessions").await;
+        let snap = client.snapshot();
         let _ = ctl.shutdown().await;
         let _ = client.kill_server();
         let body = body.expect("list-sessions over control mode");
         assert!(
             body.contains("main"),
             "expected session name in control body: {body:?}"
+        );
+        let snap = snap.expect("snapshot after control connect");
+        let names: Vec<&str> = snap.sessions.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![crate::DEFAULT_SESSION],
+            "control spawn must not create leftover sessions: {names:?}"
         );
     }
 }

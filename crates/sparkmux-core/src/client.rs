@@ -194,7 +194,7 @@ impl TmuxClient {
             .map(|_| ())
     }
 
-    pub fn control_argv(&self) -> (PathBuf, Vec<OsString>) {
+    pub fn control_argv(&self, session: &str) -> (PathBuf, Vec<OsString>) {
         let mut args = Vec::new();
         if let Some(path) = &self.socket_path {
             args.push("-S".into());
@@ -207,6 +207,9 @@ impl TmuxClient {
             args.push(SOCKET_NAME.into());
         }
         args.push("-C".into());
+        args.push("attach-session".into());
+        args.push("-t".into());
+        args.push(session.into());
         (self.bin.clone(), args)
     }
 
@@ -545,6 +548,26 @@ mod tests {
     fn snapshot_maps_no_sessions_stderr() {
         assert!(is_no_sessions("no sessions"));
         assert!(!is_server_down("no sessions"));
+    }
+
+    #[test]
+    fn control_argv_attaches_instead_of_bare_new_session() {
+        let client = TmuxClient {
+            bin: PathBuf::from("/usr/bin/tmux"),
+            socket_name: Some("sock".into()),
+            socket_path: None,
+        };
+        let (bin, args) = client.control_argv("main");
+        assert_eq!(bin, PathBuf::from("/usr/bin/tmux"));
+        let args: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec!["-L", "sock", "-C", "attach-session", "-t", "main"]
+        );
+        assert!(!args.windows(1).any(|w| w == ["new-session"]));
     }
 
     #[test]
