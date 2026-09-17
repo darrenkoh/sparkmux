@@ -21,14 +21,17 @@ export DEVELOPER_DIR=/Library/Developer/CommandLineTools
 cargo install --path crates/sparkmux
 ```
 
-Desktop (from a clone):
+Desktop (from a clone). `cargo tauri` is **not** a built-in Cargo command — use the npm CLI that ships with the app:
 
 ```bash
 cd apps/desktop
 npm install
-cd ../..
-cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml
+npm run tauri dev
 ```
+
+From the repo root instead: `npm run tauri --prefix apps/desktop dev`.
+
+If linking fails with the Xcode license error, export `DEVELOPER_DIR=/Library/Developer/CommandLineTools` first (same as CLI install).
 
 Release binary for the CLI is `target/release/sparkmux`. The desktop crate is `sparkmux-desktop` (`Sparkmux.app` / Linux `sparkmux-desktop`).
 
