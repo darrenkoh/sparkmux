@@ -3,3 +3,6 @@
 .DS_Store
 *.swp
 *.swo
+apps/desktop/dist
+apps/desktop/node_modules
+apps/desktop/src-tauri/target

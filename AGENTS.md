@@ -1,23 +1,26 @@
 # sparkmux
 
-Ratatui dashboard for a live tmux server (sessions / windows / panes / preview / attach). v0 talks to tmux via subprocess `list-*` and `capture-pane`. No web UI, Tauri, plugins, or control mode.
+Desktop app that owns a private tmux server (`-L sparkmux`) and shows tiled real terminals (one xterm.js per pane) via tmux control mode.
 
 ## Crate split
 
-- `crates/sparkmux-core` — discover tmux, snapshot parse, capture-pane, version, mutations. **All tmux I/O goes through here.**
-- `crates/sparkmux` — CLI + TUI. Never shells out to `tmux` directly.
+- `crates/sparkmux-core` — argv tmux I/O, snapshot parse, `window_layout` parser, control-mode client (`tmux -C`). **All tmux I/O goes through here.**
+- `crates/sparkmux` — thin CLI: `dump`, `version`, `doctor`. Default socket `-L sparkmux`. `--system` is `-L default`.
+- `apps/desktop` — Tauri 2 + React UI. Never spawn `tmux` except through core.
 
-Skills: `.grok/skills/sparkmux/SKILL.md` (TUI) and `.grok/skills/sparkmux-core/SKILL.md` (tmux I/O).
+## Product rules
 
-## v0 non-goals
-
-Control mode, clipboard, web/Tauri, plugin marketplace, agent badges, layout JSON, GPU/AI crates.
+- App owns `-L sparkmux`. Do not list or mutate the user's default server in the GUI.
+- Quit detaches the control client; tmux server stays up. Stop server is a confirmed menu action.
+- Named New Session uses `new_session_ex` only — never `ensure_ready` (no leftover `main`).
+- Live terminal path is control-mode `%output` / `send-keys -H`. `capture-pane` is seed-only, not polled.
+- No Ratatui TUI. No `portable-pty` attach-session.
 
 ## Test
 
 ```bash
-cargo test
-cargo clippy -- -D warnings
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
 cargo fmt
 ```
 

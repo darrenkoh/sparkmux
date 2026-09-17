@@ -1,53 +1,43 @@
-mod action;
-mod app;
-mod config;
-mod event;
-mod ui;
-
-use std::io::{self, stdout, Stdout};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{self, WrapErr};
-use crossterm::cursor::{Hide, Show};
-use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+use sparkmux_core::{
+    gui_spawn_env, load_config, Config, ConfigOverrides, TmuxClient, DEFAULT_SESSION,
 };
-use ratatui::prelude::{CrosstermBackend, Terminal};
-use sparkmux_core::{is_inside_tmux, TmuxClient};
 use tracing_subscriber::EnvFilter;
-
-use crate::app::{App, ExitAction};
-use crate::config::Config;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "sparkmux",
     version,
-    about = "A fast Ratatui dashboard for a live tmux server"
+    about = "CLI for a sparkmux-owned tmux server (desktop app is the product UI)"
 )]
-pub(crate) struct Cli {
+struct Cli {
     /// Path to the tmux binary
     #[arg(long, env = "SPARKMUX_TMUX")]
-    pub(crate) tmux_bin: Option<PathBuf>,
+    tmux_bin: Option<PathBuf>,
 
-    /// tmux socket name (`tmux -L`)
+    /// tmux socket name (`tmux -L`). Default: sparkmux
     #[arg(short = 'L', long)]
-    pub(crate) socket_name: Option<String>,
+    socket_name: Option<String>,
 
     /// tmux socket path (`tmux -S`)
     #[arg(short = 'S', long)]
-    pub(crate) socket_path: Option<PathBuf>,
+    socket_path: Option<PathBuf>,
+
+    /// Talk to the user's default tmux server (`-L default`)
+    #[arg(long)]
+    system: bool,
 
     /// Config file path
     #[arg(long)]
-    pub(crate) config: Option<PathBuf>,
+    config: Option<PathBuf>,
 
     /// Verbose logging
     #[arg(short, long)]
-    pub(crate) verbose: bool,
+    verbose: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -59,42 +49,67 @@ enum Commands {
     Dump,
     /// Print sparkmux and detected tmux versions
     Version,
+    /// Print binary, socket, and session status
+    Doctor,
 }
 
-#[tokio::main]
-async fn main() -> eyre::Result<ExitCode> {
+fn main() -> eyre::Result<ExitCode> {
     color_eyre::install()?;
-    install_panic_hook();
-
     let cli = Cli::parse();
-    let is_tui = cli.command.is_none();
-    init_tracing(cli.verbose, is_tui);
-    let (cfg, config_warning) = config::load(&cli);
-    if let Some(ref msg) = config_warning {
+    init_tracing(cli.verbose);
+    let (cfg, warning) = load_config(ConfigOverrides {
+        tmux_bin: cli.tmux_bin.clone(),
+        socket_name: cli.socket_name.clone(),
+        socket_path: cli.socket_path.clone(),
+        config_path: cli.config.clone(),
+        system: cli.system,
+    });
+    if let Some(msg) = warning {
         eprintln!("warning: {msg}");
     }
 
     match cli.command {
-        Some(Commands::Dump) => {
-            let client = make_client(&cfg)?;
-            let snap = client.snapshot().wrap_err("failed to list tmux tree")?;
-            println!("{}", serde_json::to_string_pretty(&snap)?);
-            Ok(ExitCode::SUCCESS)
-        }
+        Some(Commands::Dump) => cmd_dump(&cfg),
         Some(Commands::Version) => Ok(cmd_version(&cfg)),
+        Some(Commands::Doctor) => cmd_doctor(&cfg),
         None => {
-            run_tui(cfg, config_warning).await?;
-            Ok(ExitCode::SUCCESS)
+            eprintln!(
+                "sparkmux {} — desktop app is the UI.\n\nUsage: sparkmux <COMMAND>\n\nCommands:\n  dump      Print the session tree as JSON\n  version   sparkmux + tmux version\n  doctor    Socket and session status\n\nOptions:\n  -L, --socket-name <NAME>  tmux -L (default: sparkmux)\n      --system              Use the default tmux server\n",
+                env!("CARGO_PKG_VERSION")
+            );
+            Ok(ExitCode::from(2))
         }
     }
 }
 
 fn make_client(cfg: &Config) -> sparkmux_core::Result<TmuxClient> {
-    TmuxClient::new(
-        cfg.tmux_bin.clone(),
-        cfg.socket_name.clone(),
-        cfg.socket_path.clone(),
-    )
+    if cfg.socket_path.is_none() && cfg.socket_name.as_deref().is_some_and(|n| n == "default") {
+        TmuxClient::new(cfg.tmux_bin.clone(), Some("default".into()), None)
+    } else {
+        TmuxClient::new_owned(
+            cfg.tmux_bin.clone(),
+            cfg.socket_name.clone(),
+            cfg.socket_path.clone(),
+        )
+    }
+}
+
+fn cmd_dump(cfg: &Config) -> eyre::Result<ExitCode> {
+    let client = make_client(cfg).wrap_err("failed to find tmux")?;
+    let snap = match client.snapshot() {
+        Ok(s) if s.sessions.is_empty() => {
+            client.ensure_ready(&gui_spawn_env(), &cfg.default_session)?;
+            client.snapshot().wrap_err("failed to list tmux tree")?
+        }
+        Ok(s) => s,
+        Err(sparkmux_core::Error::ServerDown(_)) => {
+            client.ensure_ready(&gui_spawn_env(), &cfg.default_session)?;
+            client.snapshot().wrap_err("failed to list tmux tree")?
+        }
+        Err(e) => return Err(e).wrap_err("failed to list tmux tree"),
+    };
+    println!("{}", serde_json::to_string_pretty(&snap)?);
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_version(cfg: &Config) -> ExitCode {
@@ -128,123 +143,51 @@ fn cmd_version(cfg: &Config) -> ExitCode {
     }
 }
 
-async fn run_tui(cfg: Config, config_warning: Option<String>) -> eyre::Result<()> {
-    let inside = is_inside_tmux();
-    let mut read_only = false;
-    let mut version_banner = None;
-    let mut server_error = None;
-    let client = match make_client(&cfg) {
-        Ok(c) => {
-            match c.version() {
-                Ok(v) if !v.is_supported() => {
-                    read_only = true;
-                    version_banner = Some(format!("tmux {}.{} < 3.2: read-only", v.major, v.minor));
-                }
-                Err(e) => server_error = Some(e.to_string()),
-                _ => {}
-            }
-            Some(c)
-        }
+fn cmd_doctor(cfg: &Config) -> eyre::Result<ExitCode> {
+    let client = match make_client(cfg) {
+        Ok(c) => c,
         Err(e) => {
-            server_error = Some(e.to_string());
-            None
+            eprintln!("tmux: {e}");
+            return Ok(ExitCode::from(1));
         }
     };
-
-    let attach_client = client.clone();
-    let exit = {
-        let _guard = TuiGuard;
-        let mut terminal = setup_terminal()?;
-        let app = App::new(
-            client,
-            cfg,
-            inside,
-            read_only,
-            version_banner,
-            server_error,
-            config_warning,
-        );
-        app.run(&mut terminal).await?
-    };
-
-    if let ExitAction::Attach(session) = exit {
-        let client = attach_client.ok_or_else(|| eyre::eyre!("tmux binary not found"))?;
-        exec_attach(&client, &session)?;
+    println!("tmux binary: {}", client.bin.display());
+    match client.version() {
+        Ok(v) => println!("tmux version: {} ({}.{})", v.raw, v.major, v.minor),
+        Err(e) => println!("tmux version: {e}"),
     }
-    Ok(())
-}
-
-fn exec_attach(client: &TmuxClient, session: &str) -> eyre::Result<()> {
-    use std::os::unix::process::CommandExt;
-    let mut cmd = client.attach_command(session);
-    let err = cmd.exec();
-    Err(err).wrap_err("failed to exec tmux attach-session")
-}
-
-struct TuiGuard;
-
-impl Drop for TuiGuard {
-    fn drop(&mut self) {
-        restore_terminal();
+    let sock = cfg
+        .socket_name
+        .clone()
+        .unwrap_or_else(|| sparkmux_core::SOCKET_NAME.to_string());
+    println!("socket name: {sock}");
+    match client.socket_path_display() {
+        Ok(p) => println!("socket path: {p}"),
+        Err(e) => println!("socket path: ({e})"),
     }
-}
-
-fn setup_terminal() -> eyre::Result<Terminal<CrosstermBackend<Stdout>>> {
-    enable_raw_mode()?;
-    let mut out = stdout();
-    execute!(out, EnterAlternateScreen, Hide)?;
-    Ok(Terminal::new(CrosstermBackend::new(out))?)
-}
-
-fn restore_terminal() {
-    let _ = disable_raw_mode();
-    let mut out = stdout();
-    let _ = execute!(out, LeaveAlternateScreen, Show);
-}
-
-fn install_panic_hook() {
-    let original = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        restore_terminal();
-        original(info);
-    }));
-}
-
-fn init_tracing(verbose: bool, for_tui: bool) {
-    let level = if verbose { "debug" } else { "warn" };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    let want_file =
-        std::env::var("SPARKMUX_LOG").ok().as_deref() == Some("1") || (for_tui && verbose);
-
-    if want_file {
-        if let Some(dirs) = config::project_dirs() {
-            let dir = dirs.cache_dir();
-            let _ = std::fs::create_dir_all(dir);
-            let path = dir.join("sparkmux.log");
-            if let Ok(file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-            {
-                tracing_subscriber::fmt()
-                    .with_env_filter(filter)
-                    .with_ansi(false)
-                    .with_writer(std::sync::Mutex::new(file))
-                    .init();
-                return;
+    match client.snapshot() {
+        Ok(s) => {
+            println!("sessions: {}", s.sessions.len());
+            for sess in &s.sessions {
+                println!("  - {}", sess.name);
+            }
+            if s.sessions.is_empty() {
+                println!("default session if started: {DEFAULT_SESSION}");
             }
         }
+        Err(e) => println!("sessions: {e}"),
     }
+    Ok(ExitCode::SUCCESS)
+}
 
-    if for_tui {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(io::sink)
-            .init();
+fn init_tracing(verbose: bool) {
+    let filter = if verbose {
+        EnvFilter::new("debug")
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(io::stderr)
-            .init();
-    }
+        EnvFilter::new("info")
+    };
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }

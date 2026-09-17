@@ -1,112 +1,69 @@
 # sparkmux
 
-A fast Ratatui dashboard for a live tmux server — sessions, windows, panes, live preview, attach.
+A desktop app that **launches and owns** a private tmux server, then shows **tiled real terminals** — one xterm.js view per pane — laid out from tmux itself.
 
-Works on Apple Silicon macOS and NVIDIA DGX Spark (ARM64 Ubuntu 24.04).
+Works on Apple Silicon macOS and NVIDIA DGX Spark (ARM64 Ubuntu 24.04). Requires **tmux 3.2+**.
 
-Requires **tmux 3.2+**.
+Your default tmux server is never touched. sparkmux uses `-L sparkmux`.
 
 ## Install
 
+CLI:
+
 ```bash
 cargo install --path crates/sparkmux
 ```
 
-Or from a clone:
+Desktop (from a clone):
 
 ```bash
-git clone https://github.com/darrenkoh/sparkmux
-cd sparkmux
-cargo install --path crates/sparkmux
+cd apps/desktop
+npm install
+cd ../..
+cargo tauri dev --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
-Build a release binary with `cargo build --release`. The binary is `target/release/sparkmux`.
+Release binary for the CLI is `target/release/sparkmux`. The desktop crate is `sparkmux-desktop` (`Sparkmux.app` / Linux `sparkmux-desktop`).
 
-## Usage
+## CLI
 
 ```bash
-sparkmux                 # open the TUI
-sparkmux dump            # print the session tree as JSON
-sparkmux version         # sparkmux + detected tmux version
-sparkmux --tmux-bin /opt/homebrew/bin/tmux
-sparkmux -L other        # tmux -L
-sparkmux -S /tmp/tmux.sock
+sparkmux                 # usage (exit 2) — the TUI is gone
+sparkmux dump            # session tree JSON on -L sparkmux (starts default session if empty)
+sparkmux version         # sparkmux + detected tmux
+sparkmux doctor          # binary, socket path, sessions
+sparkmux --system dump   # user's default tmux server
+sparkmux -L other dump
 ```
 
 Flag > env (`SPARKMUX_TMUX`) > config file > default.
 
-If `tmux` is missing or the server is down, the TUI still starts and shows an empty/error state.
+## Desktop
 
-## Keybinds
+- Sidebar: sessions / windows / panes of `-L sparkmux` only.
+- Main: tiled xterm.js matching `window_layout`. Typing goes to the focused pane.
+- File → New Session… creates that name only (does not also create `main`).
+- tmux → Stop tmux server… asks for confirm, then `kill-server`.
+- Quit detaches; the tmux server keeps running. Reopen the app to reconnect.
+- Attach from a real terminal: `tmux -L sparkmux attach`
 
-| Key | Action |
-|---|---|
-| `j` / `↓` | next item in focused list |
-| `k` / `↑` | prev item |
-| `h` / `←` | collapse / parent / prev panel |
-| `l` / `→` | expand / child / next panel |
-| `Tab` / `Shift-Tab` | cycle panels |
-| `g` / `G` | first / last |
-| `Enter` | attach or switch to target |
-| `n` | new session (or new window if the window panel is focused) |
-| `r` | rename focused session/window |
-| `d` | kill focused session/window/pane (`y`/`n` confirm) |
-| `Space` | expand / collapse window |
-| `R` | force refresh |
-| `?` | toggle help overlay |
-| `q` / `Ctrl-c` / `Esc` (no modal) | quit |
-
-## Attach vs switch
-
-- **Outside tmux:** Enter `exec`s `tmux attach-session` so the TUI does not linger.
-- **Inside tmux** (`TMUX` set): Enter runs `switch-client` / `select-window` / `select-pane`, then **quits**. Never `attach-session` from inside.
-- `q` / `Esc` always quit without switching.
-
-Popup launch (tmux 3.2+): see [`examples/tmux.conf.snippet`](examples/tmux.conf.snippet).
-
-```tmux
-bind-key o display-popup -E -w 90% -h 90% "sparkmux"
-```
+Missing tmux: in-window error with `brew install tmux` / `sudo apt install tmux`.
 
 ## Config
 
-Missing file = all defaults. Invalid file: warn and continue.
-
-- Linux (Spark): `~/.config/sparkmux/config.toml`
+- Linux: `~/.config/sparkmux/config.toml`
 - macOS: `~/Library/Application Support/sparkmux/config.toml`
 
 ```toml
-tmux_bin = ""          # empty = PATH
-socket_name = ""
+tmux_bin = ""
+socket_name = "sparkmux"
 refresh_ms = 1000
-preview_ms = 400
-preview_lines = 200
+default_session = "main"
 ```
-
-Set `SPARKMUX_LOG=1` to write a log under the platform cache dir.
-
-## Platform notes
-
-| | macOS (Apple Silicon) | DGX Spark (Ubuntu 24.04 ARM) |
-|---|---|---|
-| tmux | Homebrew `/opt/homebrew/bin/tmux` | apt `/usr/bin/tmux` |
-| Config | `~/Library/Application Support/sparkmux/` | `~/.config/sparkmux/` |
-| SSH | TUI uses crossterm raw mode + alternate screen | same |
-
-sparkmux also looks for tmux on `PATH`, then `/opt/homebrew/bin/tmux`, `/usr/local/bin/tmux`, `/usr/bin/tmux`.
-
-Clipboard yank is **v1**, not implemented in v0.
 
 ## v0 non-goals
 
-- Web UI, Tauri, xterm.js, SSE, tmux control mode (`tmux -C`)
-- SSH multi-host fleet manager
-- Plugin manager / TPM replacement
-- Layout save/restore
-- Agent badges, image protocols, markdown preview
-- Reimplementing a terminal emulator
-- Clipboard backend
-- Windows / x86 as a required target
+Notarized Mac builds, Homebrew cask, Windows/x86, listing the default tmux server in the GUI, Ratatui TUI, Electron, bundled tmux, prefix-key emulation, SSH fleet manager.
 
 ## License
 

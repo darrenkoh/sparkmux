@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use serde::Deserialize;
 
-use crate::Cli;
+use crate::SOCKET_NAME;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -12,21 +12,30 @@ pub struct Config {
     pub socket_name: Option<String>,
     pub socket_path: Option<PathBuf>,
     pub refresh_ms: u64,
-    pub preview_ms: u64,
-    pub preview_lines: usize,
+    pub default_session: String,
+    pub last_session: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             tmux_bin: None,
-            socket_name: None,
+            socket_name: Some(SOCKET_NAME.to_string()),
             socket_path: None,
             refresh_ms: 1000,
-            preview_ms: 400,
-            preview_lines: 200,
+            default_session: crate::DEFAULT_SESSION.to_string(),
+            last_session: None,
         }
     }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ConfigOverrides {
+    pub tmux_bin: Option<PathBuf>,
+    pub socket_name: Option<String>,
+    pub socket_path: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
+    pub system: bool,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -38,14 +47,14 @@ struct FileConfig {
     #[serde(default)]
     socket_path: String,
     refresh_ms: Option<u64>,
-    preview_ms: Option<u64>,
-    preview_lines: Option<usize>,
+    default_session: Option<String>,
+    last_session: Option<String>,
 }
 
-pub fn load(cli: &Cli) -> (Config, Option<String>) {
+pub fn load(overrides: ConfigOverrides) -> (Config, Option<String>) {
     let mut cfg = Config::default();
     let mut warning = None;
-    let path = cli.config.clone().or_else(default_config_path);
+    let path = overrides.config_path.clone().or_else(default_config_path);
     if let Some(path) = path {
         match fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<FileConfig>(&text) {
@@ -57,7 +66,8 @@ pub fn load(cli: &Cli) -> (Config, Option<String>) {
                     ));
                 }
             },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && cli.config.is_none() => {}
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound && overrides.config_path.is_none() => {}
             Err(e) => {
                 warning = Some(format!(
                     "could not read config {}, using defaults: {e}",
@@ -66,16 +76,20 @@ pub fn load(cli: &Cli) -> (Config, Option<String>) {
             }
         }
     }
-
-    if let Some(bin) = &cli.tmux_bin {
-        cfg.tmux_bin = Some(bin.clone());
+    apply_env(&mut cfg);
+    if let Some(bin) = overrides.tmux_bin {
+        cfg.tmux_bin = Some(bin);
     }
-    if let Some(name) = &cli.socket_name {
-        cfg.socket_name = Some(name.clone());
+    if overrides.system {
+        cfg.socket_name = Some("default".into());
         cfg.socket_path = None;
     }
-    if let Some(path) = &cli.socket_path {
-        cfg.socket_path = Some(path.clone());
+    if let Some(name) = overrides.socket_name {
+        cfg.socket_name = Some(name);
+        cfg.socket_path = None;
+    }
+    if let Some(path) = overrides.socket_path {
+        cfg.socket_path = Some(path);
         cfg.socket_name = None;
     }
     (cfg, warning)
@@ -94,11 +108,19 @@ fn apply_file(cfg: &mut Config, file: FileConfig) {
     if let Some(ms) = file.refresh_ms.filter(|v| *v > 0) {
         cfg.refresh_ms = ms;
     }
-    if let Some(ms) = file.preview_ms.filter(|v| *v > 0) {
-        cfg.preview_ms = ms;
+    if let Some(name) = file.default_session.filter(|s| !s.is_empty()) {
+        cfg.default_session = name;
     }
-    if let Some(n) = file.preview_lines.filter(|v| *v > 0) {
-        cfg.preview_lines = n;
+    if let Some(name) = file.last_session.filter(|s| !s.is_empty()) {
+        cfg.last_session = Some(name);
+    }
+}
+
+fn apply_env(cfg: &mut Config) {
+    if let Ok(bin) = std::env::var("SPARKMUX_TMUX") {
+        if !bin.is_empty() {
+            cfg.tmux_bin = Some(PathBuf::from(bin));
+        }
     }
 }
 
@@ -108,6 +130,28 @@ pub fn default_config_path() -> Option<PathBuf> {
 
 pub fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from("", "", "sparkmux")
+}
+
+pub fn gui_spawn_env() -> crate::client::SessionSpawn {
+    let home = directories::BaseDirs::new()
+        .map(|b| b.home_dir().to_path_buf())
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let extras = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    let path = match std::env::var("PATH") {
+        Ok(p) if !p.is_empty() => format!("{p}:{extras}"),
+        _ => extras.to_string(),
+    };
+    let mut env = vec![
+        ("PATH".into(), path),
+        ("HOME".into(), home.display().to_string()),
+    ];
+    if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
+        if !sock.is_empty() {
+            env.push(("SSH_AUTH_SOCK".into(), sock));
+        }
+    }
+    crate::client::SessionSpawn { cwd: home, env }
 }
 
 #[cfg(test)]
@@ -124,15 +168,14 @@ mod tests {
                 socket_name: String::new(),
                 socket_path: String::new(),
                 refresh_ms: Some(0),
-                preview_ms: Some(0),
-                preview_lines: Some(0),
+                default_session: None,
+                last_session: None,
             },
         );
         assert!(cfg.tmux_bin.is_none());
-        assert!(cfg.socket_name.is_none());
+        assert_eq!(cfg.socket_name.as_deref(), Some(SOCKET_NAME));
         assert_eq!(cfg.refresh_ms, 1000);
-        assert_eq!(cfg.preview_ms, 400);
-        assert_eq!(cfg.preview_lines, 200);
+        assert_eq!(cfg.default_session, "main");
     }
 
     #[test]
@@ -145,8 +188,8 @@ mod tests {
                 socket_name: "other".into(),
                 socket_path: String::new(),
                 refresh_ms: Some(2500),
-                preview_ms: Some(100),
-                preview_lines: Some(50),
+                default_session: Some("work".into()),
+                last_session: Some("play".into()),
             },
         );
         assert_eq!(
@@ -155,7 +198,17 @@ mod tests {
         );
         assert_eq!(cfg.socket_name.as_deref(), Some("other"));
         assert_eq!(cfg.refresh_ms, 2500);
-        assert_eq!(cfg.preview_ms, 100);
-        assert_eq!(cfg.preview_lines, 50);
+        assert_eq!(cfg.default_session, "work");
+        assert_eq!(cfg.last_session.as_deref(), Some("play"));
+    }
+
+    #[test]
+    fn system_override_uses_default_socket() {
+        let (cfg, _) = load(ConfigOverrides {
+            system: true,
+            ..ConfigOverrides::default()
+        });
+        assert_eq!(cfg.socket_name.as_deref(), Some("default"));
+        assert!(cfg.socket_path.is_none());
     }
 }

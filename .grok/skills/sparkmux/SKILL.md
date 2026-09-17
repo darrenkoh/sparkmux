@@ -1,50 +1,19 @@
 ---
 name: sparkmux
 description: >
-  Maintain the sparkmux tmux TUI (Ratatui dashboard for sessions/windows/panes).
-  Use when working on sparkmux, the TUI, keybinds, attach/switch, config, preview worker, or shipping v0.
-  Triggers: sparkmux, tmux TUI, ratatui tmux, attach-session, switch-client, /sparkmux.
+  Maintain the sparkmux desktop tmux app (Tauri + tiled xterm.js).
+  Use when working on sparkmux, the desktop UI, sidebar, tiled terminals, attach, or shipping v0.
+  Triggers: sparkmux, tmux desktop, Tauri tmux, tiled xterm, /sparkmux.
 ---
 
-# sparkmux TUI
+# sparkmux desktop
 
-Layout: 3 columns when width ≥ 100 (Sessions | Windows/Panes | Preview); stacked when narrower. Footer: key hints + 4s error toast.
+Layout: sidebar (sessions/windows/panes of `-L sparkmux` only) + tiled xterm.js, one per pane of the selected window, geometry from `window_layout`.
 
-## Keybinds
+## Rules
 
-| Key | Action |
-|---|---|
-| j/k ↓/↑ | next/prev in focused list |
-| h/l ←/→ | collapse/parent/prev panel · expand/child/next panel |
-| Tab / S-Tab | cycle Sessions ↔ Windows |
-| g/G | first/last |
-| Enter | attach or switch, then leave the TUI |
-| n | new session (or new window if Windows panel focused) |
-| r | rename focused session/window (not pane) |
-| d | kill focused session/window/pane |
-| Space | expand/collapse window |
-| R | force snapshot refresh |
-| ? | help overlay |
-| q / Ctrl-c / Esc | quit (only when no modal) |
-
-## Attach
-
-- `TMUX` set (inside): `switch-client` + optional `select-window`/`select-pane`, then **quit**. Never `attach-session`.
-- Outside: restore terminal, `exec` `tmux attach-session -t SESSION`. Never `switch-client`.
-- Decide with `sparkmux_core::decide_attach`. Restore terminal before exec.
-
-## Refresh
-
-Snapshot every 1.0s and after mutations / `R`. Preview every 0.4s for the selected pane only, on a tokio task — UI thread never calls `capture-pane`.
-
-## Empty / old tmux
-
-Missing binary or down server: TUI still starts, sessions pane says start tmux or check `-L`/`-S`. tmux < 3.2: read-only banner; `sparkmux version` exits 2.
-
-## Modals
-
-New/rename: one-line input at the bottom. Esc cancels, Enter commits (reject empty names). Kill: confirm `y`/`n` showing the target name.
-
-Config merge: flag > env > config.toml > default. See `config.rs`.
-
-tmux commands: use the sparkmux-core skill; do not `Command::new("tmux")` from this crate.
+- Quit = `control_disconnect` (server stays up). Stop server is nested + confirm.
+- New Session… = `new_session_ex` only. Never `ensure_ready` on that path.
+- Live bytes: control-mode `%output`. `capture-pane` is a one-time seed.
+- Linux: no Ctrl+D/W/Q GUI chords.
+- tmux I/O: sparkmux-core skill. Do not `Command::new("tmux")` from the desktop crate.
