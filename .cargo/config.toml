@@ -1,0 +1,6 @@
+# This Mac's xcode-select points at Xcode.app, but the Xcode license is
+# unaccepted, so /usr/bin/cc and xcrun --sdk macosx fail. Cargo inherits
+# these for rustc and build scripts. Harmless on Linux (xcrun is unused).
+[env]
+DEVELOPER_DIR = { value = "/Library/Developer/CommandLineTools", force = true }
+SDKROOT = { value = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk", force = true }

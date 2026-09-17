@@ -29,9 +29,7 @@ npm install
 npm run tauri dev
 ```
 
-From the repo root instead: `npm run tauri --prefix apps/desktop dev`.
-
-If linking fails with the Xcode license error, export `DEVELOPER_DIR=/Library/Developer/CommandLineTools` first (same as CLI install).
+The repo `.cargo/config.toml` points `DEVELOPER_DIR` / `SDKROOT` at Command Line Tools so `xcrun` and `cc` work when the Xcode.app license is unaccepted. From the repo root: `npm run tauri --prefix apps/desktop dev`.
 
 Release binary for the CLI is `target/release/sparkmux`. The desktop crate is `sparkmux-desktop` (`Sparkmux.app` / Linux `sparkmux-desktop`).
 
