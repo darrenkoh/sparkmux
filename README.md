@@ -14,6 +14,13 @@ CLI:
 cargo install --path crates/sparkmux
 ```
 
+If linking fails with “You have not agreed to the Xcode license”, either run `sudo xcodebuild -license` or point cargo at the Command Line Tools compiler (no sudo):
+
+```bash
+export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+cargo install --path crates/sparkmux
+```
+
 Desktop (from a clone):
 
 ```bash
