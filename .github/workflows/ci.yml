@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: cargo test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - name: Install tmux
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            brew install tmux
+          else
+            sudo apt-get update -y
+            sudo apt-get install -y tmux
+          fi
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace -- -D warnings
+        if: runner.os == 'macOS'

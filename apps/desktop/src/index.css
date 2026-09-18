@@ -644,11 +644,40 @@ body.is-resizing * {
   font-weight: 600;
 }
 
+.panel p {
+  color: var(--fg);
+  line-height: 1.45;
+}
+
+.panel-steps {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.panel-cmd {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
 .panel pre {
   background: #111;
   padding: 12px;
   border-radius: 6px;
   overflow: auto;
+}
+
+.panel-cmd pre {
+  flex: 1;
+  margin: 0;
+}
+
+.panel-cmd button {
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 .panel button + button {

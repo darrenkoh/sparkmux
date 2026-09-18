@@ -8,30 +8,65 @@ Your default tmux server is never touched. sparkmux uses `-L sparkmux`.
 
 ## Install
 
-CLI:
+One script installs tmux (if needed) and the desktop app. Apple Silicon or ARM64 Linux:
 
 ```bash
-cargo install --path crates/sparkmux
+curl -fsSL https://raw.githubusercontent.com/darrenkoh/sparkmux/main/scripts/install.sh | bash
 ```
+
+If there is no GitHub Release yet, the script builds from source (needs Rust, Node.js, and on Linux the WebKitGTK headers). From a clone:
+
+```bash
+./scripts/install.sh --from-source
+```
+
+### macOS (Apple Silicon)
+
+1. `brew install tmux` if you do not already have tmux 3.2+.
+2. Run the installer, or download the `.dmg` from [Releases](https://github.com/darrenkoh/sparkmux/releases).
+3. Builds are **unsigned**. First open: right-click Sparkmux.app → **Open**.
+4. Double-click Sparkmux. Create a session in the sidebar.
+
+### Linux (ARM64 / DGX Spark)
+
+1. `sudo apt install tmux`
+2. Run the installer, or install the `.deb` from [Releases](https://github.com/darrenkoh/sparkmux/releases).
+3. Launch `sparkmux-desktop`. User-prefix installs land in `~/.local/bin`.
+
+### After install
+
+- Quit the app **detaches**; the tmux server keeps running. Reopen to reconnect.
+- Attach from any terminal: `tmux -L sparkmux attach`
+- Optional: a nerd font such as [0xProto](https://github.com/ryanoasis/nerd-fonts) improves glyph rendering.
+
+### Developers
+
+```bash
+git clone https://github.com/darrenkoh/sparkmux.git
+cd sparkmux
+cd apps/desktop && npm install && npm run tauri dev
+```
+
+`cargo tauri` is **not** a built-in Cargo command — use `npm run tauri`.
 
 If linking fails with “You have not agreed to the Xcode license”, either run `sudo xcodebuild -license` or point cargo at the Command Line Tools compiler (no sudo):
 
 ```bash
 export DEVELOPER_DIR=/Library/Developer/CommandLineTools
-cargo install --path crates/sparkmux
 ```
 
-Desktop (from a clone). `cargo tauri` is **not** a built-in Cargo command — use the npm CLI that ships with the app:
+The repo `.cargo/config.toml` already sets `DEVELOPER_DIR` / `SDKROOT` for Command Line Tools.
+
+CLI (optional):
 
 ```bash
-cd apps/desktop
-npm install
-npm run tauri dev
+cargo install --path crates/sparkmux
+sparkmux doctor
 ```
 
-The repo `.cargo/config.toml` points `DEVELOPER_DIR` / `SDKROOT` at Command Line Tools so `xcrun` and `cc` work when the Xcode.app license is unaccepted. From the repo root: `npm run tauri --prefix apps/desktop dev`.
+Release CLI binary is `target/release/sparkmux`. The desktop crate is `sparkmux-desktop` (`Sparkmux.app` / Linux `sparkmux-desktop`).
 
-Release binary for the CLI is `target/release/sparkmux`. The desktop crate is `sparkmux-desktop` (`Sparkmux.app` / Linux `sparkmux-desktop`).
+Tagged `v*` pushes build macOS `.dmg` / `.app` and Linux `.deb` via GitHub Actions.
 
 ## CLI
 
@@ -48,14 +83,14 @@ Flag > env (`SPARKMUX_TMUX`) > config file > default.
 
 ## Desktop
 
-- Sidebar: sessions / windows / panes of `-L sparkmux` only.
+- Sidebar: sessions / windows / panes of `-L sparkmux` only. Drag the sash to resize; the header icon or hover chevron hides it.
 - Main: tiled xterm.js matching `window_layout`. Typing goes to the focused pane.
 - File → New Session… creates that name only (does not also create `main`).
+- File → New Tab (⌘T) adds a window in the attached session.
 - tmux → Stop tmux server… asks for confirm, then `kill-server`.
 - Quit detaches; the tmux server keeps running. Reopen the app to reconnect.
-- Attach from a real terminal: `tmux -L sparkmux attach`
 
-Missing tmux: in-window error with `brew install tmux` / `sudo apt install tmux`.
+Missing tmux: in-window setup with a copyable `brew` / `apt` command.
 
 ## Config
 
