@@ -6,7 +6,6 @@ import {
   controlConnect,
   ensureReady,
   focusPane,
-  killPane,
   killSession,
   killWindow,
   listenControlExit,
@@ -53,7 +52,8 @@ type Dialog =
   | { kind: "new-session" }
   | { kind: "new-window" }
   | { kind: "rename"; value: string }
-  | { kind: "kill"; message: string }
+  | { kind: "close-tab"; id: string; name: string; last: boolean; session: string }
+  | { kind: "close-session"; name: string; tabs: number }
   | { kind: "stop"; socket: string; count: number }
   | { kind: "help" };
 
@@ -393,7 +393,7 @@ export default function App() {
           await createNewTab();
           break;
         case "close-tab":
-          await closeTab();
+          requestCloseTab();
           break;
         case "zoom-in":
           setFontSize((n) => Math.min(FONT_MAX, n + 1));
@@ -514,6 +514,33 @@ export default function App() {
     return null;
   }
 
+  function requestCloseTab(windowId?: string) {
+    const id = windowId ?? visibleRef.current;
+    if (!id) {
+      showToast("no tab to close");
+      return;
+    }
+    const session = attachedRef.current ?? "";
+    const sess = snapRef.current.sessions.find((s) => s.name === session);
+    const win = sess?.windows.find((w) => w.id === id);
+    setDialog({
+      kind: "close-tab",
+      id,
+      name: win?.name ?? id,
+      last: (sess?.windows.length ?? 0) <= 1,
+      session,
+    });
+  }
+
+  function requestCloseSession(name: string) {
+    const sess = snapRef.current.sessions.find((s) => s.name === name);
+    setDialog({
+      kind: "close-session",
+      name,
+      tabs: sess?.windows.length ?? 0,
+    });
+  }
+
   async function closeTab(windowId?: string) {
     const id = windowId ?? visibleRef.current;
     if (!id) {
@@ -621,13 +648,39 @@ export default function App() {
     }
   }
 
-  async function submitKill() {
-    if (!selection) return;
+  async function submitCloseSession(name: string) {
     setDialog(null);
     try {
-      if (selection.kind === "session") await killSession(selection.name);
-      else if (selection.kind === "window") await killWindow(selection.id);
-      else await killPane(selection.id);
+      await killSession(name);
+      const tree = await fetchSnapshot();
+      setSnap(tree);
+      if (tree.sessions.length === 0) {
+        setEmpty(true);
+        setAttachedSession(null);
+        setLayout(null);
+        setVisibleWindowId(null);
+        setSelection(null);
+        return;
+      }
+      if (attachedRef.current === name) {
+        await connectTo(tree.sessions[0].name);
+      }
+    } catch (e) {
+      showToast(String(e));
+    }
+  }
+
+  async function renameTab(windowId: string, name: string) {
+    try {
+      await renameWindow(windowId, name);
+      if (selectionRef.current?.kind === "window" && selectionRef.current.id === windowId) {
+        setSelection({
+          kind: "window",
+          id: windowId,
+          name,
+          sessionName: attachedRef.current ?? "",
+        });
+      }
       await refreshTree();
     } catch (e) {
       showToast(String(e));
@@ -715,28 +768,16 @@ export default function App() {
               })();
             }}
             onCollapse={() => setSidebarCollapsed(true)}
-            onNewTab={() => {
-              void createNewTab();
+            onRenameSession={(name) => {
+              setSelection({
+                kind: "session",
+                id: snap.sessions.find((s) => s.name === name)?.id ?? name,
+                name,
+              });
+              setInput(name);
+              setDialog({ kind: "rename", value: name });
             }}
-            onRename={() => {
-              const target = renameTarget(selection);
-              if (!target) {
-                showToast("select a session or window");
-                return;
-              }
-              setInput(target.name);
-              setDialog({ kind: "rename", value: target.name });
-            }}
-            onKill={() => {
-              if (!selection) return;
-              const message =
-                selection.kind === "session"
-                  ? `Kill session ${selection.name}?`
-                  : selection.kind === "window"
-                    ? `Kill window ${selection.name}?`
-                    : `Kill pane ${selection.id}?`;
-              setDialog({ kind: "kill", message });
-            }}
+            onCloseSession={(name) => requestCloseSession(name)}
           />
         </div>
         <Splitter
@@ -782,8 +823,9 @@ export default function App() {
                 onNewTab={() => {
                   void createNewTab();
                 }}
-                onCloseTab={(windowId) => {
-                  void closeTab(windowId);
+                onCloseTab={(windowId) => requestCloseTab(windowId)}
+                onRenameTab={(windowId, name) => {
+                  void renameTab(windowId, name);
                 }}
               />
               <div className="term-stage" ref={hostRef}>
@@ -883,13 +925,42 @@ export default function App() {
           </div>
         </Modal>
       )}
-      {dialog?.kind === "kill" && (
-        <Modal title="Confirm" onClose={() => setDialog(null)}>
-          <p>{dialog.message}</p>
+      {dialog?.kind === "close-tab" && (
+        <Modal title="Close tab" onClose={() => setDialog(null)}>
+          <p>
+            Close tab <strong>{dialog.name}</strong>
+            {dialog.last
+              ? `? This is the last tab, so session ${dialog.session || "this session"} will end.`
+              : "?"}
+          </p>
           <div className="modal-actions">
             <button onClick={() => setDialog(null)}>Cancel</button>
-            <button className="danger" onClick={() => void submitKill()}>
-              Kill
+            <button
+              className="danger"
+              onClick={() => {
+                const id = dialog.id;
+                setDialog(null);
+                void closeTab(id);
+              }}
+            >
+              Close tab
+            </button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === "close-session" && (
+        <Modal title="Close session" onClose={() => setDialog(null)}>
+          <p>
+            Close session <strong>{dialog.name}</strong>? This ends{" "}
+            {dialog.tabs} tab{dialog.tabs === 1 ? "" : "s"} and all panes in it.
+          </p>
+          <div className="modal-actions">
+            <button onClick={() => setDialog(null)}>Cancel</button>
+            <button
+              className="danger"
+              onClick={() => void submitCloseSession(dialog.name)}
+            >
+              Close session
             </button>
           </div>
         </Modal>
@@ -926,11 +997,13 @@ export default function App() {
           </p>
           <dl className="help-keys">
             <dt>New session</dt>
-            <dd>⌘N / Ctrl+Shift+N</dd>
+            <dd>⌘N / sidebar +</dd>
             <dt>New tab</dt>
-            <dd>⌘T / Ctrl+Shift+T</dd>
+            <dd>⌘T / tab bar +</dd>
+            <dt>Rename tab</dt>
+            <dd>Double-click the tab name</dd>
             <dt>Close tab</dt>
-            <dd>⌘W / Ctrl+Shift+W</dd>
+            <dd>⌘W / tab × (asks first)</dd>
             <dt>Copy / paste</dt>
             <dd>⌘C ⌘V / Ctrl+Shift+V</dd>
             <dt>Split</dt>

@@ -11,10 +11,9 @@ export default function Sidebar({
   onSelectSession,
   onSelectWindow,
   onSelectPane,
-  onRename,
-  onKill,
+  onRenameSession,
+  onCloseSession,
   onNewSession,
-  onNewTab,
   onCollapse,
 }: {
   snapshot: Snapshot;
@@ -25,10 +24,9 @@ export default function Sidebar({
   onSelectSession: (name: string) => void;
   onSelectWindow: (sessionName: string, windowId: string) => void;
   onSelectPane: (sessionName: string, windowId: string, paneId: string) => void;
-  onRename: () => void;
-  onKill: () => void;
+  onRenameSession: (name: string) => void;
+  onCloseSession: (name: string) => void;
   onNewSession: () => void;
-  onNewTab: () => void;
   onCollapse?: () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -47,7 +45,18 @@ export default function Sidebar({
   return (
     <aside className="sidebar">
       <header className="sidebar-head">
-        <div className="sidebar-kicker">Sessions</div>
+        <div className="sidebar-kicker-row">
+          <div className="sidebar-kicker">Sessions</div>
+          <button
+            type="button"
+            className="sidebar-add"
+            title="New session"
+            aria-label="New session"
+            onClick={onNewSession}
+          >
+            +
+          </button>
+        </div>
         <div className="sidebar-head-end">
           <div className="sidebar-count">{n}</div>
           <button
@@ -104,15 +113,25 @@ export default function Sidebar({
                   onDoubleClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    onSelectSession(session.name);
-                    window.setTimeout(() => onRename(), 0);
+                    onRenameSession(session.name);
                   }}
                 >
                   <span className={`live-dot ${live ? "on" : ""}`} />
                   <span className="name">{session.name}</span>
-                  <span className="meta">
-                    {session.windows.length}w
-                  </span>
+                  <span className="meta">{session.windows.length}w</span>
+                </button>
+                <button
+                  type="button"
+                  className="sess-close"
+                  title={`Close session ${session.name}`}
+                  aria-label={`Close session ${session.name}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onCloseSession(session.name);
+                  }}
+                >
+                  ×
                 </button>
               </div>
               {!sessCollapsed &&
@@ -177,25 +196,6 @@ export default function Sidebar({
             </div>
           );
         })}
-      </div>
-      <div className="sidebar-actions">
-        <button className="ghost" onClick={onNewSession} title="New session">
-          Session
-        </button>
-        <button
-          className="ghost"
-          onClick={onNewTab}
-          disabled={!attachedSession}
-          title="New tab in this session"
-        >
-          Tab
-        </button>
-        <button disabled={!selection && !attachedSession} onClick={onRename}>
-          Rename
-        </button>
-        <button disabled={!selection} className="danger" onClick={onKill}>
-          Kill
-        </button>
       </div>
     </aside>
   );
