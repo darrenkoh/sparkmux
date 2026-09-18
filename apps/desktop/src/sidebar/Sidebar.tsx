@@ -15,6 +15,7 @@ export default function Sidebar({
   onKill,
   onNewSession,
   onNewTab,
+  onCollapse,
 }: {
   snapshot: Snapshot;
   attachedSession: string | null;
@@ -28,6 +29,7 @@ export default function Sidebar({
   onKill: () => void;
   onNewSession: () => void;
   onNewTab: () => void;
+  onCollapse?: () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
@@ -46,7 +48,35 @@ export default function Sidebar({
     <aside className="sidebar">
       <header className="sidebar-head">
         <div className="sidebar-kicker">Sessions</div>
-        <div className="sidebar-count">{n}</div>
+        <div className="sidebar-head-end">
+          <div className="sidebar-count">{n}</div>
+          <button
+            type="button"
+            className="sidebar-collapse"
+            title="Hide sessions"
+            aria-label="Hide sessions"
+            onClick={() => onCollapse?.()}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <rect
+                x="2.25"
+                y="2.5"
+                width="9.5"
+                height="9"
+                rx="1.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+              />
+              <path
+                d="M6 2.5v9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+              />
+            </svg>
+          </button>
+        </div>
       </header>
       <div className="sidebar-tree">
         {n === 0 && <div className="sidebar-empty">No sessions on this socket</div>}

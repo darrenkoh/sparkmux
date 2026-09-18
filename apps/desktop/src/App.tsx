@@ -76,6 +76,10 @@ export default function App() {
     if (Number.isFinite(raw) && raw >= SIDEBAR_MIN && raw <= SIDEBAR_MAX) return raw;
     return SIDEBAR_DEFAULT;
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => window.localStorage.getItem("sparkmux.sidebarCollapsed") === "1",
+  );
+  const sidebarDisplay = sidebarCollapsed ? 0 : sidebarWidth;
   const cellRef = useRef({ w: 8, h: 16 });
   const attachedRef = useRef<string | null>(null);
   const visibleRef = useRef<string | null>(null);
@@ -110,6 +114,9 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("sparkmux.sidebarWidth", String(Math.round(sidebarWidth)));
   }, [sidebarWidth]);
+  useEffect(() => {
+    window.localStorage.setItem("sparkmux.sidebarCollapsed", sidebarCollapsed ? "1" : "0");
+  }, [sidebarCollapsed]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -124,7 +131,7 @@ export default function App() {
     const w =
       el && el.clientWidth > 40
         ? el.clientWidth
-        : Math.max(240, window.innerWidth - sidebarWidth - 5);
+        : Math.max(240, window.innerWidth - sidebarDisplay - 18);
     const h =
       el && el.clientHeight > 40
         ? el.clientHeight
@@ -133,7 +140,7 @@ export default function App() {
       cols: Math.max(2, Math.floor(Math.max(0, w - pad) / cw)),
       rows: Math.max(1, Math.floor(Math.max(0, h - pad) / ch)),
     };
-  }, [sidebarWidth]);
+  }, [sidebarDisplay]);
 
   const pushClientSize = useCallback(() => {
     const { cols, rows } = hostSize();
@@ -582,8 +589,8 @@ export default function App() {
     <div className="app">
       <div className="body">
         <div
-          className="sidebar-slot"
-          style={{ width: sidebarWidth }}
+          className={`sidebar-slot ${sidebarCollapsed ? "collapsed" : ""}`}
+          style={{ width: sidebarDisplay, flexBasis: sidebarDisplay }}
           onMouseDown={() => {
             chromeFocus.current = "sidebar";
           }}
@@ -640,6 +647,7 @@ export default function App() {
                 getTerm(paneId)?.focus();
               })();
             }}
+            onCollapse={() => setSidebarCollapsed(true)}
             onNewTab={() => {
               void createNewTab();
             }}
@@ -664,7 +672,12 @@ export default function App() {
             }}
           />
         </div>
-        <Splitter width={sidebarWidth} onWidth={setSidebarWidth} />
+        <Splitter
+          width={sidebarWidth}
+          collapsed={sidebarCollapsed}
+          onWidth={setSidebarWidth}
+          onCollapsed={setSidebarCollapsed}
+        />
         <main
           className="main"
           onMouseDown={() => {
