@@ -101,6 +101,16 @@ export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {
   return new Uint8Array();
 }
 
+/** capture-pane -p emits LF-only rows; xterm treats LF as down-without-CR (staircase). */
+export function screenDumpToXterm(bytes: Uint8Array): string {
+  const s = new TextDecoder("utf-8", { fatal: false })
+    .decode(bytes)
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\n/g, "\r\n");
+  return `\x1b[H\x1b[2J${s}`;
+}
+
 export async function listenLayoutChange(
   handler: (payload: LayoutChangePayload) => void,
 ): Promise<UnlistenFn> {

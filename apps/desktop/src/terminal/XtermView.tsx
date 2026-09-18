@@ -5,7 +5,14 @@ import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
 import "@xterm/xterm/css/xterm.css";
 
-import { focusPane, paneSubscribe, paneUnsubscribe, paneWrite, toBytes } from "../api";
+import {
+  focusPane,
+  paneSubscribe,
+  paneUnsubscribe,
+  paneWrite,
+  screenDumpToXterm,
+  toBytes,
+} from "../api";
 
 const isMac = navigator.userAgent.includes("Mac");
 
@@ -39,9 +46,9 @@ export default function XtermView({
     const term = new Terminal({
       scrollback: 5000,
       fontFamily:
-        "'MesloLGS NF', '0xProto Nerd Font Mono', '0xProto Nerd Font', Menlo, ui-monospace, monospace",
+        "'0xProto Nerd Font Mono', '0xProto Nerd Font', 'MesloLGS NF', Menlo, ui-monospace, monospace",
       fontSize: 13,
-      lineHeight: 1.25,
+      lineHeight: 1.2,
       letterSpacing: 0,
       cursorBlink: true,
       cursorStyle: "bar",
@@ -76,7 +83,6 @@ export default function XtermView({
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    // Canvas on WKWebView clips glyphs and mis-measures cells; DOM renderer is correct.
     if (!isMac) {
       try {
         term.loadAddon(new CanvasAddon());
@@ -88,9 +94,16 @@ export default function XtermView({
     termRef.current = term;
     terms.set(paneId, term);
 
+    let nextIsSeed = true;
     const channel = new Channel<ArrayBuffer | Uint8Array | number[]>();
     channel.onmessage = (msg) => {
-      term.write(toBytes(msg));
+      const bytes = toBytes(msg);
+      if (nextIsSeed) {
+        nextIsSeed = false;
+        term.write(screenDumpToXterm(bytes));
+        return;
+      }
+      term.write(bytes);
     };
 
     const dataDisp = term.onData((data) => {
@@ -130,20 +143,32 @@ export default function XtermView({
     };
     host.addEventListener("mousedown", onMouse);
 
+    let lastCols = 0;
+    let lastRows = 0;
+    let seedTimer: number | undefined;
+    let unmounted = false;
+
     const doFit = () => {
-      if (host.clientWidth < 2 || host.clientHeight < 2) return;
+      if (unmounted || host.clientWidth < 2 || host.clientHeight < 2) return;
       try {
         fit.fit();
         reportCell(term, onCellSizeRef.current);
       } catch {
-        /* layout not ready */
+        return;
       }
+      if (term.cols === lastCols && term.rows === lastRows) return;
+      lastCols = term.cols;
+      lastRows = term.rows;
+      if (seedTimer) window.clearTimeout(seedTimer);
+      seedTimer = window.setTimeout(() => {
+        if (unmounted) return;
+        nextIsSeed = true;
+        void paneUnsubscribe(paneId).then(() => paneSubscribe(paneId, channel));
+      }, 120);
     };
-    requestAnimationFrame(() => {
-      doFit();
-      void paneSubscribe(paneId, channel);
-    });
-    const later = window.setTimeout(doFit, 40);
+
+    requestAnimationFrame(doFit);
+    const later = window.setTimeout(doFit, 50);
 
     const ro = new ResizeObserver(() => {
       doFit();
@@ -151,6 +176,8 @@ export default function XtermView({
     ro.observe(host);
 
     return () => {
+      unmounted = true;
+      if (seedTimer) window.clearTimeout(seedTimer);
       window.clearTimeout(later);
       host.removeEventListener("mousedown", onMouse);
       ro.disconnect();
