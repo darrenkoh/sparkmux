@@ -57,6 +57,10 @@ type Dialog =
   | { kind: "stop"; socket: string; count: number }
   | { kind: "help" };
 
+const FONT_MIN = 11;
+const FONT_MAX = 22;
+const FONT_DEFAULT = 13;
+
 export default function App() {
   const [status, setStatus] = useState<TmuxStatus | null>(null);
   const [snap, setSnap] = useState<Snapshot>({ sessions: [] });
@@ -79,6 +83,11 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.localStorage.getItem("sparkmux.sidebarCollapsed") === "1",
   );
+  const [fontSize, setFontSize] = useState(() => {
+    const raw = Number(window.localStorage.getItem("sparkmux.fontSize"));
+    if (Number.isFinite(raw) && raw >= FONT_MIN && raw <= FONT_MAX) return raw;
+    return FONT_DEFAULT;
+  });
   const sidebarDisplay = sidebarCollapsed ? 0 : sidebarWidth;
   const cellRef = useRef({ w: 8, h: 16 });
   const attachedRef = useRef<string | null>(null);
@@ -117,6 +126,9 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("sparkmux.sidebarCollapsed", sidebarCollapsed ? "1" : "0");
   }, [sidebarCollapsed]);
+  useEffect(() => {
+    window.localStorage.setItem("sparkmux.fontSize", String(fontSize));
+  }, [fontSize]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -380,6 +392,18 @@ export default function App() {
         case "new-window":
           await createNewTab();
           break;
+        case "close-tab":
+          await closeTab();
+          break;
+        case "zoom-in":
+          setFontSize((n) => Math.min(FONT_MAX, n + 1));
+          break;
+        case "zoom-out":
+          setFontSize((n) => Math.max(FONT_MIN, n - 1));
+          break;
+        case "zoom-reset":
+          setFontSize(FONT_DEFAULT);
+          break;
         case "split-right": {
           const pane = currentPane();
           if (pane) await splitPane(pane, false);
@@ -488,6 +512,49 @@ export default function App() {
       return { kind: "session", name: attachedRef.current };
     }
     return null;
+  }
+
+  async function closeTab(windowId?: string) {
+    const id = windowId ?? visibleRef.current;
+    if (!id) {
+      showToast("no tab to close");
+      return;
+    }
+    const session = attachedRef.current;
+    try {
+      await killWindow(id);
+      const tree = await fetchSnapshot();
+      setSnap(tree);
+      if (tree.sessions.length === 0) {
+        setEmpty(true);
+        setAttachedSession(null);
+        setLayout(null);
+        setVisibleWindowId(null);
+        setSelection(null);
+        return;
+      }
+      const sess = tree.sessions.find((s) => s.name === session);
+      if (!sess) {
+        await connectTo(tree.sessions[0].name);
+        return;
+      }
+      const next =
+        sess.windows.find((w) => w.active) ?? sess.windows[sess.windows.length - 1];
+      if (next) {
+        setSelection({
+          kind: "window",
+          id: next.id,
+          name: next.name,
+          sessionName: session ?? "",
+        });
+        await applyWindow(next);
+      } else {
+        setLayout(null);
+        setVisibleWindowId(null);
+      }
+    } catch (e) {
+      showToast(String(e));
+    }
   }
 
   async function createNewTab(name = "shell") {
@@ -715,11 +782,15 @@ export default function App() {
                 onNewTab={() => {
                   void createNewTab();
                 }}
+                onCloseTab={(windowId) => {
+                  void closeTab(windowId);
+                }}
               />
               <div className="term-stage" ref={hostRef}>
                 <TiledWindow
                   node={layout}
                   focusedPane={focusedPane}
+                  fontSize={fontSize}
                   onFocus={(id) => {
                     chromeFocus.current = "terminal";
                     setFocusedPane(id);
@@ -840,16 +911,40 @@ export default function App() {
       )}
       {dialog?.kind === "help" && (
         <Modal title="Sparkmux" onClose={() => setDialog(null)}>
-          <p>Desktop {status?.app_version ?? "0.1.0"}</p>
-          <p>{status?.version ?? "tmux unknown"}</p>
           <p>
-            Socket: <code>{status?.socket_path ?? `-L ${status?.socket_name ?? "sparkmux"}`}</code>
+            Desktop {status?.app_version ?? "0.1.0"} · {status?.version ?? "tmux unknown"}
           </p>
           <p>
-            Real terminal attach:{" "}
+            This window owns a <strong>private</strong> tmux server (
+            <code>-L {status?.socket_name ?? "sparkmux"}</code>
+            ). Your default tmux sessions are never listed or changed. Quit
+            detaches; the server stays up.
+          </p>
+          <p>
+            Attach from a real terminal:{" "}
             <code>tmux -L {status?.socket_name ?? "sparkmux"} attach</code>
           </p>
-          <p>Prefix bindings are not emulated in the GUI.</p>
+          <dl className="help-keys">
+            <dt>New session</dt>
+            <dd>⌘N / Ctrl+Shift+N</dd>
+            <dt>New tab</dt>
+            <dd>⌘T / Ctrl+Shift+T</dd>
+            <dt>Close tab</dt>
+            <dd>⌘W / Ctrl+Shift+W</dd>
+            <dt>Copy / paste</dt>
+            <dd>⌘C ⌘V / Ctrl+Shift+V</dd>
+            <dt>Split</dt>
+            <dd>⌘D and ⇧⌘D (macOS)</dd>
+            <dt>Text size</dt>
+            <dd>⌘+ ⌘- ⌘0 / Ctrl+ ± 0</dd>
+            <dt>Quit</dt>
+            <dd>⌘Q — detaches only</dd>
+          </dl>
+          <p className="hint">
+            Prefix keys are not emulated here; they still work in a real attach.
+            macOS builds are unsigned: right-click Sparkmux.app → Open the first
+            time.
+          </p>
           <div className="modal-actions">
             <button className="primary" onClick={() => setDialog(null)}>
               Close

@@ -63,6 +63,11 @@ export default function ErrorPanel({
           <li>Click Retry. Sparkmux will start its own server.</li>
         </ol>
         <CopyCmd cmd={tmuxInstallCmd()} />
+        {isMac() && (
+          <p className="hint">
+            macOS may block the unsigned app. Right-click Sparkmux.app → Open.
+          </p>
+        )}
         {status?.hint && <p className="hint">{status.hint}</p>}
         <button onClick={onRetry}>Retry</button>
       </div>

@@ -144,16 +144,30 @@ fn cmd_version(cfg: &Config) -> ExitCode {
 }
 
 fn cmd_doctor(cfg: &Config) -> eyre::Result<ExitCode> {
+    println!("sparkmux {}", env!("CARGO_PKG_VERSION"));
+    println!("product: desktop app owns -L sparkmux (default tmux server is unused)");
     let client = match make_client(cfg) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("tmux: {e}");
+            if cfg!(target_os = "macos") {
+                eprintln!("install: brew install tmux");
+            } else {
+                eprintln!("install: sudo apt install tmux");
+            }
             return Ok(ExitCode::from(1));
         }
     };
     println!("tmux binary: {}", client.bin.display());
     match client.version() {
-        Ok(v) => println!("tmux version: {} ({}.{})", v.raw, v.major, v.minor),
+        Ok(v) => {
+            let ok = if v.is_supported() {
+                "ok"
+            } else {
+                "TOO OLD (need 3.2+)"
+            };
+            println!("tmux version: {} ({}.{}) {ok}", v.raw, v.major, v.minor);
+        }
         Err(e) => println!("tmux version: {e}"),
     }
     let sock = cfg
@@ -165,6 +179,7 @@ fn cmd_doctor(cfg: &Config) -> eyre::Result<ExitCode> {
         Ok(p) => println!("socket path: {p}"),
         Err(e) => println!("socket path: ({e})"),
     }
+    println!("attach: tmux -L {sock} attach");
     match client.snapshot() {
         Ok(s) => {
             println!("sessions: {}", s.sessions.len());

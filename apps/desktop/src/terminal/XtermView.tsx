@@ -27,18 +27,23 @@ export default function XtermView({
   focused,
   onFocus,
   onCellSize,
+  fontSize,
 }: {
   paneId: string;
   focused: boolean;
   onFocus: (paneId: string) => void;
   onCellSize?: (w: number, h: number) => void;
+  fontSize: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const onFocusRef = useRef(onFocus);
   const onCellSizeRef = useRef(onCellSize);
+  const fontSizeRef = useRef(fontSize);
   onFocusRef.current = onFocus;
   onCellSizeRef.current = onCellSize;
+  fontSizeRef.current = fontSize;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -47,7 +52,7 @@ export default function XtermView({
       scrollback: 5000,
       fontFamily:
         "'0xProto Nerd Font Mono', '0xProto Nerd Font', 'MesloLGS NF', Menlo, ui-monospace, monospace",
-      fontSize: 13,
+      fontSize: fontSizeRef.current,
       lineHeight: 1.2,
       letterSpacing: 0,
       cursorBlink: true,
@@ -82,6 +87,7 @@ export default function XtermView({
       },
     });
     const fit = new FitAddon();
+    fitRef.current = fit;
     term.loadAddon(fit);
     if (!isMac) {
       try {
@@ -186,8 +192,22 @@ export default function XtermView({
       terms.delete(paneId);
       term.dispose();
       termRef.current = null;
+      fitRef.current = null;
     };
   }, [paneId]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    term.options.fontSize = fontSize;
+    try {
+      fit.fit();
+      reportCell(term, onCellSizeRef.current);
+    } catch {
+      /* host may be hidden */
+    }
+  }, [fontSize]);
 
   useEffect(() => {
     if (focused) {

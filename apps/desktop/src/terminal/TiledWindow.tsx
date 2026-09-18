@@ -6,11 +6,13 @@ export default function TiledWindow({
   focusedPane,
   onFocus,
   onCellSize,
+  fontSize,
 }: {
   node: LayoutNode;
   focusedPane: string | null;
   onFocus: (paneId: string) => void;
   onCellSize?: (w: number, h: number) => void;
+  fontSize: number;
 }) {
   if ("Pane" in node) {
     const paneId = `%${node.Pane.pane_id}`;
@@ -22,6 +24,7 @@ export default function TiledWindow({
           focused={focused}
           onFocus={onFocus}
           onCellSize={onCellSize}
+          fontSize={fontSize}
         />
       </div>
     );
@@ -45,6 +48,7 @@ export default function TiledWindow({
               focusedPane={focusedPane}
               onFocus={onFocus}
               onCellSize={onCellSize}
+              fontSize={fontSize}
             />
           </div>
         );

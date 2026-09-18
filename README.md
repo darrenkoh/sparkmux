@@ -6,6 +6,8 @@ Works on Apple Silicon macOS and NVIDIA DGX Spark (ARM64 Ubuntu 24.04). Requires
 
 Your default tmux server is never touched. sparkmux uses `-L sparkmux`.
 
+![Sparkmux desktop](docs/screenshot.png)
+
 ## Install
 
 One script installs tmux (if needed) and the desktop app. Apple Silicon or ARM64 Linux:
