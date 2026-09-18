@@ -4,12 +4,13 @@ export default function WindowTabs({
   windows,
   visibleWindowId,
   onSelect,
+  onNewTab,
 }: {
   windows: TmuxWindow[];
   visibleWindowId: string | null;
   onSelect: (windowId: string) => void;
+  onNewTab: () => void;
 }) {
-  if (windows.length === 0) return null;
   return (
     <div className="window-tabs" role="tablist">
       {windows.map((win) => {
@@ -31,6 +32,14 @@ export default function WindowTabs({
           </button>
         );
       })}
+      <button
+        className="window-tab window-tab-add"
+        title="New tab"
+        aria-label="New tab"
+        onClick={onNewTab}
+      >
+        +
+      </button>
     </div>
   );
 }

@@ -168,6 +168,15 @@ pub async fn new_window(
 }
 
 #[tauri::command]
+pub async fn select_window(state: State<'_, AppState>, window_id: String) -> Result<(), String> {
+    let inner = state.inner.lock().await;
+    let client = inner.client()?;
+    client
+        .select_window(&window_id)
+        .map_err(|e| map_error(&e))
+}
+
+#[tauri::command]
 pub async fn rename_window(
     state: State<'_, AppState>,
     window_id: String,

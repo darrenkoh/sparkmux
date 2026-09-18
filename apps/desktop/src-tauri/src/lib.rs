@@ -21,6 +21,7 @@ pub fn run() {
             commands::rename_session,
             commands::kill_session,
             commands::new_window,
+            commands::select_window,
             commands::rename_window,
             commands::kill_window,
             commands::kill_pane,

@@ -10,8 +10,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
     let new_window = item(
         app,
         "new-window",
-        "New Window",
-        mac.then_some("Cmd+Shift+N"),
+        "New Tab",
+        mac.then_some("Cmd+T"),
     )?;
     let close_window = item(app, "close-window", "Close Window", mac.then_some("Cmd+W"))?;
     let quit = item(app, "quit", "Quit", mac.then_some("Cmd+Q"))?;

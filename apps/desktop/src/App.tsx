@@ -17,6 +17,7 @@ import {
   newSession,
   newWindow,
   parseLayout,
+  selectWindow,
   paneWrite,
   rememberSession,
   renameSession,
@@ -148,6 +149,11 @@ export default function App() {
       }
       setVisibleWindowId(win.id);
       try {
+        await selectWindow(win.id);
+      } catch {
+        /* window may already be active */
+      }
+      try {
         const node = await parseLayout(win.layout);
         setLayout(node);
       } catch {
@@ -158,12 +164,6 @@ export default function App() {
       const pane = win.panes.find((p) => p.active) ?? win.panes[0];
       if (pane) {
         setFocusedPane(pane.id);
-        setSelection({
-          kind: "pane",
-          id: pane.id,
-          sessionName: attachedRef.current ?? "",
-          windowId: win.id,
-        });
         void focusPane(pane.id);
       }
     },
@@ -371,8 +371,7 @@ export default function App() {
           setDialog({ kind: "new-session" });
           break;
         case "new-window":
-          setInput("shell");
-          setDialog({ kind: "new-window" });
+          await createNewTab();
           break;
         case "split-right": {
           const pane = currentPane();
@@ -462,14 +461,55 @@ export default function App() {
   async function submitNewWindow() {
     const name = input.trim() || "shell";
     setDialog(null);
+    await createNewTab(name);
+  }
+
+  function renameTarget(
+    sel: Selection | null = selectionRef.current,
+  ):
+    | { kind: "session"; name: string }
+    | { kind: "window"; id: string; name: string }
+    | null {
+    if (sel?.kind === "session") return { kind: "session", name: sel.name };
+    if (sel?.kind === "window") return { kind: "window", id: sel.id, name: sel.name };
+    if (sel?.kind === "pane") {
+      const sess = snapRef.current.sessions.find((s) => s.name === sel.sessionName);
+      const win = sess?.windows.find((w) => w.id === sel.windowId);
+      if (win) return { kind: "window", id: win.id, name: win.name };
+    }
+    if (attachedRef.current) {
+      return { kind: "session", name: attachedRef.current };
+    }
+    return null;
+  }
+
+  async function createNewTab(name = "shell") {
+    const session = attachedRef.current;
+    if (!session) {
+      showToast("select a session first");
+      return;
+    }
+    const before = new Set(
+      snapRef.current.sessions.find((s) => s.name === session)?.windows.map((w) => w.id) ?? [],
+    );
     try {
-      const session = attachedRef.current;
-      if (!session) {
-        showToast("no attached session");
-        return;
-      }
       await newWindow(session, name);
-      await refreshTree();
+      const tree = await fetchSnapshot();
+      setSnap(tree);
+      const sess = tree.sessions.find((s) => s.name === session);
+      const created =
+        sess?.windows.find((w) => !before.has(w.id)) ??
+        sess?.windows.find((w) => w.active) ??
+        sess?.windows[sess.windows.length - 1];
+      if (created) {
+        setSelection({
+          kind: "window",
+          id: created.id,
+          name: created.name,
+          sessionName: session,
+        });
+        await applyWindow(created);
+      }
     } catch (e) {
       showToast(String(e));
     }
@@ -477,19 +517,29 @@ export default function App() {
 
   async function submitRename() {
     const name = input.trim();
-    if (!name || !selection) return;
+    const target = renameTarget();
+    if (!name || !target) return;
     setDialog(null);
     try {
-      if (selection.kind === "session") {
-        await renameSession(selection.name, name);
-        if (attachedRef.current === selection.name) {
+      if (target.kind === "session") {
+        await renameSession(target.name, name);
+        if (attachedRef.current === target.name) {
           setAttachedSession(name);
           await rememberSession(name);
         }
-      } else if (selection.kind === "window") {
-        await renameWindow(selection.id, name);
+        setSelection({
+          kind: "session",
+          id: snapRef.current.sessions.find((s) => s.name === target.name)?.id ?? name,
+          name,
+        });
       } else {
-        showToast("rename a session or window");
+        await renameWindow(target.id, name);
+        setSelection({
+          kind: "window",
+          id: target.id,
+          name,
+          sessionName: attachedRef.current ?? "",
+        });
       }
       await refreshTree();
     } catch (e) {
@@ -590,14 +640,17 @@ export default function App() {
                 getTerm(paneId)?.focus();
               })();
             }}
+            onNewTab={() => {
+              void createNewTab();
+            }}
             onRename={() => {
-              if (!selection) return;
-              if (selection.kind === "pane") {
-                showToast("rename a session or window");
+              const target = renameTarget(selection);
+              if (!target) {
+                showToast("select a session or window");
                 return;
               }
-              setInput(selection.name);
-              setDialog({ kind: "rename", value: selection.name });
+              setInput(target.name);
+              setDialog({ kind: "rename", value: target.name });
             }}
             onKill={() => {
               if (!selection) return;
@@ -636,7 +689,18 @@ export default function App() {
                 visibleWindowId={visibleWindowId}
                 onSelect={(windowId) => {
                   const win = attached?.windows.find((w) => w.id === windowId);
-                  if (win) void applyWindow(win);
+                  if (win) {
+                    setSelection({
+                      kind: "window",
+                      id: win.id,
+                      name: win.name,
+                      sessionName: attachedSession ?? "",
+                    });
+                    void applyWindow(win);
+                  }
+                }}
+                onNewTab={() => {
+                  void createNewTab();
                 }}
               />
               <div className="term-stage" ref={hostRef}>

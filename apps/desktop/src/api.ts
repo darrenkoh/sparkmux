@@ -31,6 +31,10 @@ export function newWindow(session: string, name: string): Promise<void> {
   return invoke("new_window", { session, name });
 }
 
+export function selectWindow(windowId: string): Promise<void> {
+  return invoke("select_window", { windowId });
+}
+
 export function renameWindow(windowId: string, name: string): Promise<void> {
   return invoke("rename_window", { windowId, name });
 }

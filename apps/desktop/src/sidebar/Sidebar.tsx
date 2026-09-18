@@ -14,6 +14,7 @@ export default function Sidebar({
   onRename,
   onKill,
   onNewSession,
+  onNewTab,
 }: {
   snapshot: Snapshot;
   attachedSession: string | null;
@@ -26,6 +27,7 @@ export default function Sidebar({
   onRename: () => void;
   onKill: () => void;
   onNewSession: () => void;
+  onNewTab: () => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
@@ -69,6 +71,12 @@ export default function Sidebar({
                 <button
                   className="row-main"
                   onClick={() => onSelectSession(session.name)}
+                  onDoubleClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelectSession(session.name);
+                    window.setTimeout(() => onRename(), 0);
+                  }}
                 >
                   <span className={`live-dot ${live ? "on" : ""}`} />
                   <span className="name">{session.name}</span>
@@ -141,10 +149,18 @@ export default function Sidebar({
         })}
       </div>
       <div className="sidebar-actions">
-        <button className="ghost" onClick={onNewSession}>
-          New
+        <button className="ghost" onClick={onNewSession} title="New session">
+          Session
         </button>
-        <button disabled={!selection} onClick={onRename}>
+        <button
+          className="ghost"
+          onClick={onNewTab}
+          disabled={!attachedSession}
+          title="New tab in this session"
+        >
+          Tab
+        </button>
+        <button disabled={!selection && !attachedSession} onClick={onRename}>
           Rename
         </button>
         <button disabled={!selection} className="danger" onClick={onKill}>

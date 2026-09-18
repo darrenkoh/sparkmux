@@ -261,7 +261,7 @@ input {
 }
 
 .sidebar-actions button.ghost {
-  margin-right: auto;
+  margin-right: 0;
 }
 
 .sidebar-actions button:hover:not(:disabled),
@@ -370,6 +370,18 @@ body.is-resizing * {
 .window-tab-meta {
   font-size: 10px;
   color: var(--muted);
+}
+
+.window-tab-add {
+  max-width: 36px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 4px 10px 8px;
+}
+
+.window-tab-add:hover {
+  color: var(--fg);
 }
 
 .term-stage {
