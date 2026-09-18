@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import type { Selection, Snapshot } from "../types";
 
 export default function Sidebar({
@@ -11,6 +13,7 @@ export default function Sidebar({
   onSelectPane,
   onRename,
   onKill,
+  onNewSession,
 }: {
   snapshot: Snapshot;
   attachedSession: string | null;
@@ -22,63 +25,113 @@ export default function Sidebar({
   onSelectPane: (sessionName: string, windowId: string, paneId: string) => void;
   onRename: () => void;
   onKill: () => void;
+  onNewSession: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+
+  function toggle(id: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const n = snapshot.sessions.length;
+
   return (
-    <aside className="sidebar" onMouseDown={(e) => e.stopPropagation()}>
-      <div className="sidebar-title">Sessions</div>
+    <aside className="sidebar">
+      <header className="sidebar-head">
+        <div className="sidebar-kicker">Sessions</div>
+        <div className="sidebar-count">{n}</div>
+      </header>
       <div className="sidebar-tree">
-        {snapshot.sessions.length === 0 && (
-          <div className="sidebar-empty">No sessions</div>
-        )}
+        {n === 0 && <div className="sidebar-empty">No sessions on this socket</div>}
         {snapshot.sessions.map((session) => {
-          const open = true;
+          const sessCollapsed = collapsed.has(session.id);
           const sessSelected =
             selection?.kind === "session" && selection.name === session.name;
+          const live = attachedSession === session.name;
           return (
-            <div key={session.id} className="sess">
-              <button
-                className={`row sess-row ${sessSelected ? "selected" : ""}`}
-                onClick={() => onSelectSession(session.name)}
-              >
-                <span className="twist">{open ? "▾" : "▸"}</span>
-                <span className="name">{session.name}</span>
-                {attachedSession === session.name && <span className="dot">●</span>}
-              </button>
-              {open &&
+            <div key={session.id} className={`sess ${live ? "live" : ""}`}>
+              <div className={`row sess-row ${sessSelected ? "selected" : ""}`}>
+                <button
+                  className="twist"
+                  aria-label={sessCollapsed ? "Expand" : "Collapse"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggle(session.id);
+                  }}
+                >
+                  {sessCollapsed ? "▸" : "▾"}
+                </button>
+                <button
+                  className="row-main"
+                  onClick={() => onSelectSession(session.name)}
+                >
+                  <span className={`live-dot ${live ? "on" : ""}`} />
+                  <span className="name">{session.name}</span>
+                  <span className="meta">
+                    {session.windows.length}w
+                  </span>
+                </button>
+              </div>
+              {!sessCollapsed &&
                 session.windows.map((win) => {
+                  const winCollapsed = collapsed.has(win.id);
                   const winSelected =
                     selection?.kind === "window" && selection.id === win.id;
+                  const winVisible = visibleWindowId === win.id && live;
                   return (
-                    <div key={win.id}>
-                      <button
+                    <div key={win.id} className="win-block">
+                      <div
                         className={`row win-row ${winSelected ? "selected" : ""} ${
-                          visibleWindowId === win.id ? "visible" : ""
+                          winVisible ? "visible" : ""
                         }`}
-                        onClick={() => onSelectWindow(session.name, win.id)}
                       >
-                        <span className="name">
-                          {win.index}: {win.name}
-                        </span>
-                        <span className="meta">{win.panes.length}p</span>
-                      </button>
-                      {win.panes.map((pane) => {
-                        const paneSelected =
-                          selection?.kind === "pane" && selection.id === pane.id;
-                        return (
-                          <button
-                            key={pane.id}
-                            className={`row pane-row ${paneSelected ? "selected" : ""} ${
-                              focusedPane === pane.id ? "focused" : ""
-                            }`}
-                            onClick={() => onSelectPane(session.name, win.id, pane.id)}
-                          >
-                            <span className="name">
-                              {pane.id} {pane.command || "zsh"}
-                            </span>
-                            {pane.active && <span className="star">*</span>}
-                          </button>
-                        );
-                      })}
+                        <button
+                          className="twist"
+                          aria-label={winCollapsed ? "Expand panes" : "Collapse panes"}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggle(win.id);
+                          }}
+                        >
+                          {winCollapsed ? "▸" : "▾"}
+                        </button>
+                        <button
+                          className="row-main"
+                          onClick={() => onSelectWindow(session.name, win.id)}
+                        >
+                          <span className="badge">{win.index}</span>
+                          <span className="name">{win.name}</span>
+                          <span className="meta">{win.panes.length}p</span>
+                        </button>
+                      </div>
+                      {!winCollapsed &&
+                        win.panes.map((pane) => {
+                          const paneSelected =
+                            selection?.kind === "pane" && selection.id === pane.id;
+                          const paneFocused = focusedPane === pane.id && live;
+                          const cmd = pane.command || "zsh";
+                          return (
+                            <button
+                              key={pane.id}
+                              className={`row pane-row ${paneSelected ? "selected" : ""} ${
+                                paneFocused ? "focused" : ""
+                              }`}
+                              onClick={() =>
+                                onSelectPane(session.name, win.id, pane.id)
+                              }
+                              title={`${pane.id} ${cmd}\n${pane.path}`}
+                            >
+                              <span className="pane-mark">›</span>
+                              <span className="name">{cmd}</span>
+                              {pane.active && <span className="star">*</span>}
+                            </button>
+                          );
+                        })}
                     </div>
                   );
                 })}
@@ -87,8 +140,11 @@ export default function Sidebar({
         })}
       </div>
       <div className="sidebar-actions">
+        <button className="ghost" onClick={onNewSession}>
+          New
+        </button>
         <button disabled={!selection} onClick={onRename}>
-          Rename…
+          Rename
         </button>
         <button disabled={!selection} className="danger" onClick={onKill}>
           Kill

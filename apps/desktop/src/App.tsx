@@ -28,7 +28,13 @@ import {
   windowResize,
 } from "./api";
 import ErrorPanel from "./chrome/ErrorPanel";
+import Splitter, {
+  SIDEBAR_DEFAULT,
+  SIDEBAR_MAX,
+  SIDEBAR_MIN,
+} from "./chrome/Splitter";
 import StatusBar from "./chrome/StatusBar";
+import WindowTabs from "./chrome/WindowTabs";
 import Modal from "./dialogs/Modal";
 import Sidebar from "./sidebar/Sidebar";
 import TiledWindow, { fallbackLayout } from "./terminal/TiledWindow";
@@ -64,6 +70,11 @@ export default function App() {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [input, setInput] = useState("");
   const hostRef = useRef<HTMLDivElement>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const raw = Number(window.localStorage.getItem("sparkmux.sidebarWidth"));
+    if (Number.isFinite(raw) && raw >= SIDEBAR_MIN && raw <= SIDEBAR_MAX) return raw;
+    return SIDEBAR_DEFAULT;
+  });
   const cellRef = useRef({ w: 8, h: 16 });
   const attachedRef = useRef<string | null>(null);
   const visibleRef = useRef<string | null>(null);
@@ -95,6 +106,9 @@ export default function App() {
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
+  useEffect(() => {
+    window.localStorage.setItem("sparkmux.sidebarWidth", String(Math.round(sidebarWidth)));
+  }, [sidebarWidth]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -161,6 +175,10 @@ export default function App() {
         sess?.windows.find((w) => w.active) ??
         sess?.windows[0];
       await applyWindow(win);
+      requestAnimationFrame(() => {
+        const size = hostSize();
+        void windowResize(size.cols, size.rows);
+      });
       const title = win ? `Sparkmux — ${session}:${win.name}` : `Sparkmux — ${session}`;
       try {
         await getCurrentWindow().setTitle(title);
@@ -315,14 +333,16 @@ export default function App() {
     const host = hostRef.current;
     if (!host) return;
     let t: number | undefined;
+    const push = () => {
+      const { cols, rows } = hostSize();
+      void windowResize(cols, rows);
+    };
     const ro = new ResizeObserver(() => {
       if (t) window.clearTimeout(t);
-      t = window.setTimeout(() => {
-        const { cols, rows } = hostSize();
-        void windowResize(cols, rows);
-      }, 50);
+      t = window.setTimeout(push, 50);
     });
     ro.observe(host);
+    push();
     return () => {
       ro.disconnect();
       if (t) window.clearTimeout(t);
@@ -495,17 +515,17 @@ export default function App() {
     }
   }
 
-  const winName =
-    snap.sessions
-      .find((s) => s.name === attachedSession)
-      ?.windows.find((w) => w.id === visibleWindowId)?.name ?? null;
-
+  const attached = snap.sessions.find((s) => s.name === attachedSession);
+  const visibleWin = attached?.windows.find((w) => w.id === visibleWindowId);
+  const winName = visibleWin?.name ?? null;
   const showTiles = !error && !empty && layout && attachedSession;
 
   return (
     <div className="app">
       <div className="body">
         <div
+          className="sidebar-slot"
+          style={{ width: sidebarWidth }}
           onMouseDown={() => {
             chromeFocus.current = "sidebar";
           }}
@@ -516,6 +536,10 @@ export default function App() {
             visibleWindowId={visibleWindowId}
             focusedPane={focusedPane}
             selection={selection}
+            onNewSession={() => {
+              setInput("");
+              setDialog({ kind: "new-session" });
+            }}
             onSelectSession={(name) => {
               chromeFocus.current = "sidebar";
               setSelection({
@@ -579,9 +603,9 @@ export default function App() {
             }}
           />
         </div>
+        <Splitter width={sidebarWidth} onWidth={setSidebarWidth} />
         <main
           className="main"
-          ref={hostRef}
           onMouseDown={() => {
             chromeFocus.current = "terminal";
           }}
@@ -598,25 +622,40 @@ export default function App() {
               }}
             />
           ) : showTiles ? (
-            <TiledWindow
-              node={layout}
-              focusedPane={focusedPane}
-              onFocus={(id) => {
-                chromeFocus.current = "terminal";
-                setFocusedPane(id);
-                const sess = snapRef.current.sessions.find((s) => s.name === attachedRef.current);
-                const win = sess?.windows.find((w) => w.id === visibleRef.current);
-                setSelection({
-                  kind: "pane",
-                  id,
-                  sessionName: attachedRef.current ?? "",
-                  windowId: win?.id ?? "",
-                });
-              }}
-              onCellSize={(w, h) => {
-                if (w > 0 && h > 0) cellRef.current = { w, h };
-              }}
-            />
+            <>
+              <WindowTabs
+                windows={attached?.windows ?? []}
+                visibleWindowId={visibleWindowId}
+                onSelect={(windowId) => {
+                  const win = attached?.windows.find((w) => w.id === windowId);
+                  if (win) void applyWindow(win);
+                }}
+              />
+              <div className="term-stage" ref={hostRef}>
+                <TiledWindow
+                  node={layout}
+                  panes={visibleWin?.panes ?? []}
+                  focusedPane={focusedPane}
+                  onFocus={(id) => {
+                    chromeFocus.current = "terminal";
+                    setFocusedPane(id);
+                    const sess = snapRef.current.sessions.find(
+                      (s) => s.name === attachedRef.current,
+                    );
+                    const win = sess?.windows.find((w) => w.id === visibleRef.current);
+                    setSelection({
+                      kind: "pane",
+                      id,
+                      sessionName: attachedRef.current ?? "",
+                      windowId: win?.id ?? "",
+                    });
+                  }}
+                  onCellSize={(w, h) => {
+                    if (w > 0 && h > 0) cellRef.current = { w, h };
+                  }}
+                />
+              </div>
+            </>
           ) : (
             <div className="panel">
               <p>Connecting…</p>
