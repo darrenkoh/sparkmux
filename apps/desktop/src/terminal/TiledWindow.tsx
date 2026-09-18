@@ -1,40 +1,28 @@
-import type { LayoutNode, Pane } from "../types";
+import type { LayoutNode } from "../types";
 import XtermView from "./XtermView";
 
 export default function TiledWindow({
   node,
   focusedPane,
-  panes,
   onFocus,
   onCellSize,
 }: {
   node: LayoutNode;
   focusedPane: string | null;
-  panes: Pane[];
   onFocus: (paneId: string) => void;
   onCellSize?: (w: number, h: number) => void;
 }) {
   if ("Pane" in node) {
     const paneId = `%${node.Pane.pane_id}`;
-    const info = panes.find((p) => p.id === paneId);
     const focused = focusedPane === paneId;
-    const cmd = info?.command || "zsh";
-    const path = shortPath(info?.path ?? "");
     return (
       <div className={`tile-leaf pane-frame ${focused ? "focused" : ""}`}>
-        <div className="pane-bar">
-          <span className="pane-bar-cmd">{cmd}</span>
-          {path && <span className="pane-bar-path">{path}</span>}
-          <span className="pane-bar-id">{paneId}</span>
-        </div>
-        <div className="pane-body">
-          <XtermView
-            paneId={paneId}
-            focused={focused}
-            onFocus={onFocus}
-            onCellSize={onCellSize}
-          />
-        </div>
+        <XtermView
+          paneId={paneId}
+          focused={focused}
+          onFocus={onFocus}
+          onCellSize={onCellSize}
+        />
       </div>
     );
   }
@@ -55,7 +43,6 @@ export default function TiledWindow({
             <TiledWindow
               node={child}
               focusedPane={focusedPane}
-              panes={panes}
               onFocus={onFocus}
               onCellSize={onCellSize}
             />
@@ -74,13 +61,6 @@ function nodeSize(node: LayoutNode, horizontal: boolean): number {
 function leafKey(node: LayoutNode, i: number): string {
   if ("Pane" in node) return `p-${node.Pane.pane_id}`;
   return `s-${i}-${node.Split.dir}`;
-}
-
-function shortPath(path: string): string {
-  if (!path) return "";
-  const home = path.match(/^\/Users\/[^/]+(.*)$/);
-  if (home) return `~${home[1] || ""}`;
-  return path;
 }
 
 export function fallbackLayout(paneId: string): LayoutNode {

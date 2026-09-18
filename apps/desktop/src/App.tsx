@@ -116,15 +116,28 @@ export default function App() {
   }, []);
 
   const hostSize = useCallback(() => {
+    const cw = cellRef.current.w || 8.4;
+    const ch = cellRef.current.h || 17;
+    const pad = 16;
     const el = hostRef.current;
-    const cw = cellRef.current.w || 8;
-    const ch = cellRef.current.h || 16;
-    if (!el) return { cols: 80, rows: 24 };
+    const w =
+      el && el.clientWidth > 40
+        ? el.clientWidth
+        : Math.max(240, window.innerWidth - sidebarWidth - 5);
+    const h =
+      el && el.clientHeight > 40
+        ? el.clientHeight
+        : Math.max(120, window.innerHeight - 96);
     return {
-      cols: Math.max(2, Math.floor(el.clientWidth / cw)),
-      rows: Math.max(1, Math.floor(el.clientHeight / ch)),
+      cols: Math.max(2, Math.floor(Math.max(0, w - pad) / cw)),
+      rows: Math.max(1, Math.floor(Math.max(0, h - pad) / ch)),
     };
-  }, []);
+  }, [sidebarWidth]);
+
+  const pushClientSize = useCallback(() => {
+    const { cols, rows } = hostSize();
+    void windowResize(cols, rows);
+  }, [hostSize]);
 
   const applyWindow = useCallback(
     async (win: TmuxWindow | undefined) => {
@@ -176,8 +189,7 @@ export default function App() {
         sess?.windows[0];
       await applyWindow(win);
       requestAnimationFrame(() => {
-        const size = hostSize();
-        void windowResize(size.cols, size.rows);
+        requestAnimationFrame(() => pushClientSize());
       });
       const title = win ? `Sparkmux — ${session}:${win.name}` : `Sparkmux — ${session}`;
       try {
@@ -186,7 +198,7 @@ export default function App() {
         /* ACL optional */
       }
     },
-    [applyWindow, hostSize],
+    [applyWindow, hostSize, pushClientSize],
   );
 
   const boot = useCallback(async () => {
@@ -333,21 +345,17 @@ export default function App() {
     const host = hostRef.current;
     if (!host) return;
     let t: number | undefined;
-    const push = () => {
-      const { cols, rows } = hostSize();
-      void windowResize(cols, rows);
-    };
     const ro = new ResizeObserver(() => {
       if (t) window.clearTimeout(t);
-      t = window.setTimeout(push, 50);
+      t = window.setTimeout(() => pushClientSize(), 50);
     });
     ro.observe(host);
-    push();
+    pushClientSize();
     return () => {
       ro.disconnect();
       if (t) window.clearTimeout(t);
     };
-  }, [hostSize, attachedSession, visibleWindowId]);
+  }, [pushClientSize, attachedSession, visibleWindowId]);
 
   function currentPane(): string | null {
     if (chromeFocus.current === "terminal") return focusedRef.current;
@@ -634,7 +642,6 @@ export default function App() {
               <div className="term-stage" ref={hostRef}>
                 <TiledWindow
                   node={layout}
-                  panes={visibleWin?.panes ?? []}
                   focusedPane={focusedPane}
                   onFocus={(id) => {
                     chromeFocus.current = "terminal";
@@ -651,7 +658,10 @@ export default function App() {
                     });
                   }}
                   onCellSize={(w, h) => {
-                    if (w > 0 && h > 0) cellRef.current = { w, h };
+                    if (w > 0 && h > 0) {
+                      cellRef.current = { w, h };
+                      pushClientSize();
+                    }
                   }}
                 />
               </div>

@@ -110,6 +110,7 @@ export default function Sidebar({
                         </button>
                       </div>
                       {!winCollapsed &&
+                        win.panes.length > 1 &&
                         win.panes.map((pane) => {
                           const paneSelected =
                             selection?.kind === "pane" && selection.id === pane.id;

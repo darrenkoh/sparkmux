@@ -25,7 +25,9 @@ export default function WindowTabs({
           >
             <span className="window-tab-idx">{win.index}</span>
             <span className="window-tab-name">{win.name}</span>
-            <span className="window-tab-meta">{win.panes.length}</span>
+            {win.panes.length > 1 && (
+              <span className="window-tab-meta">{win.panes.length}p</span>
+            )}
           </button>
         );
       })}

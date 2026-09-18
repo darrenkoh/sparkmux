@@ -39,14 +39,16 @@ export default function XtermView({
     const term = new Terminal({
       scrollback: 5000,
       fontFamily:
-        "ui-monospace, SFMono-Regular, Menlo, 'Ubuntu Mono', 'DejaVu Sans Mono', monospace",
+        "'MesloLGS NF', '0xProto Nerd Font Mono', '0xProto Nerd Font', Menlo, ui-monospace, monospace",
       fontSize: 13,
-      lineHeight: 1.2,
+      lineHeight: 1.25,
       letterSpacing: 0,
       cursorBlink: true,
       cursorStyle: "bar",
       cursorWidth: 1.5,
       macOptionIsMeta: isMac,
+      customGlyphs: true,
+      rescaleOverlappingGlyphs: true,
       theme: {
         background: "#0d0f12",
         foreground: "#e6e8ee",
@@ -74,10 +76,13 @@ export default function XtermView({
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    try {
-      term.loadAddon(new CanvasAddon());
-    } catch {
-      /* default renderer */
+    // Canvas on WKWebView clips glyphs and mis-measures cells; DOM renderer is correct.
+    if (!isMac) {
+      try {
+        term.loadAddon(new CanvasAddon());
+      } catch {
+        /* default renderer */
+      }
     }
     term.open(host);
     termRef.current = term;
@@ -87,7 +92,6 @@ export default function XtermView({
     channel.onmessage = (msg) => {
       term.write(toBytes(msg));
     };
-    void paneSubscribe(paneId, channel);
 
     const dataDisp = term.onData((data) => {
       const bytes = Array.from(new TextEncoder().encode(data));
@@ -135,7 +139,10 @@ export default function XtermView({
         /* layout not ready */
       }
     };
-    requestAnimationFrame(doFit);
+    requestAnimationFrame(() => {
+      doFit();
+      void paneSubscribe(paneId, channel);
+    });
     const later = window.setTimeout(doFit, 40);
 
     const ro = new ResizeObserver(() => {
