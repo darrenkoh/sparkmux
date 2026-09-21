@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   attachTargetName,
+  clipboardRead,
+  clipboardWrite,
   controlConnect,
   ensureReady,
   focusPane,
@@ -37,7 +39,10 @@ import StatusBar from "./chrome/StatusBar";
 import WindowTabs from "./chrome/WindowTabs";
 import Modal from "./dialogs/Modal";
 import Sidebar from "./sidebar/Sidebar";
-import TiledWindow, { fallbackLayout } from "./terminal/TiledWindow";
+import TiledWindow, {
+  clientSizeFromFits,
+  fallbackLayout,
+} from "./terminal/TiledWindow";
 import { getTerm } from "./terminal/XtermView";
 import type {
   GuiError,
@@ -90,6 +95,10 @@ export default function App() {
   });
   const sidebarDisplay = sidebarCollapsed ? 0 : sidebarWidth;
   const cellRef = useRef({ w: 8, h: 16 });
+  const paneFitRef = useRef(new Map<string, { cols: number; rows: number }>());
+  const layoutRef = useRef<LayoutNode | null>(null);
+  const sizeTimer = useRef<number | undefined>(undefined);
+  layoutRef.current = layout;
   const attachedRef = useRef<string | null>(null);
   const visibleRef = useRef<string | null>(null);
   const focusedRef = useRef<string | null>(null);
@@ -135,10 +144,11 @@ export default function App() {
     window.setTimeout(() => setToast(null), 4000);
   }, []);
 
-  const hostSize = useCallback(() => {
+  const pixelClientSize = useCallback(() => {
     const cw = cellRef.current.w || 8.4;
     const ch = cellRef.current.h || 17;
     const pad = 16;
+    const scrollbar = 15;
     const el = hostRef.current;
     const w =
       el && el.clientWidth > 40
@@ -149,18 +159,35 @@ export default function App() {
         ? el.clientHeight
         : Math.max(120, window.innerHeight - 96);
     return {
-      cols: Math.max(2, Math.floor(Math.max(0, w - pad) / cw)),
+      cols: Math.max(2, Math.floor(Math.max(0, w - pad - scrollbar) / cw)),
       rows: Math.max(1, Math.floor(Math.max(0, h - pad) / ch)),
     };
   }, [sidebarDisplay]);
 
+  const hostSize = useCallback(() => {
+    const node = layoutRef.current;
+    if (node) {
+      const fitted = clientSizeFromFits(node, paneFitRef.current);
+      if (fitted) return fitted;
+    }
+    return pixelClientSize();
+  }, [pixelClientSize]);
+
   const pushClientSize = useCallback(() => {
-    const { cols, rows } = hostSize();
-    void windowResize(cols, rows);
+    if (sizeTimer.current) window.clearTimeout(sizeTimer.current);
+    sizeTimer.current = window.setTimeout(() => {
+      const node = layoutRef.current;
+      if (node && !clientSizeFromFits(node, paneFitRef.current)) {
+        return;
+      }
+      const { cols, rows } = hostSize();
+      void windowResize(cols, rows);
+    }, 50);
   }, [hostSize]);
 
   const applyWindow = useCallback(
     async (win: TmuxWindow | undefined) => {
+      paneFitRef.current.clear();
       if (!win) {
         setVisibleWindowId(null);
         setLayout(null);
@@ -191,7 +218,7 @@ export default function App() {
 
   const connectTo = useCallback(
     async (session: string, preferredWindow?: string) => {
-      const { cols, rows } = hostSize();
+      const { cols, rows } = pixelClientSize();
       await controlConnect(session, cols, rows);
       await rememberSession(session);
       setAttachedSession(session);
@@ -217,7 +244,7 @@ export default function App() {
         /* ACL optional */
       }
     },
-    [applyWindow, hostSize, pushClientSize],
+    [applyWindow, pixelClientSize, pushClientSize],
   );
 
   const boot = useCallback(async () => {
@@ -449,14 +476,15 @@ export default function App() {
     if (!pane) return;
     const term = getTerm(pane);
     if (term?.hasSelection()) {
-      await navigator.clipboard.writeText(term.getSelection());
+      await clipboardWrite(term.getSelection());
     }
   }
 
   async function doPaste() {
     const pane = focusedRef.current;
     if (!pane) return;
-    const text = await navigator.clipboard.readText();
+    const text = await clipboardRead();
+    if (!text) return;
     await paneWrite(pane, Array.from(new TextEncoder().encode(text)));
   }
 
@@ -847,9 +875,12 @@ export default function App() {
                       windowId: win?.id ?? "",
                     });
                   }}
-                  onCellSize={(w, h) => {
+                  onCellSize={(paneId, w, h, cols, rows) => {
                     if (w > 0 && h > 0) {
                       cellRef.current = { w, h };
+                      if (cols >= 2 && rows >= 1) {
+                        paneFitRef.current.set(paneId, { cols, rows });
+                      }
                       pushClientSize();
                     }
                   }}

@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
 use crate::error::map_error;
-use crate::state::AppState;
+use crate::state::{AppState, PaneFeed};
 
 #[derive(Serialize, Clone)]
 struct LayoutChangePayload {
@@ -38,7 +38,7 @@ pub async fn connect(
         }
         drop(inner);
         if ctl
-            .command(&format!("switch-client -t {session}"))
+            .command(&format!("switch-client -t {}", tmux_quote(&session)))
             .await
             .is_ok()
         {
@@ -96,27 +96,50 @@ pub async fn subscribe_pane(
     pane_id: String,
     on_data: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
-    let (client, channel) = {
+    let client = {
         let inner = state.inner.lock().await;
-        inner
-            .channels
-            .lock()
-            .await
-            .insert(pane_id.clone(), on_data.clone());
-        (inner.client.clone(), on_data)
+        inner.channels.lock().await.insert(
+            pane_id.clone(),
+            PaneFeed {
+                channel: on_data,
+                seeded: false,
+                buf: Vec::new(),
+            },
+        );
+        inner.client.clone()
     };
+    let mut seed = Vec::new();
     if let Some(client) = client {
         match client
             .capture_pane_timeout(&pane_id, Duration::from_millis(300))
             .await
         {
-            Ok(text) => {
-                let _ = channel.send(InvokeResponseBody::Raw(text.into_bytes()));
+            Ok(mut text) => {
+                if let Ok((y, x)) = client
+                    .pane_cursor_timeout(&pane_id, Duration::from_millis(200))
+                    .await
+                {
+                    text.push_str(&sparkmux_core::TmuxClient::cursor_cup(y, x));
+                }
+                seed = text.into_bytes();
             }
             Err(e) => {
                 tracing::debug!(pane = %pane_id, error = %e, "seed capture-pane failed");
             }
         }
+    }
+    let channels = {
+        let inner = state.inner.lock().await;
+        inner.channels.clone()
+    };
+    let mut map = channels.lock().await;
+    let Some(feed) = map.get_mut(&pane_id) else {
+        return Ok(());
+    };
+    let _ = feed.channel.send(InvokeResponseBody::Raw(seed));
+    feed.seeded = true;
+    for bytes in std::mem::take(&mut feed.buf) {
+        let _ = feed.channel.send(InvokeResponseBody::Raw(bytes));
     }
     Ok(())
 }
@@ -126,19 +149,35 @@ pub async fn unsubscribe_pane(state: &State<'_, AppState>, pane_id: &str) {
     inner.channels.lock().await.remove(pane_id);
 }
 
+fn tmux_quote(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        if c == '\\' || c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
+}
+
 fn spawn_pump(
     app: AppHandle,
     ctl: &sparkmux_core::ControlClient,
-    channels: Arc<Mutex<HashMap<String, Channel<InvokeResponseBody>>>>,
+    channels: Arc<Mutex<HashMap<String, PaneFeed>>>,
 ) -> JoinHandle<()> {
     let mut rx = ctl.subscribe();
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(ControlEvent::Output { pane_id, bytes }) => {
-                    let map = channels.lock().await;
-                    if let Some(ch) = map.get(&pane_id) {
-                        let _ = ch.send(InvokeResponseBody::Raw(bytes));
+                    let mut map = channels.lock().await;
+                    if let Some(feed) = map.get_mut(&pane_id) {
+                        if feed.seeded {
+                            let _ = feed.channel.send(InvokeResponseBody::Raw(bytes));
+                        } else if feed.buf.len() < 256 {
+                            feed.buf.push(bytes);
+                        }
                     }
                 }
                 Ok(ControlEvent::LayoutChange { window_id, layout }) => {
@@ -161,4 +200,16 @@ fn spawn_pump(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tmux_quote;
+
+    #[test]
+    fn quotes_spaces_and_escapes() {
+        assert_eq!(tmux_quote("main"), "\"main\"");
+        assert_eq!(tmux_quote("my work"), "\"my work\"");
+        assert_eq!(tmux_quote("a\"b"), "\"a\\\"b\"");
+    }
 }

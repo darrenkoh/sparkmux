@@ -31,6 +31,8 @@ export interface Window {
   name: string;
   active: boolean;
   layout: string;
+  bell: boolean;
+  activity: boolean;
   panes: Pane[];
 }
 

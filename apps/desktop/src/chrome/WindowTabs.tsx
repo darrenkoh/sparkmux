@@ -52,6 +52,7 @@ export default function WindowTabs({
       {windows.map((win) => {
         const active = win.id === visibleWindowId;
         const editing = editingId === win.id;
+        const unread = (win.bell || win.activity) && !active;
         return (
           <div
             key={win.id}
@@ -92,10 +93,16 @@ export default function WindowTabs({
                   onSelect(win.id);
                   startRename(win);
                 }}
-                title={`${win.index}: ${win.name}`}
+                title={
+                  unread
+                    ? `${win.index}: ${win.name} (unread)`
+                    : `${win.index}: ${win.name}`
+                }
+                aria-label={unread ? `${win.name}, unread` : win.name}
               >
                 <span className="window-tab-idx">{win.index}</span>
                 <span className="window-tab-name">{win.name}</span>
+                {unread && <span className="attn" title="unread" aria-hidden="true" />}
                 {win.panes.length > 1 && (
                   <span className="window-tab-meta">{win.panes.length}p</span>
                 )}

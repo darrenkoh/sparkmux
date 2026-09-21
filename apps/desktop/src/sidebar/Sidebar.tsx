@@ -94,6 +94,9 @@ export default function Sidebar({
           const sessSelected =
             selection?.kind === "session" && selection.name === session.name;
           const live = attachedSession === session.name;
+          const sessAttn = session.windows.some(
+            (w) => (w.bell || w.activity) && !(live && w.id === visibleWindowId),
+          );
           return (
             <div key={session.id} className={`sess ${live ? "live" : ""}`}>
               <div className={`row sess-row ${sessSelected ? "selected" : ""}`}>
@@ -109,6 +112,9 @@ export default function Sidebar({
                 </button>
                 <button
                   className="row-main"
+                  aria-label={
+                    sessAttn ? `${session.name}, unread` : session.name
+                  }
                   onClick={() => onSelectSession(session.name)}
                   onDoubleClick={(e) => {
                     e.preventDefault();
@@ -118,6 +124,9 @@ export default function Sidebar({
                 >
                   <span className={`live-dot ${live ? "on" : ""}`} />
                   <span className="name">{session.name}</span>
+                  {sessAttn && (
+                    <span className="attn" title="unread" aria-hidden="true" />
+                  )}
                   <span className="meta">{session.windows.length}w</span>
                 </button>
                 <button
@@ -140,6 +149,7 @@ export default function Sidebar({
                   const winSelected =
                     selection?.kind === "window" && selection.id === win.id;
                   const winVisible = visibleWindowId === win.id && live;
+                  const winAttn = (win.bell || win.activity) && !winVisible;
                   return (
                     <div key={win.id} className="win-block">
                       <div
@@ -159,10 +169,14 @@ export default function Sidebar({
                         </button>
                         <button
                           className="row-main"
+                          aria-label={winAttn ? `${win.name}, unread` : win.name}
                           onClick={() => onSelectWindow(session.name, win.id)}
                         >
                           <span className="badge">{win.index}</span>
                           <span className="name">{win.name}</span>
+                          {winAttn && (
+                            <span className="attn" title="unread" aria-hidden="true" />
+                          )}
                           <span className="meta">{win.panes.length}p</span>
                         </button>
                       </div>

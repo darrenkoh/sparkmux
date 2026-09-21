@@ -4,6 +4,7 @@ mod error;
 mod menu;
 mod state;
 
+use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
@@ -37,6 +38,8 @@ pub fn run() {
             commands::remember_session,
             commands::parse_layout,
             commands::attach_target_name,
+            commands::clipboard_read,
+            commands::clipboard_write,
         ])
         .setup(|app| {
             let menu = menu::build(app.handle())?;
@@ -45,6 +48,12 @@ pub fn run() {
         })
         .on_menu_event(|app, event| {
             menu::on_event(app, event.id().as_ref());
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                crate::menu::quit_detach(window.app_handle());
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running Sparkmux");

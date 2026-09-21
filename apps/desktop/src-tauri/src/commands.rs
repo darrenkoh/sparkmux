@@ -319,6 +319,20 @@ pub async fn attach_target_name(state: State<'_, AppState>) -> Result<Option<Str
     Ok(attach_target(&snap, last.as_deref(), &default))
 }
 
+#[tauri::command]
+pub fn clipboard_read() -> Result<String, String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.get_text())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn clipboard_write(text: String) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(text))
+        .map_err(|e| e.to_string())
+}
+
 fn check_version(client: &sparkmux_core::TmuxClient) -> Result<(), String> {
     let v = client.version().map_err(|e| map_error(&e))?;
     if !v.is_supported() {

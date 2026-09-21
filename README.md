@@ -85,10 +85,11 @@ Flag > env (`SPARKMUX_TMUX`) > config file > default.
 
 ## Desktop
 
-- Sidebar: sessions / windows / panes of `-L sparkmux` only. Drag the sash to resize; the header icon or hover chevron hides it.
+- Sidebar: sessions / windows / panes of `-L sparkmux` only. Drag the sash to resize; the header icon or hover chevron hides it. A pip marks hidden windows with bell or activity.
 - Main: tiled xterm.js matching `window_layout`. Typing goes to the focused pane.
 - File → New Session… creates that name only (does not also create `main`).
 - File → New Tab (⌘T) adds a window in the attached session.
+- Paste with ⌘V (macOS) or Ctrl+Shift+V (Linux).
 - tmux → Stop tmux server… asks for confirm, then `kill-server`.
 - Quit detaches; the tmux server keeps running. Reopen the app to reconnect.
 

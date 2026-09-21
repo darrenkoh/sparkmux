@@ -10,7 +10,7 @@ pub const US: char = '\u{1f}';
 pub const SESS_FMT: &str =
     "#{session_id}\u{1f}#{session_name}\u{1f}#{session_attached}\u{1f}#{session_windows}\u{1f}#{session_created}\u{1f}#{session_activity}\u{1f}#{session_path}";
 pub const WIN_FMT: &str =
-    "#{session_id}\u{1f}#{window_id}\u{1f}#{window_index}\u{1f}#{window_name}\u{1f}#{window_active}\u{1f}#{window_panes}\u{1f}#{window_layout}";
+    "#{session_id}\u{1f}#{window_id}\u{1f}#{window_index}\u{1f}#{window_name}\u{1f}#{window_active}\u{1f}#{window_panes}\u{1f}#{window_layout}\u{1f}#{window_bell_flag}\u{1f}#{window_activity_flag}";
 pub const PANE_FMT: &str =
     "#{session_id}\u{1f}#{window_id}\u{1f}#{pane_id}\u{1f}#{pane_index}\u{1f}#{pane_current_command}\u{1f}#{pane_current_path}\u{1f}#{pane_pid}\u{1f}#{pane_active}\u{1f}#{pane_width}\u{1f}#{pane_height}\u{1f}#{pane_title}";
 
@@ -48,6 +48,8 @@ pub struct Window {
     pub name: String,
     pub active: bool,
     pub layout: String,
+    pub bell: bool,
+    pub activity: bool,
     pub panes: Vec<Pane>,
 }
 
@@ -89,6 +91,8 @@ struct RawWindow {
     name: String,
     active: bool,
     layout: String,
+    bell: bool,
+    activity: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +130,8 @@ pub fn parse_snapshot(sessions: &str, windows: &str, panes: &str) -> Result<Snap
             name: win.name,
             active: win.active,
             layout: win.layout,
+            bell: win.bell,
+            activity: win.activity,
             panes: Vec::new(),
         });
     }
@@ -182,6 +188,8 @@ fn parse_windows(blob: &str) -> Result<Vec<RawWindow>> {
             name: field(&f, 3).to_string(),
             active: parse_flag(field(&f, 4)),
             layout: field(&f, 6).to_string(),
+            bell: parse_flag(field(&f, 7)),
+            activity: parse_flag(field(&f, 8)),
         });
     }
     Ok(out)
@@ -387,8 +395,10 @@ mod tests {
         assert_eq!(snap.sessions[0].windows[0].index, 0);
         assert!(snap.sessions[0].windows[0].active);
         assert_eq!(snap.sessions[0].windows[0].layout, "xxx");
+        assert!(!snap.sessions[0].windows[0].bell);
         assert_eq!(snap.sessions[0].windows[1].name, "agents extra");
         assert!(!snap.sessions[0].windows[1].active);
+        assert!(!snap.sessions[0].windows[1].bell);
         assert_eq!(snap.sessions[0].windows[0].panes.len(), 2);
         let pane0 = &snap.sessions[0].windows[0].panes[0];
         assert_eq!(pane0.id, "%0");
@@ -460,8 +470,22 @@ mod tests {
             name: id.into(),
             active: false,
             layout: String::new(),
+            bell: false,
+            activity: false,
             panes,
         }
+    }
+
+    #[test]
+    fn window_bell_and_activity_flags() {
+        let sessions = "$0\u{1f}s\u{1f}1\u{1f}2\u{1f}1\u{1f}1\u{1f}/\n";
+        let windows = "$0\u{1f}@1\u{1f}0\u{1f}zsh\u{1f}1\u{1f}1\u{1f}l\u{1f}0\u{1f}0\n$0\u{1f}@2\u{1f}1\u{1f}build\u{1f}0\u{1f}1\u{1f}l\u{1f}1\u{1f}1\n";
+        let panes = "$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}zsh\u{1f}/\u{1f}1\u{1f}1\u{1f}80\u{1f}24\u{1f}\n$0\u{1f}@2\u{1f}%1\u{1f}0\u{1f}zsh\u{1f}/\u{1f}1\u{1f}1\u{1f}80\u{1f}24\u{1f}\n";
+        let snap = parse_snapshot(sessions, windows, panes).unwrap();
+        assert!(!snap.sessions[0].windows[0].bell);
+        assert!(!snap.sessions[0].windows[0].activity);
+        assert!(snap.sessions[0].windows[1].bell);
+        assert!(snap.sessions[0].windows[1].activity);
     }
 
     fn pane(id: &str) -> Pane {

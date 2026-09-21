@@ -98,6 +98,14 @@ export function attachTargetName(): Promise<string | null> {
   return invoke("attach_target_name");
 }
 
+export function clipboardRead(): Promise<string> {
+  return invoke("clipboard_read");
+}
+
+export function clipboardWrite(text: string): Promise<void> {
+  return invoke("clipboard_write", { text });
+}
+
 export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {
   if (msg instanceof ArrayBuffer) return new Uint8Array(msg);
   if (msg instanceof Uint8Array) return msg;
@@ -105,7 +113,9 @@ export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {
   return new Uint8Array();
 }
 
-/** capture-pane -p emits LF-only rows; xterm treats LF as down-without-CR (staircase). */
+/** capture-pane -p emits LF-only rows; xterm treats LF as down-without-CR (staircase).
+ *  A trailing CSI CUP from the seed (tmux cursor) is preserved so the caret
+ *  is not left on the last blank row of the dump. */
 export function screenDumpToXterm(bytes: Uint8Array): string {
   const s = new TextDecoder("utf-8", { fatal: false })
     .decode(bytes)

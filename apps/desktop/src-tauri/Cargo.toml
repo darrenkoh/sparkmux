@@ -27,3 +27,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sy
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "6"
+arboard = "3"

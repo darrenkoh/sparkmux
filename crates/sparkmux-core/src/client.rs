@@ -190,6 +190,9 @@ impl TmuxClient {
     pub fn pin_server_alive(&self) -> Result<()> {
         let _ = self.run(&["set-option", "-s", "exit-unattached", "off"]);
         let _ = self.run(&["set-option", "-g", "destroy-unattached", "off"]);
+        let _ = self.run(&["set-window-option", "-g", "monitor-activity", "on"]);
+        let _ = self.run(&["set-window-option", "-g", "monitor-bell", "on"]);
+        let _ = self.run(&["set-option", "-g", "bell-action", "any"]);
         self.run(&["set-option", "-g", "default-terminal", "xterm-256color"])
             .map(|_| ())
     }
@@ -220,13 +223,50 @@ impl TmuxClient {
     }
 
     pub async fn capture_pane_timeout(&self, pane_id: &str, timeout: Duration) -> Result<String> {
+        self.run_timeout(
+            &["capture-pane", "-p", "-e", "-t", pane_id],
+            timeout,
+            pane_id,
+        )
+        .await
+    }
+
+    /// tmux `#{cursor_y}` / `#{cursor_x}` are 0-based; CSI CUP is 1-based.
+    pub fn cursor_cup(y: u16, x: u16) -> String {
+        format!("\x1b[{};{}H", y.saturating_add(1), x.saturating_add(1))
+    }
+
+    pub fn parse_cursor_pair(s: &str) -> Option<(u16, u16)> {
+        let s = s.trim();
+        let (y, x) = s.split_once(',')?;
+        Some((y.trim().parse().ok()?, x.trim().parse().ok()?))
+    }
+
+    pub async fn pane_cursor_timeout(
+        &self,
+        pane_id: &str,
+        timeout: Duration,
+    ) -> Result<(u16, u16)> {
+        let out = self
+            .run_timeout(
+                &[
+                    "display-message",
+                    "-p",
+                    "-t",
+                    pane_id,
+                    "#{cursor_y},#{cursor_x}",
+                ],
+                timeout,
+                pane_id,
+            )
+            .await?;
+        Self::parse_cursor_pair(&out).ok_or_else(|| Error::Parse(format!("cursor: {out:?}")))
+    }
+
+    async fn run_timeout(&self, args: &[&str], timeout: Duration, label: &str) -> Result<String> {
         let mut cmd = tokio::process::Command::new(&self.bin);
         self.apply_socket_tokio(&mut cmd);
-        cmd.arg("capture-pane")
-            .arg("-p")
-            .arg("-e")
-            .arg("-t")
-            .arg(pane_id)
+        cmd.args(args)
             .kill_on_drop(true)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -242,7 +282,7 @@ impl TmuxClient {
                 }
             }
             Ok(Err(e)) => Err(e.into()),
-            Err(_) => Err(Error::Timeout(pane_id.to_string())),
+            Err(_) => Err(Error::Timeout(label.to_string())),
         }
     }
 
@@ -537,6 +577,19 @@ mod tests {
     }
 
     #[test]
+    fn cursor_cup_is_one_based() {
+        assert_eq!(TmuxClient::cursor_cup(0, 0), "\x1b[1;1H");
+        assert_eq!(TmuxClient::cursor_cup(3, 10), "\x1b[4;11H");
+    }
+
+    #[test]
+    fn parse_cursor_pair_trims() {
+        assert_eq!(TmuxClient::parse_cursor_pair("0,12\n"), Some((0, 12)));
+        assert_eq!(TmuxClient::parse_cursor_pair(" 7 , 1 "), Some((7, 1)));
+        assert_eq!(TmuxClient::parse_cursor_pair("nope"), None);
+    }
+
+    #[test]
     fn new_owned_defaults_socket_name() {
         let c = TmuxClient::new_owned(None, None, None);
         if let Ok(c) = c {
@@ -617,5 +670,114 @@ mod tests {
             .iter()
             .any(|s| s.name == crate::DEFAULT_SESSION));
         let _ = client.kill_server();
+    }
+
+    #[tokio::test]
+    async fn new_pane_cursor_is_top_row() {
+        let Ok(client) =
+            TmuxClient::new(None, Some(format!("smux-cur-{}", std::process::id())), None)
+        else {
+            return;
+        };
+        let spawn = SessionSpawn::default();
+        if client.ensure_ready(&spawn, crate::DEFAULT_SESSION).is_err() {
+            return;
+        }
+        let snap = match client.snapshot() {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = client.kill_server();
+                return;
+            }
+        };
+        let Some(pane) = snap.sessions.first().and_then(|s| {
+            s.windows
+                .first()
+                .and_then(|w| w.panes.first())
+                .map(|p| p.id.clone())
+        }) else {
+            let _ = client.kill_server();
+            return;
+        };
+        let cur = client
+            .pane_cursor_timeout(&pane, Duration::from_millis(400))
+            .await;
+        let _ = client.kill_server();
+        let (y, _x) = cur.expect("cursor");
+        assert_eq!(
+            y, 0,
+            "fresh pane cursor should be on the prompt row, not the bottom"
+        );
+    }
+
+    #[test]
+    fn hidden_window_gets_activity_flag() {
+        let Ok(client) = TmuxClient::new(
+            None,
+            Some(format!("smux-attn-{}", std::process::id())),
+            None,
+        ) else {
+            return;
+        };
+        let spawn = SessionSpawn::default();
+        if client.ensure_ready(&spawn, crate::DEFAULT_SESSION).is_err() {
+            return;
+        }
+        if client.new_window(crate::DEFAULT_SESSION, "build").is_err() {
+            let _ = client.kill_server();
+            return;
+        }
+        let snap = match client.snapshot() {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = client.kill_server();
+                return;
+            }
+        };
+        let Some(sess) = snap
+            .sessions
+            .iter()
+            .find(|s| s.name == crate::DEFAULT_SESSION)
+        else {
+            let _ = client.kill_server();
+            panic!("missing default session");
+        };
+        let first = &sess.windows[0];
+        let Some(build) = sess.windows.iter().find(|w| w.name == "build") else {
+            let _ = client.kill_server();
+            panic!("missing build window");
+        };
+        if client.run(&["select-window", "-t", &first.id]).is_err() {
+            let _ = client.kill_server();
+            return;
+        }
+        if client
+            .run(&["send-keys", "-t", &build.id, "echo hidden-output", "Enter"])
+            .is_err()
+        {
+            let _ = client.kill_server();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+        let snap = match client.snapshot() {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = client.kill_server();
+                return;
+            }
+        };
+        let _ = client.kill_server();
+        let build = snap
+            .sessions
+            .iter()
+            .flat_map(|s| s.windows.iter())
+            .find(|w| w.name == "build")
+            .expect("build window");
+        assert!(
+            build.activity || build.bell,
+            "hidden window should be unread after output (activity={} bell={})",
+            build.activity,
+            build.bell
+        );
     }
 }

@@ -1,9 +1,25 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tauri::menu::{
     AboutMetadata, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::state::AppState;
+
+static EXITING: AtomicBool = AtomicBool::new(false);
+
+pub fn quit_detach(app: &AppHandle) {
+    if EXITING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let _ = crate::control::disconnect(&state).await;
+        app.exit(0);
+    });
+}
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
     let mac = cfg!(target_os = "macos");
@@ -28,16 +44,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
     )?;
     let quit = item(app, "quit", "Quit Sparkmux", mac.then_some("Cmd+Q"))?;
     let copy = item(app, "copy", "Copy", mac.then_some("Cmd+C"))?;
-    let paste = item(
-        app,
-        "paste",
-        "Paste",
-        if mac {
-            Some("Cmd+V")
-        } else {
-            Some("Ctrl+Shift+V")
-        },
-    )?;
+    let paste = item(app, "paste", "Paste", None)?;
     let split_right = item(app, "split-right", "Split Right", mac.then_some("Cmd+D"))?;
     let split_down = item(
         app,
@@ -129,7 +136,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         let hide = PredefinedMenuItem::hide(app, None)?;
         let hide_others = PredefinedMenuItem::hide_others(app, None)?;
         let show_all = PredefinedMenuItem::show_all(app, None)?;
-        let app_quit = PredefinedMenuItem::quit(app, None)?;
         let app_menu = SubmenuBuilder::new(app, "Sparkmux")
             .item(&about)
             .separator()
@@ -137,7 +143,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&hide_others)
             .item(&show_all)
             .separator()
-            .item(&app_quit)
+            .item(&quit)
             .build()?;
         menu = menu.item(&app_menu);
     }
@@ -164,14 +170,7 @@ fn item<R: Runtime>(
 
 pub fn on_event(app: &AppHandle, id: &str) {
     match id {
-        "quit" => {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = app.state::<AppState>();
-                let _ = crate::control::disconnect(&state).await;
-                app.exit(0);
-            });
-        }
+        "quit" => quit_detach(app),
         other => {
             let _ = app.emit("menu", other);
         }

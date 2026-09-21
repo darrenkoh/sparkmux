@@ -6,6 +6,8 @@ import { useEffect, useRef } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import {
+  clipboardRead,
+  clipboardWrite,
   focusPane,
   paneSubscribe,
   paneUnsubscribe,
@@ -32,7 +34,7 @@ export default function XtermView({
   paneId: string;
   focused: boolean;
   onFocus: (paneId: string) => void;
-  onCellSize?: (w: number, h: number) => void;
+  onCellSize?: (w: number, h: number, cols: number, rows: number) => void;
   fontSize: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -50,6 +52,9 @@ export default function XtermView({
     if (!host) return;
     const term = new Terminal({
       scrollback: 5000,
+      // tmux %output is LF-only; without this, \n moves down and stays in
+      // column, zsh PROMPT_SP thinks the line is partial and prints '%'.
+      convertEol: true,
       fontFamily:
         "'0xProto Nerd Font Mono', '0xProto Nerd Font', 'MesloLGS NF', Menlo, ui-monospace, monospace",
       fontSize: fontSizeRef.current,
@@ -100,12 +105,13 @@ export default function XtermView({
     termRef.current = term;
     terms.set(paneId, term);
 
-    let nextIsSeed = true;
+    let seeded = false;
     const channel = new Channel<ArrayBuffer | Uint8Array | number[]>();
     channel.onmessage = (msg) => {
       const bytes = toBytes(msg);
-      if (nextIsSeed) {
-        nextIsSeed = false;
+      if (!seeded) {
+        seeded = true;
+        term.reset();
         term.write(screenDumpToXterm(bytes));
         return;
       }
@@ -117,26 +123,40 @@ export default function XtermView({
       void paneWrite(paneId, bytes);
     });
 
+    let lastPaste = 0;
+    const sendPaste = (text: string) => {
+      if (!text) return;
+      const now = Date.now();
+      if (now - lastPaste < 400) return;
+      lastPaste = now;
+      void paneWrite(paneId, Array.from(new TextEncoder().encode(text)));
+    };
+
+    const onPaste = (e: ClipboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sendPaste(e.clipboardData?.getData("text/plain") ?? "");
+    };
+    host.addEventListener("paste", onPaste, true);
+
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
       if (isMac && ev.metaKey && ev.key === "c") {
         if (term.hasSelection()) {
-          void navigator.clipboard.writeText(term.getSelection());
+          void clipboardWrite(term.getSelection());
           return false;
         }
         void paneWrite(paneId, [3]);
         return false;
       }
-      if (isMac && ev.metaKey && ev.key === "v") {
-        void navigator.clipboard.readText().then((text) => {
-          void paneWrite(paneId, Array.from(new TextEncoder().encode(text)));
-        });
-        return false;
-      }
-      if (!isMac && ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v")) {
-        void navigator.clipboard.readText().then((text) => {
-          void paneWrite(paneId, Array.from(new TextEncoder().encode(text)));
-        });
+      const pasteChord =
+        (isMac && ev.metaKey && ev.key === "v") ||
+        (!isMac && ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v"));
+      if (pasteChord) {
+        window.setTimeout(() => {
+          if (Date.now() - lastPaste < 400) return;
+          void clipboardRead().then(sendPaste);
+        }, 0);
         return false;
       }
       return true;
@@ -152,6 +172,7 @@ export default function XtermView({
     let lastCols = 0;
     let lastRows = 0;
     let seedTimer: number | undefined;
+    let subscribed = false;
     let unmounted = false;
 
     const doFit = () => {
@@ -165,11 +186,11 @@ export default function XtermView({
       if (term.cols === lastCols && term.rows === lastRows) return;
       lastCols = term.cols;
       lastRows = term.rows;
-      if (seedTimer) window.clearTimeout(seedTimer);
+      if (subscribed) return;
+      subscribed = true;
       seedTimer = window.setTimeout(() => {
         if (unmounted) return;
-        nextIsSeed = true;
-        void paneUnsubscribe(paneId).then(() => paneSubscribe(paneId, channel));
+        void paneSubscribe(paneId, channel);
       }, 120);
     };
 
@@ -186,6 +207,7 @@ export default function XtermView({
       if (seedTimer) window.clearTimeout(seedTimer);
       window.clearTimeout(later);
       host.removeEventListener("mousedown", onMouse);
+      host.removeEventListener("paste", onPaste, true);
       ro.disconnect();
       dataDisp.dispose();
       void paneUnsubscribe(paneId);
@@ -218,7 +240,10 @@ export default function XtermView({
   return <div ref={hostRef} className="xterm-host" />;
 }
 
-function reportCell(term: Terminal, onCellSize?: (w: number, h: number) => void) {
+function reportCell(
+  term: Terminal,
+  onCellSize?: (w: number, h: number, cols: number, rows: number) => void,
+) {
   if (!onCellSize) return;
   const core = term as unknown as {
     _core?: {
@@ -227,6 +252,6 @@ function reportCell(term: Terminal, onCellSize?: (w: number, h: number) => void)
   };
   const cell = core._core?._renderService?.dimensions?.css?.cell;
   if (cell && cell.width > 0 && cell.height > 0) {
-    onCellSize(cell.width, cell.height);
+    onCellSize(cell.width, cell.height, term.cols, term.rows);
   }
 }

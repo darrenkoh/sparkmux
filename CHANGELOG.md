@@ -8,11 +8,19 @@ First public desktop release. Sparkmux is a native window that **owns** a privat
 
 - Sessions sidebar with resizable, fully collapsible sash
 - Window tabs, in-session New Tab, close tab (⌘W / tab ×)
+- Unread pip on hidden windows (tmux bell or activity)
 - Tiled xterm.js via tmux control mode (`%output` / `send-keys`)
+- Native copy/paste (⌘V / Ctrl+Shift+V) through the app, not the WebKit clipboard prompt
 - File / Edit / View / tmux / Help menus
 - Text size (⌘+/⌘-/⌘0)
-- Quit detaches; **Stop tmux server…** is a confirmed kill
+- Quit detaches the control client (including macOS ⌘Q and the window close button); **Stop tmux server…** is a confirmed kill
 - Missing or too-old tmux is an in-window setup screen, not a crash
+
+### Terminal
+
+- Pane seed from `capture-pane` plus tmux cursor position; live bytes stay on `%output`
+- xterm columns match the tmux client, including splits, so zsh does not print a trailing `%` after `ls`
+- Resize no longer reseeds the pane (avoids wiping output)
 
 ### Install
 

@@ -11,6 +11,12 @@ use tokio::sync::Mutex;
 
 use crate::error::map_error;
 
+pub struct PaneFeed {
+    pub channel: Channel<InvokeResponseBody>,
+    pub seeded: bool,
+    pub buf: Vec<Vec<u8>>,
+}
+
 pub struct AppState {
     pub inner: Mutex<Inner>,
 }
@@ -21,7 +27,7 @@ pub struct Inner {
     pub config: Config,
     pub spawn: SessionSpawn,
     pub attached_session: Option<String>,
-    pub channels: Arc<Mutex<HashMap<String, Channel<InvokeResponseBody>>>>,
+    pub channels: Arc<Mutex<HashMap<String, PaneFeed>>>,
     pub pump: Option<tauri::async_runtime::JoinHandle<()>>,
     pub stopped: bool,
 }

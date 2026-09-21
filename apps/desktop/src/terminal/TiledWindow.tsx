@@ -11,7 +11,13 @@ export default function TiledWindow({
   node: LayoutNode;
   focusedPane: string | null;
   onFocus: (paneId: string) => void;
-  onCellSize?: (w: number, h: number) => void;
+  onCellSize?: (
+    paneId: string,
+    w: number,
+    h: number,
+    cols: number,
+    rows: number,
+  ) => void;
   fontSize: number;
 }) {
   if ("Pane" in node) {
@@ -23,7 +29,11 @@ export default function TiledWindow({
           paneId={paneId}
           focused={focused}
           onFocus={onFocus}
-          onCellSize={onCellSize}
+          onCellSize={
+            onCellSize
+              ? (w, h, cols, rows) => onCellSize(paneId, w, h, cols, rows)
+              : undefined
+          }
           fontSize={fontSize}
         />
       </div>
@@ -70,4 +80,31 @@ function leafKey(node: LayoutNode, i: number): string {
 export function fallbackLayout(paneId: string): LayoutNode {
   const n = Number(paneId.replace("%", "")) || 0;
   return { Pane: { w: 80, h: 24, x: 0, y: 0, pane_id: n } };
+}
+
+/** Tmux client size that matches fitted xterm cells. Split separators are 1 col/row. */
+export function clientSizeFromFits(
+  node: LayoutNode,
+  fits: Map<string, { cols: number; rows: number }>,
+): { cols: number; rows: number } | null {
+  if ("Pane" in node) {
+    return fits.get(`%${node.Pane.pane_id}`) ?? null;
+  }
+  const kids: { cols: number; rows: number }[] = [];
+  for (const child of node.Split.children) {
+    const size = clientSizeFromFits(child, fits);
+    if (!size) return null;
+    kids.push(size);
+  }
+  if (kids.length === 0) return null;
+  if (node.Split.dir === "LeftRight") {
+    return {
+      cols: kids.reduce((n, k) => n + k.cols, 0) + (kids.length - 1),
+      rows: Math.max(...kids.map((k) => k.rows)),
+    };
+  }
+  return {
+    cols: Math.max(...kids.map((k) => k.cols)),
+    rows: kids.reduce((n, k) => n + k.rows, 0) + (kids.length - 1),
+  };
 }
