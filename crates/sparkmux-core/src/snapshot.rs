@@ -174,12 +174,12 @@ fn parse_sessions(blob: &str) -> Result<Vec<RawSession>> {
 
 fn parse_windows(blob: &str) -> Result<Vec<RawWindow>> {
     let mut out = Vec::new();
-    for (i, line) in non_empty_lines(blob).enumerate() {
+    for line in non_empty_lines(blob) {
         let f = fields(line);
         let session_id = field(&f, 0).to_string();
         let id = field(&f, 1).to_string();
         if session_id.is_empty() || id.is_empty() {
-            return Err(Error::Parse(format!("window line {i} missing ids")));
+            continue;
         }
         out.push(RawWindow {
             session_id,
@@ -197,13 +197,13 @@ fn parse_windows(blob: &str) -> Result<Vec<RawWindow>> {
 
 fn parse_panes(blob: &str) -> Result<Vec<RawPane>> {
     let mut out = Vec::new();
-    for (i, line) in non_empty_lines(blob).enumerate() {
+    for line in non_empty_lines(blob) {
         let f = fields(line);
         let session_id = field(&f, 0).to_string();
         let window_id = field(&f, 1).to_string();
         let id = field(&f, 2).to_string();
         if session_id.is_empty() || window_id.is_empty() || id.is_empty() {
-            return Err(Error::Parse(format!("pane line {i} missing ids")));
+            continue;
         }
         out.push(RawPane {
             session_id,
@@ -439,6 +439,17 @@ mod tests {
     fn empty_blobs_yield_no_sessions() {
         let snap = parse_snapshot("", "", "").unwrap();
         assert!(snap.sessions.is_empty());
+    }
+
+    #[test]
+    fn junk_window_and_pane_lines_are_skipped() {
+        let sessions = "$0\u{1f}work\u{1f}1\u{1f}1\u{1f}1\u{1f}1\u{1f}/\n";
+        let windows = "not-a-window\n$0\u{1f}@1\u{1f}0\u{1f}w\u{1f}1\u{1f}1\u{1f}l\n";
+        let panes = "noise\n$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}zsh\n";
+        let snap = parse_snapshot(sessions, windows, panes).unwrap();
+        assert_eq!(snap.sessions[0].name, "work");
+        assert_eq!(snap.sessions[0].windows[0].id, "@1");
+        assert_eq!(snap.sessions[0].windows[0].panes[0].id, "%0");
     }
 
     #[test]
