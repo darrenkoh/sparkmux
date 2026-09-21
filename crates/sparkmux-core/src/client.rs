@@ -482,6 +482,27 @@ fn is_missing_session(stderr: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    static LIVE_TMUX: Mutex<()> = Mutex::new(());
+
+    fn live_lock() -> MutexGuard<'static, ()> {
+        LIVE_TMUX.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn wait_snapshot(client: &TmuxClient) -> Snapshot {
+        let mut last = None;
+        for _ in 0..20 {
+            match client.snapshot() {
+                Ok(s) => return s,
+                Err(e) => {
+                    last = Some(e);
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
+        panic!("snapshot: {last:?}");
+    }
 
     #[test]
     fn decide_switch_when_inside() {
@@ -625,6 +646,7 @@ mod tests {
 
     #[test]
     fn named_new_session_live_does_not_create_main() {
+        let _live = live_lock();
         let Ok(client) =
             TmuxClient::new(None, Some(format!("smux-new-{}", std::process::id())), None)
         else {
@@ -635,7 +657,7 @@ mod tests {
             let _ = client.kill_server();
             return;
         }
-        let snap = client.snapshot().expect("snapshot after named new");
+        let snap = wait_snapshot(&client);
         let names: Vec<_> = snap.sessions.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"work"), "missing work: {names:?}");
         assert!(
@@ -647,6 +669,7 @@ mod tests {
 
     #[test]
     fn ensure_ready_creates_default_session() {
+        let _live = live_lock();
         let Ok(client) =
             TmuxClient::new(None, Some(format!("smux-ens-{}", std::process::id())), None)
         else {
@@ -674,6 +697,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_pane_cursor_is_top_row() {
+        let _live = live_lock();
         let Ok(client) =
             TmuxClient::new(None, Some(format!("smux-cur-{}", std::process::id())), None)
         else {
@@ -714,6 +738,7 @@ mod tests {
 
     #[test]
     fn hidden_window_gets_activity_flag() {
+        let _live = live_lock();
         let Ok(client) = TmuxClient::new(
             None,
             Some(format!("smux-attn-{}", std::process::id())),
