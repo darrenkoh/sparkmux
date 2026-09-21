@@ -25,10 +25,13 @@ pub async fn connect(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    let session = sparkmux_core::session_name(&session)
+        .map_err(|e| map_error(&e))?
+        .to_string();
     let mut inner = state.inner.lock().await;
     inner.ensure_client()?;
     let client = inner.client.as_ref().unwrap();
-    let (bin, args) = client.control_argv(&session);
+    let (bin, args) = client.control_argv(&session).map_err(|e| map_error(&e))?;
 
     if let Some(ctl) = inner.control.clone() {
         if inner.attached_session.as_deref() == Some(session.as_str()) {
@@ -96,6 +99,7 @@ pub async fn subscribe_pane(
     pane_id: String,
     on_data: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
+    sparkmux_core::pane_id(&pane_id).map_err(|e| map_error(&e))?;
     let client = {
         let inner = state.inner.lock().await;
         inner.channels.lock().await.insert(

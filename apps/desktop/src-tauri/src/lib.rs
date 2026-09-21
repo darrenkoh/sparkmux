@@ -38,7 +38,7 @@ pub fn run() {
             commands::remember_session,
             commands::parse_layout,
             commands::attach_target_name,
-            commands::clipboard_read,
+            commands::paste_into_pane,
             commands::clipboard_write,
         ])
         .setup(|app| {

@@ -156,6 +156,8 @@ impl TmuxClient {
     }
 
     pub fn new_window_ex(&self, session: &str, name: &str, spawn: &SessionSpawn) -> Result<()> {
+        let session = crate::target::session_target(session)?;
+        let name = crate::target::display_name(name)?;
         let args: Vec<String> = vec![
             "new-window".into(),
             "-t".into(),
@@ -170,6 +172,7 @@ impl TmuxClient {
     }
 
     pub fn split_window(&self, target: &str, vertical: bool) -> Result<()> {
+        let target = crate::target::pane_id(target)?;
         let flag = if vertical { "-v" } else { "-h" };
         self.run(&["split-window", flag, "-t", target]).map(|_| ())
     }
@@ -197,7 +200,7 @@ impl TmuxClient {
             .map(|_| ())
     }
 
-    pub fn control_argv(&self, session: &str) -> (PathBuf, Vec<OsString>) {
+    pub fn control_argv(&self, session: &str) -> Result<(PathBuf, Vec<OsString>)> {
         let mut args = Vec::new();
         if let Some(path) = &self.socket_path {
             args.push("-S".into());
@@ -211,18 +214,21 @@ impl TmuxClient {
         }
         args.push("-C".into());
         args.push("attach-session".into());
+        let session = crate::target::session_target(session)?;
         args.push("-t".into());
         args.push(session.into());
-        (self.bin.clone(), args)
+        Ok((self.bin.clone(), args))
     }
 
     fn create_session(&self, name: &str, spawn: &SessionSpawn) -> Result<()> {
+        let name = crate::target::session_name(name)?;
         let args = new_session_args(name, spawn);
         let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         self.run(&refs).map(|_| ())
     }
 
     pub async fn capture_pane_timeout(&self, pane_id: &str, timeout: Duration) -> Result<String> {
+        let pane_id = crate::target::pane_id(pane_id)?;
         self.run_timeout(
             &["capture-pane", "-p", "-e", "-t", pane_id],
             timeout,
@@ -247,6 +253,7 @@ impl TmuxClient {
         pane_id: &str,
         timeout: Duration,
     ) -> Result<(u16, u16)> {
+        let pane_id = crate::target::pane_id(pane_id)?;
         let out = self
             .run_timeout(
                 &[
@@ -287,45 +294,58 @@ impl TmuxClient {
     }
 
     pub fn new_session(&self, name: &str) -> Result<()> {
+        let name = crate::target::session_name(name)?;
         self.run(&["new-session", "-d", "-s", name]).map(|_| ())
     }
 
     pub fn rename_session(&self, target: &str, new_name: &str) -> Result<()> {
+        let target = crate::target::session_target(target)?;
+        let new_name = crate::target::session_name(new_name)?;
         self.run(&["rename-session", "-t", target, "--", new_name])
             .map(|_| ())
     }
 
     pub fn kill_session(&self, target: &str) -> Result<()> {
+        let target = crate::target::session_target(target)?;
         self.run(&["kill-session", "-t", target]).map(|_| ())
     }
 
     pub fn new_window(&self, session: &str, name: &str) -> Result<()> {
+        let session = crate::target::session_target(session)?;
+        let name = crate::target::display_name(name)?;
         self.run(&["new-window", "-t", session, "-n", name])
             .map(|_| ())
     }
 
     pub fn rename_window(&self, window_id: &str, name: &str) -> Result<()> {
+        let window_id = crate::target::window_id(window_id)?;
+        let name = crate::target::display_name(name)?;
         self.run(&["rename-window", "-t", window_id, "--", name])
             .map(|_| ())
     }
 
     pub fn kill_window(&self, window_id: &str) -> Result<()> {
+        let window_id = crate::target::window_id(window_id)?;
         self.run(&["kill-window", "-t", window_id]).map(|_| ())
     }
 
     pub fn kill_pane(&self, pane_id: &str) -> Result<()> {
+        let pane_id = crate::target::pane_id(pane_id)?;
         self.run(&["kill-pane", "-t", pane_id]).map(|_| ())
     }
 
     pub fn switch_client(&self, session: &str) -> Result<()> {
+        let session = crate::target::session_target(session)?;
         self.run(&["switch-client", "-t", session]).map(|_| ())
     }
 
     pub fn select_window(&self, window_id: &str) -> Result<()> {
+        let window_id = crate::target::window_id(window_id)?;
         self.run(&["select-window", "-t", window_id]).map(|_| ())
     }
 
     pub fn select_pane(&self, pane_id: &str) -> Result<()> {
+        let pane_id = crate::target::pane_id(pane_id)?;
         self.run(&["select-pane", "-t", pane_id]).map(|_| ())
     }
 
@@ -631,7 +651,7 @@ mod tests {
             socket_name: Some("sock".into()),
             socket_path: None,
         };
-        let (bin, args) = client.control_argv("main");
+        let (bin, args) = client.control_argv("main").unwrap();
         assert_eq!(bin, PathBuf::from("/usr/bin/tmux"));
         let args: Vec<String> = args
             .iter()

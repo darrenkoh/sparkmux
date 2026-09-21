@@ -298,6 +298,9 @@ pub async fn stop_server(app: AppHandle, state: State<'_, AppState>) -> Result<(
 
 #[tauri::command]
 pub async fn remember_session(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    let name = sparkmux_core::session_name(&name)
+        .map_err(|e| map_error(&e))?
+        .to_string();
     let mut inner = state.inner.lock().await;
     inner.config.last_session = Some(name.clone());
     persist_last_session(&name)?;
@@ -319,15 +322,49 @@ pub async fn attach_target_name(state: State<'_, AppState>) -> Result<Option<Str
     Ok(attach_target(&snap, last.as_deref(), &default))
 }
 
+const CLIP_MAX: usize = 1_048_576;
+
 #[tauri::command]
-pub fn clipboard_read() -> Result<String, String> {
-    arboard::Clipboard::new()
+pub async fn paste_into_pane(
+    state: State<'_, AppState>,
+    pane_id: String,
+    bracket: bool,
+) -> Result<(), String> {
+    sparkmux_core::pane_id(&pane_id).map_err(|e| map_error(&e))?;
+    let mut text = arboard::Clipboard::new()
         .and_then(|mut c| c.get_text())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if text.len() > CLIP_MAX {
+        text.truncate(CLIP_MAX);
+    }
+    if text.is_empty() {
+        return Ok(());
+    }
+    if bracket {
+        text = bracket_paste(&text);
+    }
+    let ctl = {
+        let inner = state.inner.lock().await;
+        inner
+            .control
+            .clone()
+            .ok_or_else(|| "control client is not connected".to_string())?
+    };
+    ctl.send_keys_raw(&pane_id, text.as_bytes())
+        .await
+        .map_err(|e| map_error(&e))
+}
+
+fn bracket_paste(text: &str) -> String {
+    let cleaned = text.replace("\u{1b}[200~", "").replace("\u{1b}[201~", "");
+    format!("\u{1b}[200~{cleaned}\u{1b}[201~")
 }
 
 #[tauri::command]
 pub fn clipboard_write(text: String) -> Result<(), String> {
+    if text.len() > CLIP_MAX {
+        return Err("clipboard text is too large".into());
+    }
     arboard::Clipboard::new()
         .and_then(|mut c| c.set_text(text))
         .map_err(|e| e.to_string())

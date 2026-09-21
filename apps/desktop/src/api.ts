@@ -98,8 +98,8 @@ export function attachTargetName(): Promise<string | null> {
   return invoke("attach_target_name");
 }
 
-export function clipboardRead(): Promise<string> {
-  return invoke("clipboard_read");
+export function pasteIntoPane(paneId: string, bracket: boolean): Promise<void> {
+  return invoke("paste_into_pane", { paneId, bracket });
 }
 
 export function clipboardWrite(text: string): Promise<void> {

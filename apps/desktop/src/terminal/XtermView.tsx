@@ -6,8 +6,8 @@ import { useEffect, useRef } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import {
-  clipboardRead,
   clipboardWrite,
+  pasteIntoPane,
   focusPane,
   paneSubscribe,
   paneUnsubscribe,
@@ -124,18 +124,17 @@ export default function XtermView({
     });
 
     let lastPaste = 0;
-    const sendPaste = (text: string) => {
-      if (!text) return;
+    const pasteNow = () => {
       const now = Date.now();
       if (now - lastPaste < 400) return;
       lastPaste = now;
-      void paneWrite(paneId, Array.from(new TextEncoder().encode(text)));
+      void pasteIntoPane(paneId, Boolean(term.modes?.bracketedPasteMode));
     };
 
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      sendPaste(e.clipboardData?.getData("text/plain") ?? "");
+      pasteNow();
     };
     host.addEventListener("paste", onPaste, true);
 
@@ -153,10 +152,7 @@ export default function XtermView({
         (isMac && ev.metaKey && ev.key === "v") ||
         (!isMac && ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v"));
       if (pasteChord) {
-        window.setTimeout(() => {
-          if (Date.now() - lastPaste < 400) return;
-          void clipboardRead().then(sendPaste);
-        }, 0);
+        window.setTimeout(pasteNow, 0);
         return false;
       }
       return true;

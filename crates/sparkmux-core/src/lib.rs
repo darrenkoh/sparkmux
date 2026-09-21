@@ -8,6 +8,7 @@ mod error;
 mod layout;
 mod preview;
 mod snapshot;
+mod target;
 mod version;
 
 pub const SOCKET_NAME: &str = "sparkmux";
@@ -26,4 +27,5 @@ pub use preview::cap_lines;
 pub use snapshot::{
     first_cursor, parse_snapshot, restore_cursor, Cursor, Pane, Session, Snapshot, Window,
 };
+pub use target::{display_name, pane_id, session_name, session_target, window_id};
 pub use version::{parse_version, TmuxVersion, MIN_MAJOR, MIN_MINOR};

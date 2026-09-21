@@ -14,6 +14,8 @@ pub enum Error {
     ServerDown(String),
     #[error("failed to parse tmux output: {0}")]
     Parse(String),
+    #[error("invalid tmux target: {0}")]
+    InvalidTarget(String),
     #[error("timed out capturing pane {0}")]
     Timeout(String),
     #[error(transparent)]

@@ -213,6 +213,11 @@ impl ControlClient {
     }
 
     pub async fn command(&self, line: &str) -> Result<String> {
+        if line.chars().any(|c| c == '\n' || c == '\r' || c == '\0') {
+            return Err(Error::InvalidTarget(
+                "control command contains a newline".into(),
+            ));
+        }
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send((line.to_string(), tx))
@@ -223,7 +228,9 @@ impl ControlClient {
     }
 
     pub async fn attach_session(&self, name: &str) -> Result<()> {
-        self.command(&format!("attach-session -t {name}")).await?;
+        let name = crate::target::session_target(name)?;
+        self.command(&format!("attach-session -t {}", quote_token(name)))
+            .await?;
         Ok(())
     }
 
@@ -234,6 +241,7 @@ impl ControlClient {
     }
 
     pub async fn send_keys_raw(&self, pane_id: &str, bytes: &[u8]) -> Result<()> {
+        let pane_id = crate::target::pane_id(pane_id)?;
         if bytes.is_empty() {
             return Ok(());
         }
@@ -259,6 +267,18 @@ impl ControlClient {
         let _ = child.start_kill();
         Ok(())
     }
+}
+
+fn quote_token(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        if c == '\\' || c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 fn handle_line(
@@ -376,7 +396,7 @@ mod tests {
         if client.ensure_ready(&spawn, crate::DEFAULT_SESSION).is_err() {
             return;
         }
-        let (bin, args) = client.control_argv(crate::DEFAULT_SESSION);
+        let (bin, args) = client.control_argv(crate::DEFAULT_SESSION).expect("argv");
         let ctl = match ControlClient::spawn(bin, args).await {
             Ok(c) => c,
             Err(_) => {

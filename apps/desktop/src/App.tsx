@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   attachTargetName,
-  clipboardRead,
   clipboardWrite,
+  pasteIntoPane,
   controlConnect,
   ensureReady,
   focusPane,
@@ -19,7 +19,6 @@ import {
   newWindow,
   parseLayout,
   selectWindow,
-  paneWrite,
   rememberSession,
   renameSession,
   renameWindow,
@@ -483,9 +482,8 @@ export default function App() {
   async function doPaste() {
     const pane = focusedRef.current;
     if (!pane) return;
-    const text = await clipboardRead();
-    if (!text) return;
-    await paneWrite(pane, Array.from(new TextEncoder().encode(text)));
+    const bracket = Boolean(getTerm(pane)?.modes?.bracketedPasteMode);
+    await pasteIntoPane(pane, bracket);
   }
 
   async function onStart() {
