@@ -5,14 +5,16 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 
-pub const US: char = '\u{1f}';
+/// Field separator for `list-* -F`. Tab survives tmux format expansion on
+/// Linux; U+001F is stripped, which made session names parse as empty.
+pub const US: char = '\t';
 
 pub const SESS_FMT: &str =
-    "#{session_id}\u{1f}#{session_name}\u{1f}#{session_attached}\u{1f}#{session_windows}\u{1f}#{session_created}\u{1f}#{session_activity}\u{1f}#{session_path}";
+    "#{session_id}\t#{session_name}\t#{session_attached}\t#{session_windows}\t#{session_created}\t#{session_activity}\t#{session_path}";
 pub const WIN_FMT: &str =
-    "#{session_id}\u{1f}#{window_id}\u{1f}#{window_index}\u{1f}#{window_name}\u{1f}#{window_active}\u{1f}#{window_panes}\u{1f}#{window_layout}\u{1f}#{window_bell_flag}\u{1f}#{window_activity_flag}";
+    "#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}\t#{window_layout}\t#{window_bell_flag}\t#{window_activity_flag}";
 pub const PANE_FMT: &str =
-    "#{session_id}\u{1f}#{window_id}\u{1f}#{pane_id}\u{1f}#{pane_index}\u{1f}#{pane_current_command}\u{1f}#{pane_current_path}\u{1f}#{pane_pid}\u{1f}#{pane_active}\u{1f}#{pane_width}\u{1f}#{pane_height}\u{1f}#{pane_title}";
+    "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_active}\t#{pane_width}\t#{pane_height}\t#{pane_title}";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
@@ -376,9 +378,9 @@ fn fill_active_or_first(session: &Session, cursor: &mut Cursor) {
 mod tests {
     use super::*;
 
-    const SESS: &str = "$0\u{1f}work project\u{1f}2\u{1f}2\u{1f}1700000000\u{1f}1700000100\u{1f}/Users/foo/work dir\n$1\u{1f}spark\u{1f}0\u{1f}1\u{1f}1700000001\u{1f}1700000200\u{1f}/Users/foo/spark\n";
-    const WINS: &str = "$0\u{1f}@1\u{1f}0\u{1f}editor\u{1f}1\u{1f}2\u{1f}xxx\n$0\u{1f}@2\u{1f}1\u{1f}agents extra\u{1f}0\u{1f}1\u{1f}yyy\n$1\u{1f}@3\u{1f}0\u{1f}zsh\u{1f}1\u{1f}1\u{1f}zzz\n";
-    const PANES: &str = "$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}nvim\u{1f}/Users/foo/work dir\u{1f}123\u{1f}1\u{1f}80\u{1f}24\u{1f}main editor\n$0\u{1f}@1\u{1f}%1\u{1f}1\u{1f}claude\u{1f}/Users/foo/work dir\u{1f}124\u{1f}0\u{1f}80\u{1f}24\u{1f}\n$0\u{1f}@2\u{1f}%2\u{1f}0\u{1f}zsh\u{1f}/Users/foo/work dir\u{1f}125\u{1f}1\u{1f}80\u{1f}24\u{1f}\n$1\u{1f}@3\u{1f}%3\u{1f}0\u{1f}zsh\u{1f}/Users/foo/spark\u{1f}126\u{1f}1\u{1f}120\u{1f}40\u{1f}\n";
+    const SESS: &str = "$0\twork project\t2\t2\t1700000000\t1700000100\t/Users/foo/work dir\n$1\tspark\t0\t1\t1700000001\t1700000200\t/Users/foo/spark\n";
+    const WINS: &str = "$0\t@1\t0\teditor\t1\t2\txxx\n$0\t@2\t1\tagents extra\t0\t1\tyyy\n$1\t@3\t0\tzsh\t1\t1\tzzz\n";
+    const PANES: &str = "$0\t@1\t%0\t0\tnvim\t/Users/foo/work dir\t123\t1\t80\t24\tmain editor\n$0\t@1\t%1\t1\tclaude\t/Users/foo/work dir\t124\t0\t80\t24\t\n$0\t@2\t%2\t0\tzsh\t/Users/foo/work dir\t125\t1\t80\t24\t\n$1\t@3\t%3\t0\tzsh\t/Users/foo/spark\t126\t1\t120\t40\t\n";
 
     #[test]
     fn parses_three_list_blobs_with_spaces() {
@@ -416,9 +418,9 @@ mod tests {
 
     #[test]
     fn truncated_pane_line_defaults() {
-        let sessions = "$0\u{1f}s\u{1f}1\u{1f}1\u{1f}1\u{1f}1\u{1f}/\n";
-        let windows = "$0\u{1f}@1\u{1f}0\u{1f}w\u{1f}1\u{1f}1\u{1f}l\n";
-        let panes = "$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}nvim\n";
+        let sessions = "$0\ts\t1\t1\t1\t1\t/\n";
+        let windows = "$0\t@1\t0\tw\t1\t1\tl\n";
+        let panes = "$0\t@1\t%0\t0\tnvim\n";
         let snap = parse_snapshot(sessions, windows, panes).unwrap();
         let pane = &snap.sessions[0].windows[0].panes[0];
         assert_eq!(pane.command, "nvim");
@@ -430,8 +432,7 @@ mod tests {
 
     #[test]
     fn missing_session_id_is_error() {
-        let err =
-            parse_snapshot("\u{1f}name\u{1f}1\u{1f}1\u{1f}1\u{1f}1\u{1f}/\n", "", "").unwrap_err();
+        let err = parse_snapshot("\tname\t1\t1\t1\t1\t/\n", "", "").unwrap_err();
         assert!(err.to_string().contains("missing id"));
     }
 
@@ -443,9 +444,9 @@ mod tests {
 
     #[test]
     fn junk_window_and_pane_lines_are_skipped() {
-        let sessions = "$0\u{1f}work\u{1f}1\u{1f}1\u{1f}1\u{1f}1\u{1f}/\n";
-        let windows = "not-a-window\n$0\u{1f}@1\u{1f}0\u{1f}w\u{1f}1\u{1f}1\u{1f}l\n";
-        let panes = "noise\n$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}zsh\n";
+        let sessions = "$0\twork\t1\t1\t1\t1\t/\n";
+        let windows = "not-a-window\n$0\t@1\t0\tw\t1\t1\tl\n";
+        let panes = "noise\n$0\t@1\t%0\t0\tzsh\n";
         let snap = parse_snapshot(sessions, windows, panes).unwrap();
         assert_eq!(snap.sessions[0].name, "work");
         assert_eq!(snap.sessions[0].windows[0].id, "@1");
@@ -489,9 +490,10 @@ mod tests {
 
     #[test]
     fn window_bell_and_activity_flags() {
-        let sessions = "$0\u{1f}s\u{1f}1\u{1f}2\u{1f}1\u{1f}1\u{1f}/\n";
-        let windows = "$0\u{1f}@1\u{1f}0\u{1f}zsh\u{1f}1\u{1f}1\u{1f}l\u{1f}0\u{1f}0\n$0\u{1f}@2\u{1f}1\u{1f}build\u{1f}0\u{1f}1\u{1f}l\u{1f}1\u{1f}1\n";
-        let panes = "$0\u{1f}@1\u{1f}%0\u{1f}0\u{1f}zsh\u{1f}/\u{1f}1\u{1f}1\u{1f}80\u{1f}24\u{1f}\n$0\u{1f}@2\u{1f}%1\u{1f}0\u{1f}zsh\u{1f}/\u{1f}1\u{1f}1\u{1f}80\u{1f}24\u{1f}\n";
+        let sessions = "$0\ts\t1\t2\t1\t1\t/\n";
+        let windows = "$0\t@1\t0\tzsh\t1\t1\tl\t0\t0\n$0\t@2\t1\tbuild\t0\t1\tl\t1\t1\n";
+        let panes =
+            "$0\t@1\t%0\t0\tzsh\t/\t1\t1\t80\t24\t\n$0\t@2\t%1\t0\tzsh\t/\t1\t1\t80\t24\t\n";
         let snap = parse_snapshot(sessions, windows, panes).unwrap();
         assert!(!snap.sessions[0].windows[0].bell);
         assert!(!snap.sessions[0].windows[0].activity);
