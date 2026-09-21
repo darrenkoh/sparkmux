@@ -690,11 +690,11 @@ mod tests {
                 return;
             }
         };
-        let Some(pane) = snap.sessions.first().and_then(|s| {
+        let Some((pane, height)) = snap.sessions.first().and_then(|s| {
             s.windows
                 .first()
                 .and_then(|w| w.panes.first())
-                .map(|p| p.id.clone())
+                .map(|p| (p.id.clone(), p.height))
         }) else {
             let _ = client.kill_server();
             return;
@@ -704,9 +704,11 @@ mod tests {
             .await;
         let _ = client.kill_server();
         let (y, _x) = cur.expect("cursor");
-        assert_eq!(
-            y, 0,
-            "fresh pane cursor should be on the prompt row, not the bottom"
+        // A multi-line MOTD/prompt (CI) is not row 0; the seed bug was the
+        // caret on the last blank dump row.
+        assert!(
+            u32::from(y) + 1 < u32::from(height.max(2)),
+            "cursor y={y} h={height} should not sit on the last dump row"
         );
     }
 

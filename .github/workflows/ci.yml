@@ -17,14 +17,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
-      - name: Install tmux
+      - name: macOS tmux
+        if: runner.os == 'macOS'
+        run: brew install tmux
+      - name: Linux tmux and WebKitGTK
+        if: runner.os == 'Linux'
         run: |
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            brew install tmux
-          else
-            sudo apt-get update -y
-            sudo apt-get install -y tmux
-          fi
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            tmux \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            pkg-config \
+            libxdo-dev
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
-        if: runner.os == 'macOS'
