@@ -827,4 +827,243 @@ mod tests {
             build.bell
         );
     }
+
+    #[tokio::test]
+    async fn live_flood_command_and_new_window_finish() {
+        let _live = live_lock();
+        let Some(client) = TmuxClient::new(
+            None,
+            Some(format!("smux-flood-{}", std::process::id())),
+            None,
+        )
+        .ok() else {
+            return;
+        };
+        let mut guard = TestServer {
+            client: client.clone(),
+            pid: None,
+        };
+        let spawn = SessionSpawn::default();
+        if client.ensure_ready(&spawn, crate::DEFAULT_SESSION).is_err() {
+            return;
+        }
+        guard.pid = client
+            .run(&["display-message", "-p", "#{pid}"])
+            .ok()
+            .and_then(|raw| raw.trim().parse().ok());
+        let pane = match client.snapshot() {
+            Ok(snap) => snap
+                .sessions
+                .first()
+                .and_then(|session| session.windows.first())
+                .and_then(|window| window.panes.first())
+                .map(|pane| pane.id.clone()),
+            Err(_) => None,
+        };
+        let Some(pane) = pane else {
+            return;
+        };
+        let (bin, args) = match client.control_argv(crate::DEFAULT_SESSION) {
+            Ok(argv) => argv,
+            Err(_) => return,
+        };
+        let ctl = match crate::ControlClient::spawn(bin, args).await {
+            Ok(ctl) => ctl,
+            Err(_) => return,
+        };
+        let mut sub = ctl.subscribe();
+        // Tight loop so %output is already queued while send-keys is in flight.
+        // A sleep-paced flood can return the command before the next line.
+        let script = "sh -c 'while true; do echo FLOOD; done'";
+        if client
+            .run(&["send-keys", "-t", &pane, "-l", script])
+            .is_err()
+            || client.run(&["send-keys", "-t", &pane, "Enter"]).is_err()
+        {
+            let _ = ctl.shutdown().await;
+            return;
+        }
+        let started = tokio::time::timeout(Duration::from_secs(3), wait_flood(&mut sub)).await;
+        if !matches!(started, Ok(true)) {
+            let _ = ctl.shutdown().await;
+            panic!("flood output never arrived on the control subscriber");
+        }
+        // Only bytes that arrive after the command is submitted count.
+        while sub.try_recv().is_ok() {}
+
+        let nw_client = client.clone();
+        let new_window = async move {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                tokio::task::spawn_blocking(move || {
+                    nw_client.new_window(crate::DEFAULT_SESSION, "extra")
+                }),
+            )
+            .await
+        };
+        let pane_for_keys = pane.clone();
+        // Large enough to exercise write_all, small enough for tmux's parser.
+        let payload = vec![b'a'; 8192];
+        let mut saw_during = false;
+        let keys = async {
+            let mut op = std::pin::pin!(ctl.send_keys_raw(&pane_for_keys, &payload));
+            let deadline = tokio::time::sleep(Duration::from_secs(5));
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    biased;
+                    // Poll the command first. A ready event queue must not
+                    // starve it (the old failure mode of this test).
+                    res = &mut op => return res,
+                    _ = &mut deadline => {
+                        panic!("send-keys timed out during flood");
+                    }
+                    ev = sub.recv() => {
+                        if let Some(crate::ControlEvent::Output { bytes, .. }) = ev {
+                            if is_flood_line(&bytes) {
+                                saw_during = true;
+                            }
+                        } else if ev.is_none() {
+                            panic!("control subscriber closed during send-keys");
+                        }
+                    }
+                }
+            }
+        };
+        let (keys, nw) = tokio::join!(keys, new_window);
+        let body = tokio::time::timeout(Duration::from_secs(3), ctl.command("list-sessions"))
+            .await
+            .expect("list-sessions timed out during flood")
+            .expect("list-sessions failed during flood");
+        let _ = ctl.shutdown().await;
+
+        keys.expect("send-keys failed during flood");
+        nw.expect("new-window timed out during flood")
+            .expect("new-window task")
+            .expect("new-window failed");
+        assert!(
+            !body.contains("FLOOD") && !body.contains("%output"),
+            "notification swallowed into command body: {}",
+            preview(&body)
+        );
+        assert!(
+            body.contains("main"),
+            "list-sessions missing session: {}",
+            preview(&body)
+        );
+        assert!(
+            saw_during,
+            "subscriber got no %output while send-keys was in flight"
+        );
+        eprintln!("live_flood_command_and_new_window_finish: in-flight output delivered");
+    }
+
+    #[tokio::test]
+    async fn live_binary_pane_output_does_not_stall_control() {
+        let _live = live_lock();
+        let Ok(client) =
+            TmuxClient::new(None, Some(format!("smux-bin-{}", std::process::id())), None)
+        else {
+            return;
+        };
+        let mut guard = TestServer {
+            client: client.clone(),
+            pid: None,
+        };
+        let spawn = SessionSpawn::default();
+        if client.ensure_ready(&spawn, crate::DEFAULT_SESSION).is_err() {
+            return;
+        }
+        guard.pid = client
+            .run(&["display-message", "-p", "#{pid}"])
+            .ok()
+            .and_then(|raw| raw.trim().parse().ok());
+        let pane = match client.snapshot() {
+            Ok(snap) => snap
+                .sessions
+                .first()
+                .and_then(|session| session.windows.first())
+                .and_then(|window| window.panes.first())
+                .map(|pane| pane.id.clone()),
+            Err(_) => None,
+        };
+        let Some(pane) = pane else {
+            return;
+        };
+        let (bin, args) = client
+            .control_argv(crate::DEFAULT_SESSION)
+            .expect("control argv");
+        let ctl = crate::ControlClient::spawn(bin, args)
+            .await
+            .expect("control spawn");
+        let _sub = ctl.subscribe();
+        if client
+            .run(&[
+                "send-keys",
+                "-t",
+                &pane,
+                "-l",
+                "printf '\\377\\376 FLOODBIN\\n'",
+            ])
+            .is_err()
+            || client.run(&["send-keys", "-t", &pane, "Enter"]).is_err()
+        {
+            let _ = ctl.shutdown().await;
+            panic!("could not write binary probe into the pane");
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let body = tokio::time::timeout(Duration::from_secs(2), ctl.command("list-sessions"))
+            .await
+            .expect("control stalled after non-UTF-8 pane output")
+            .expect("list-sessions failed after non-UTF-8 pane output");
+        let _ = ctl.shutdown().await;
+        assert!(
+            body.contains("main"),
+            "list-sessions missing session after binary output: {}",
+            preview(&body)
+        );
+        eprintln!("live_binary_pane_output_does_not_stall_control: command completed");
+    }
+
+    struct TestServer {
+        client: TmuxClient,
+        pid: Option<u32>,
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            if let Some(pid) = self.pid {
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .status();
+            }
+            let _ = self.client.kill_server();
+        }
+    }
+
+    fn preview(body: &str) -> String {
+        body.chars().take(180).collect()
+    }
+
+    fn is_flood_line(bytes: &[u8]) -> bool {
+        // The typed command contains the letters FLOOD. Only the echo's
+        // newline-terminated line means the loop is actually running.
+        bytes
+            .windows(6)
+            .any(|chunk| chunk == b"FLOOD\n" || chunk == b"FLOOD\r")
+    }
+
+    async fn wait_flood(
+        sub: &mut tokio::sync::mpsc::UnboundedReceiver<crate::ControlEvent>,
+    ) -> bool {
+        loop {
+            match sub.recv().await {
+                Some(crate::ControlEvent::Output { bytes, .. }) if is_flood_line(&bytes) => {
+                    return true;
+                }
+                Some(_) => {}
+                None => return false,
+            }
+        }
+    }
 }

@@ -174,7 +174,7 @@ fn spawn_pump(
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(ControlEvent::Output { pane_id, bytes }) => {
+                Some(ControlEvent::Output { pane_id, bytes }) => {
                     let mut map = channels.lock().await;
                     if let Some(feed) = map.get_mut(&pane_id) {
                         if feed.seeded {
@@ -184,23 +184,20 @@ fn spawn_pump(
                         }
                     }
                 }
-                Ok(ControlEvent::LayoutChange { window_id, layout }) => {
+                Some(ControlEvent::LayoutChange { window_id, layout }) => {
                     let _ = app.emit("layout-change", LayoutChangePayload { window_id, layout });
                 }
-                Ok(ControlEvent::SnapshotHint) => {
+                Some(ControlEvent::SnapshotHint) => {
                     let _ = app.emit("tree-dirty", ());
                 }
-                Ok(ControlEvent::Exit) => {
+                Some(ControlEvent::Exit) => {
                     let _ = app.emit("control-exit", ());
                     break;
                 }
-                Ok(ControlEvent::Error(e)) => {
+                Some(ControlEvent::Error(e)) => {
                     tracing::warn!(%e, "control error");
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(n, "control events lagged");
-                }
-                Err(_) => break,
+                None => break,
             }
         }
     })

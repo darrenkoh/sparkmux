@@ -1,11 +1,12 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::error::{Error, Result};
 use crate::layout::{parse_window_layout, LayoutNode};
@@ -100,10 +101,16 @@ pub fn parse_control_line(line: &str) -> ControlLine {
     ControlLine::Other(line.to_string())
 }
 
+struct Inflight {
+    reply: oneshot::Sender<Result<String>>,
+    done: oneshot::Sender<()>,
+}
+
 pub struct ControlClient {
     child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
-    events: broadcast::Sender<ControlEvent>,
+    /// One subscriber. Terminal bytes are not broadcast and are not dropped.
+    events: StdMutex<Option<mpsc::UnboundedReceiver<ControlEvent>>>,
     cmd_tx: mpsc::Sender<(String, oneshot::Sender<Result<String>>)>,
 }
 
@@ -126,90 +133,31 @@ impl ControlClient {
             .stdout
             .take()
             .ok_or_else(|| Error::Command("control stdout missing".into()))?;
-        let (events, _) = broadcast::channel(256);
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<(String, oneshot::Sender<Result<String>>)>(32);
-        let (ready_tx, ready_rx) = oneshot::channel();
-        let mut ready_tx = Some(ready_tx);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<(String, oneshot::Sender<Result<String>>)>(32);
+        let inflight = Arc::new(StdMutex::new(None));
+        let (handshake_tx, handshake_rx) = watch::channel(false);
         let stdin = Arc::new(Mutex::new(stdin));
-        let stdin_task = stdin.clone();
         let child = Arc::new(Mutex::new(child));
-        let events_r = events.clone();
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
-            let mut in_block = false;
-            let mut body = String::new();
-            let mut pending: Option<oneshot::Sender<Result<String>>> = None;
-            let mut handshake = false;
-            loop {
-                tokio::select! {
-                    line = reader.next_line() => {
-                        match line {
-                            Ok(Some(line)) => {
-                                handle_line(
-                                    &line,
-                                    &events_r,
-                                    &mut in_block,
-                                    &mut body,
-                                    &mut pending,
-                                );
-                                if !handshake
-                                    && matches!(
-                                        parse_control_line(&line),
-                                        ControlLine::End | ControlLine::Error(_)
-                                    )
-                                {
-                                    handshake = true;
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(());
-                                    }
-                                }
-                            }
-                            Ok(None) => {
-                                let _ = events_r.send(ControlEvent::Exit);
-                                break;
-                            }
-                            Err(e) => {
-                                let _ = events_r.send(ControlEvent::Error(e.to_string()));
-                                break;
-                            }
-                        }
-                    }
-                    msg = cmd_rx.recv(), if pending.is_none() && handshake => {
-                        match msg {
-                            Some((line, tx)) => {
-                                pending = Some(tx);
-                                let mut stdin = stdin_task.lock().await;
-                                if let Err(e) = stdin.write_all(line.as_bytes()).await {
-                                    if let Some(p) = pending.take() {
-                                        let _ = p.send(Err(Error::Io(e)));
-                                    }
-                                } else if let Err(e) = stdin.write_all(b"\n").await {
-                                    if let Some(p) = pending.take() {
-                                        let _ = p.send(Err(Error::Io(e)));
-                                    }
-                                } else if let Err(e) = stdin.flush().await {
-                                    if let Some(p) = pending.take() {
-                                        let _ = p.send(Err(Error::Io(e)));
-                                    }
-                                }
-                            }
-                            None => break,
-                        }
-                    }
-                }
-            }
-        });
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), ready_rx).await;
+        // tmux is single-threaded. A task blocked in stdin.write_all stops
+        // draining stdout, the server blocks in write(), and every client hangs.
+        spawn_reader(stdout, event_tx, inflight.clone(), handshake_tx);
+        spawn_writer(stdin.clone(), cmd_rx, inflight, handshake_rx.clone());
+        let _ = tokio::time::timeout(Duration::from_secs(2), wait_ready(handshake_rx)).await;
         Ok(Self {
             child,
-            stdin: stdin.clone(),
-            events,
+            stdin,
+            events: StdMutex::new(Some(event_rx)),
             cmd_tx,
         })
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<ControlEvent> {
-        self.events.subscribe()
+    pub fn subscribe(&self) -> mpsc::UnboundedReceiver<ControlEvent> {
+        self.events
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()
+            .unwrap_or_else(|| mpsc::unbounded_channel().1)
     }
 
     pub async fn command(&self, line: &str) -> Result<String> {
@@ -258,14 +206,148 @@ impl ControlClient {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        // The writer may be blocked in write_all and holding stdin. Don't wait
+        // forever to close it; killing the client process still only detaches.
+        if let Ok(mut stdin) =
+            tokio::time::timeout(Duration::from_millis(200), self.stdin.lock()).await
         {
-            let mut stdin = self.stdin.lock().await;
             let _ = stdin.shutdown().await;
         }
         let mut child = self.child.lock().await;
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), child.wait()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
         let _ = child.start_kill();
         Ok(())
+    }
+}
+
+fn spawn_reader(
+    stdout: ChildStdout,
+    events: mpsc::UnboundedSender<ControlEvent>,
+    inflight: Arc<StdMutex<Option<Inflight>>>,
+    handshake: watch::Sender<bool>,
+) {
+    tokio::spawn(async move {
+        // tmux writes raw pane bytes inside %output lines. `lines()` is UTF-8
+        // and aborts the reader on the first invalid sequence, which stops
+        // draining stdout and wedges the server.
+        let mut reader = BufReader::new(stdout);
+        let mut raw = Vec::new();
+        let mut in_block = false;
+        let mut body = String::new();
+        let mut saw_handshake = false;
+        loop {
+            raw.clear();
+            match reader.read_until(b'\n', &mut raw).await {
+                Ok(0) => {
+                    let _ = events.send(ControlEvent::Exit);
+                    finish_reader(
+                        &inflight,
+                        &handshake,
+                        &mut saw_handshake,
+                        "control output closed",
+                    );
+                    break;
+                }
+                Ok(_) => {
+                    if raw.last() == Some(&b'\n') {
+                        raw.pop();
+                    }
+                    if raw.last() == Some(&b'\r') {
+                        raw.pop();
+                    }
+                    let line = String::from_utf8_lossy(&raw);
+                    if let Some(result) = handle_line(&line, &events, &mut in_block, &mut body) {
+                        complete_inflight(&inflight, result);
+                        if !saw_handshake {
+                            saw_handshake = true;
+                            let _ = handshake.send(true);
+                        }
+                    }
+                }
+                Err(err) => {
+                    let _ = events.send(ControlEvent::Error(err.to_string()));
+                    finish_reader(&inflight, &handshake, &mut saw_handshake, &err.to_string());
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn finish_reader(
+    inflight: &StdMutex<Option<Inflight>>,
+    handshake: &watch::Sender<bool>,
+    saw_handshake: &mut bool,
+    msg: &str,
+) {
+    complete_inflight(inflight, Err(Error::Command(msg.into())));
+    if !*saw_handshake {
+        *saw_handshake = true;
+        let _ = handshake.send(true);
+    }
+}
+
+fn spawn_writer(
+    stdin: Arc<Mutex<ChildStdin>>,
+    mut cmd_rx: mpsc::Receiver<(String, oneshot::Sender<Result<String>>)>,
+    inflight: Arc<StdMutex<Option<Inflight>>>,
+    mut handshake: watch::Receiver<bool>,
+) {
+    tokio::spawn(async move {
+        loop {
+            if *handshake.borrow() {
+                break;
+            }
+            if handshake.changed().await.is_err() {
+                return;
+            }
+        }
+        while let Some((line, reply)) = cmd_rx.recv().await {
+            let (done_tx, done_rx) = oneshot::channel();
+            {
+                let mut slot = inflight.lock().unwrap_or_else(|err| err.into_inner());
+                *slot = Some(Inflight {
+                    reply,
+                    done: done_tx,
+                });
+            }
+            let write_result = {
+                let mut stdin = stdin.lock().await;
+                write_line(&mut stdin, &line).await
+            };
+            if let Err(err) = write_result {
+                complete_inflight(&inflight, Err(Error::Io(err)));
+                continue;
+            }
+            // One command in flight: do not write the next line until %end/%error.
+            let _ = done_rx.await;
+        }
+    });
+}
+
+async fn write_line(stdin: &mut ChildStdin, line: &str) -> std::io::Result<()> {
+    stdin.write_all(line.as_bytes()).await?;
+    stdin.write_all(b"\n").await?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+async fn wait_ready(mut handshake: watch::Receiver<bool>) {
+    loop {
+        if *handshake.borrow() {
+            return;
+        }
+        if handshake.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+fn complete_inflight(slot: &StdMutex<Option<Inflight>>, result: Result<String>) {
+    let pending = slot.lock().unwrap_or_else(|err| err.into_inner()).take();
+    if let Some(pending) = pending {
+        let _ = pending.reply.send(result);
+        let _ = pending.done.send(());
     }
 }
 
@@ -281,38 +363,39 @@ fn quote_token(s: &str) -> String {
     out
 }
 
+/// Returns `Some` when a command block closes (`%end` / `%error`).
+/// `%output`, `%extended-output`, `%layout-change`, and any other `%` line
+/// that is not begin/end/error are notifications: they are dispatched even
+/// inside a block and are not command output.
 fn handle_line(
     line: &str,
-    events: &broadcast::Sender<ControlEvent>,
+    events: &mpsc::UnboundedSender<ControlEvent>,
     in_block: &mut bool,
     body: &mut String,
-    pending: &mut Option<oneshot::Sender<Result<String>>>,
-) {
+) -> Option<Result<String>> {
     match parse_control_line(line) {
         ControlLine::Begin => {
             *in_block = true;
             body.clear();
+            None
         }
         ControlLine::End => {
             *in_block = false;
-            if let Some(tx) = pending.take() {
-                let _ = tx.send(Ok(std::mem::take(body)));
-            }
+            Some(Ok(std::mem::take(body)))
         }
-        ControlLine::Error(e) => {
+        ControlLine::Error(err) => {
             *in_block = false;
             body.clear();
-            if let Some(tx) = pending.take() {
-                let _ = tx.send(Err(Error::Command(e)));
-            }
+            Some(Err(Error::Command(err)))
         }
-        ControlLine::Output { pane_id, escaped } if !*in_block => {
+        ControlLine::Output { pane_id, escaped } => {
             let _ = events.send(ControlEvent::Output {
                 pane_id,
                 bytes: unescape_output(&escaped),
             });
+            None
         }
-        ControlLine::LayoutChange { window_id, layout } if !*in_block => {
+        ControlLine::LayoutChange { window_id, layout } => {
             match parse_window_layout(&layout) {
                 Ok(node) => {
                     let _ = events.send(ControlEvent::LayoutChange {
@@ -320,24 +403,28 @@ fn handle_line(
                         layout: node,
                     });
                 }
-                Err(e) => {
-                    let _ = events.send(ControlEvent::Error(e.to_string()));
+                Err(err) => {
+                    let _ = events.send(ControlEvent::Error(err.to_string()));
                 }
             }
+            None
         }
         ControlLine::Exit => {
             let _ = events.send(ControlEvent::Exit);
+            None
         }
-        ControlLine::Other(s) if !*in_block && s.starts_with('%') => {
+        ControlLine::Other(s) if s.starts_with('%') => {
             let _ = events.send(ControlEvent::SnapshotHint);
+            None
         }
-        ControlLine::Output { .. } | ControlLine::LayoutChange { .. } | ControlLine::Other(_) => {
+        ControlLine::Other(_) => {
             if *in_block {
                 if !body.is_empty() {
                     body.push('\n');
                 }
                 body.push_str(line);
             }
+            None
         }
     }
 }
@@ -372,6 +459,73 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn notifications_inside_command_block_are_not_swallowed() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut in_block = false;
+        let mut body = String::new();
+
+        assert!(handle_line("%begin 1 2 3", &tx, &mut in_block, &mut body).is_none());
+        assert!(in_block);
+
+        assert!(handle_line("%output %7 hello", &tx, &mut in_block, &mut body).is_none());
+        match rx.try_recv().expect("output event") {
+            ControlEvent::Output { pane_id, bytes } => {
+                assert_eq!(pane_id, "%7");
+                assert_eq!(bytes, b"hello");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(
+            body.is_empty(),
+            "output must not be stored in the command body: {body}"
+        );
+
+        assert!(
+            handle_line("%extended-output %7 0 world", &tx, &mut in_block, &mut body).is_none()
+        );
+        match rx.try_recv().expect("extended output") {
+            ControlEvent::Output { pane_id, bytes } => {
+                assert_eq!(pane_id, "%7");
+                assert_eq!(bytes, b"world");
+            }
+            other => panic!("{other:?}"),
+        }
+
+        assert!(handle_line(
+            "%layout-change @1 b260,80x24,0,0,3 vis",
+            &tx,
+            &mut in_block,
+            &mut body
+        )
+        .is_none());
+        assert!(matches!(
+            rx.try_recv().expect("layout"),
+            ControlEvent::LayoutChange { .. }
+        ));
+
+        assert!(handle_line("%session-changed $0 main", &tx, &mut in_block, &mut body).is_none());
+        assert!(matches!(
+            rx.try_recv().expect("hint"),
+            ControlEvent::SnapshotHint
+        ));
+        assert!(body.is_empty(), "{body}");
+
+        assert!(handle_line("main", &tx, &mut in_block, &mut body).is_none());
+        assert!(handle_line("1 windows", &tx, &mut in_block, &mut body).is_none());
+        assert_eq!(body, "main\n1 windows");
+
+        let done = handle_line("%end 1 2 3", &tx, &mut in_block, &mut body)
+            .expect("block end")
+            .expect("ok body");
+        assert_eq!(done, "main\n1 windows");
+        assert!(!done.contains("%output"));
+        assert!(!done.contains("hello"));
+        assert!(!in_block);
+        assert!(body.is_empty());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
