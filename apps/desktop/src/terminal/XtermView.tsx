@@ -15,6 +15,7 @@ import {
   screenDumpToXterm,
   toBytes,
 } from "../api";
+import { isEmulatorReport } from "./emulatorReports";
 
 const isMac = navigator.userAgent.includes("Mac");
 
@@ -119,6 +120,9 @@ export default function XtermView({
     };
 
     const dataDisp = term.onData((data) => {
+      // tmux already answered the query that produced this. A second reply
+      // is typed into the select prompt and the options redraw out of order.
+      if (isEmulatorReport(data)) return;
       const bytes = Array.from(new TextEncoder().encode(data));
       void paneWrite(paneId, bytes);
     });

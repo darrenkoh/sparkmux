@@ -196,6 +196,10 @@ impl TmuxClient {
         let _ = self.run(&["set-window-option", "-g", "monitor-activity", "on"]);
         let _ = self.run(&["set-window-option", "-g", "monitor-bell", "on"]);
         let _ = self.run(&["set-option", "-g", "bell-action", "any"]);
+        // The xterm grid is the client size. A status line is not part of
+        // that grid; leaving it on makes the pane one row shorter, so a
+        // bottom-anchored option list wraps onto the wrong lines.
+        let _ = self.run(&["set-option", "-g", "status", "off"]);
         self.run(&["set-option", "-g", "default-terminal", "xterm-256color"])
             .map(|_| ())
     }
