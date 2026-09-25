@@ -37,16 +37,15 @@ pub enum ControlLine {
     Other(String),
 }
 
-pub fn unescape_output(s: &str) -> Vec<u8> {
-    let b = s.as_bytes();
+pub fn unescape_output(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'\\' && i + 3 < b.len() && b[i + 1].is_ascii_digit() {
+        if b[i] == b'\\' && i + 3 < b.len() && (b'0'..=b'7').contains(&b[i + 1]) {
             let d1 = b[i + 1];
             let d2 = b[i + 2];
             let d3 = b[i + 3];
-            if d2.is_ascii_digit() && d3.is_ascii_digit() && d1 <= b'7' {
+            if (b'0'..=b'7').contains(&d2) && (b'0'..=b'7').contains(&d3) {
                 out.push(((d1 - b'0') << 6) | ((d2 - b'0') << 3) | (d3 - b'0'));
                 i += 4;
                 continue;
@@ -56,6 +55,29 @@ pub fn unescape_output(s: &str) -> Vec<u8> {
         i += 1;
     }
     out
+}
+
+/// `%output` payload is raw pane bytes, octal-escaped. A multi-byte character
+/// is often split across two notifications, so this must not decode UTF-8.
+fn take_pane_output(line: &[u8]) -> Option<(String, Vec<u8>)> {
+    if let Some(rest) = line.strip_prefix(b"%output ") {
+        let (pane_id, escaped) = split_once_space(rest);
+        return Some((pane_id, unescape_output(escaped)));
+    }
+    let rest = line.strip_prefix(b"%extended-output ")?;
+    let (pane_id, rest) = split_once_space(rest);
+    let (_age, escaped) = split_once_space(rest);
+    Some((pane_id, unescape_output(escaped)))
+}
+
+fn split_once_space(bytes: &[u8]) -> (String, &[u8]) {
+    match bytes.iter().position(|b| *b == b' ') {
+        Some(i) => (
+            String::from_utf8_lossy(&bytes[..i]).into_owned(),
+            &bytes[i + 1..],
+        ),
+        None => (String::from_utf8_lossy(bytes).into_owned(), b""),
+    }
 }
 
 pub fn parse_control_line(line: &str) -> ControlLine {
@@ -255,8 +277,7 @@ fn spawn_reader(
                     if raw.last() == Some(&b'\r') {
                         raw.pop();
                     }
-                    let line = String::from_utf8_lossy(&raw);
-                    if let Some(result) = handle_line(&line, &events, &mut in_block, &mut body) {
+                    if let Some(result) = handle_line(&raw, &events, &mut in_block, &mut body) {
                         complete_inflight(&inflight, result);
                         if !saw_handshake {
                             saw_handshake = true;
@@ -368,11 +389,17 @@ fn quote_token(s: &str) -> String {
 /// that is not begin/end/error are notifications: they are dispatched even
 /// inside a block and are not command output.
 fn handle_line(
-    line: &str,
+    line: &[u8],
     events: &mpsc::UnboundedSender<ControlEvent>,
     in_block: &mut bool,
     body: &mut String,
 ) -> Option<Result<String>> {
+    if let Some((pane_id, bytes)) = take_pane_output(line) {
+        let _ = events.send(ControlEvent::Output { pane_id, bytes });
+        return None;
+    }
+    let line = String::from_utf8_lossy(line);
+    let line = line.trim_end_matches('\r');
     match parse_control_line(line) {
         ControlLine::Begin => {
             *in_block = true;
@@ -388,13 +415,7 @@ fn handle_line(
             body.clear();
             Some(Err(Error::Command(err)))
         }
-        ControlLine::Output { pane_id, escaped } => {
-            let _ = events.send(ControlEvent::Output {
-                pane_id,
-                bytes: unescape_output(&escaped),
-            });
-            None
-        }
+        ControlLine::Output { .. } => None,
         ControlLine::LayoutChange { window_id, layout } => {
             match parse_window_layout(&layout) {
                 Ok(node) => {
@@ -435,8 +456,42 @@ mod tests {
 
     #[test]
     fn unescape_octal_escape() {
-        let got = unescape_output(r"\033[Hhi\134");
+        let got = unescape_output(br"\033[Hhi\134");
         assert_eq!(got, b"\x1b[Hhi\\");
+    }
+
+    #[test]
+    fn output_keeps_a_character_split_across_notifications() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut in_block = false;
+        let mut body = String::new();
+        // ✓ is e2 9c 93. Lossy UTF-8 on each line would replace both halves.
+        assert!(handle_line(b"%output %1 \xe2\x9c", &tx, &mut in_block, &mut body).is_none());
+        assert!(handle_line(b"%output %1 \x93", &tx, &mut in_block, &mut body).is_none());
+        let mut all = Vec::new();
+        for _ in 0..2 {
+            match rx.try_recv().expect("output") {
+                ControlEvent::Output { pane_id, bytes } => {
+                    assert_eq!(pane_id, "%1");
+                    all.extend(bytes);
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(all, "\u{2713}".as_bytes());
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn output_keeps_bytes_that_are_not_utf8() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut in_block = false;
+        let mut body = String::new();
+        assert!(handle_line(b"%output %2 \xff\xfe", &tx, &mut in_block, &mut body).is_none());
+        match rx.try_recv().expect("output") {
+            ControlEvent::Output { bytes, .. } => assert_eq!(bytes, b"\xff\xfe"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -444,7 +499,7 @@ mod tests {
         match parse_control_line("%output %3 \\033[Hhello") {
             ControlLine::Output { pane_id, escaped } => {
                 assert_eq!(pane_id, "%3");
-                assert_eq!(unescape_output(&escaped), b"\x1b[Hhello");
+                assert_eq!(unescape_output(escaped.as_bytes()), b"\x1b[Hhello");
             }
             other => panic!("{other:?}"),
         }
@@ -467,10 +522,10 @@ mod tests {
         let mut in_block = false;
         let mut body = String::new();
 
-        assert!(handle_line("%begin 1 2 3", &tx, &mut in_block, &mut body).is_none());
+        assert!(handle_line(b"%begin 1 2 3", &tx, &mut in_block, &mut body).is_none());
         assert!(in_block);
 
-        assert!(handle_line("%output %7 hello", &tx, &mut in_block, &mut body).is_none());
+        assert!(handle_line(b"%output %7 hello", &tx, &mut in_block, &mut body).is_none());
         match rx.try_recv().expect("output event") {
             ControlEvent::Output { pane_id, bytes } => {
                 assert_eq!(pane_id, "%7");
@@ -483,9 +538,13 @@ mod tests {
             "output must not be stored in the command body: {body}"
         );
 
-        assert!(
-            handle_line("%extended-output %7 0 world", &tx, &mut in_block, &mut body).is_none()
-        );
+        assert!(handle_line(
+            b"%extended-output %7 0 world",
+            &tx,
+            &mut in_block,
+            &mut body
+        )
+        .is_none());
         match rx.try_recv().expect("extended output") {
             ControlEvent::Output { pane_id, bytes } => {
                 assert_eq!(pane_id, "%7");
@@ -495,7 +554,7 @@ mod tests {
         }
 
         assert!(handle_line(
-            "%layout-change @1 b260,80x24,0,0,3 vis",
+            b"%layout-change @1 b260,80x24,0,0,3 vis",
             &tx,
             &mut in_block,
             &mut body
@@ -506,18 +565,18 @@ mod tests {
             ControlEvent::LayoutChange { .. }
         ));
 
-        assert!(handle_line("%session-changed $0 main", &tx, &mut in_block, &mut body).is_none());
+        assert!(handle_line(b"%session-changed $0 main", &tx, &mut in_block, &mut body).is_none());
         assert!(matches!(
             rx.try_recv().expect("hint"),
             ControlEvent::SnapshotHint
         ));
         assert!(body.is_empty(), "{body}");
 
-        assert!(handle_line("main", &tx, &mut in_block, &mut body).is_none());
-        assert!(handle_line("1 windows", &tx, &mut in_block, &mut body).is_none());
+        assert!(handle_line(b"main", &tx, &mut in_block, &mut body).is_none());
+        assert!(handle_line(b"1 windows", &tx, &mut in_block, &mut body).is_none());
         assert_eq!(body, "main\n1 windows");
 
-        let done = handle_line("%end 1 2 3", &tx, &mut in_block, &mut body)
+        let done = handle_line(b"%end 1 2 3", &tx, &mut in_block, &mut body)
             .expect("block end")
             .expect("ok body");
         assert_eq!(done, "main\n1 windows");
