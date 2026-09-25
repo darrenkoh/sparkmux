@@ -154,22 +154,37 @@ pub fn parse_snapshot(sessions: &str, windows: &str, panes: &str) -> Result<Snap
     })
 }
 
+fn is_session_id(s: &str) -> bool {
+    matches!(s.strip_prefix('$'), Some(rest) if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn parse_sessions(blob: &str) -> Result<Vec<RawSession>> {
     let mut out = Vec::new();
-    for (i, line) in non_empty_lines(blob).enumerate() {
+    let mut skipped = 0;
+    for line in non_empty_lines(blob) {
         let f = fields(line);
-        let id = field(&f, 0).to_string();
-        if id.is_empty() {
-            return Err(Error::Parse(format!("session line {i} missing id")));
+        let id = field(&f, 0);
+        let name = field(&f, 1).trim();
+        // A line that is not `$id<TAB>name` is not a session. The default
+        // `list-sessions` text has no tabs, so the whole line became the id
+        // and the name stayed empty. Connecting to that name fails forever.
+        if !is_session_id(id) || name.is_empty() {
+            skipped += 1;
+            continue;
         }
         out.push(RawSession {
-            id,
-            name: field(&f, 1).to_string(),
+            id: id.to_string(),
+            name: name.to_string(),
             attached: parse_u32(field(&f, 2)) > 0,
             created_epoch: parse_i64(field(&f, 4)),
             activity_epoch: parse_i64(field(&f, 5)),
             path: PathBuf::from(field(&f, 6)),
         });
+    }
+    if out.is_empty() && skipped > 0 {
+        return Err(Error::Parse(
+            "session list did not include a usable name".into(),
+        ));
     }
     Ok(out)
 }
@@ -433,7 +448,36 @@ mod tests {
     #[test]
     fn missing_session_id_is_error() {
         let err = parse_snapshot("\tname\t1\t1\t1\t1\t/\n", "", "").unwrap_err();
-        assert!(err.to_string().contains("missing id"));
+        assert!(err.to_string().contains("usable name"));
+    }
+
+    #[test]
+    fn default_list_sessions_text_is_not_a_nameless_session() {
+        let err = parse_snapshot(
+            "main: 1 windows (created Fri Sep 25 11:07:47 2026)\n",
+            "",
+            "",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("usable name"));
+    }
+
+    #[test]
+    fn empty_session_name_is_not_attachable() {
+        let err = parse_snapshot("$4\t\t0\t1\t1\t1\t/\n", "", "").unwrap_err();
+        assert!(err.to_string().contains("usable name"));
+    }
+
+    #[test]
+    fn junk_session_line_does_not_hide_a_real_one() {
+        let snap = parse_snapshot(
+            "main: 1 windows\n$4\tmain\t0\t1\t1\t1\t/\n",
+            "",
+            "",
+        )
+        .unwrap();
+        assert_eq!(snap.sessions.len(), 1);
+        assert_eq!(snap.sessions[0].name, "main");
     }
 
     #[test]

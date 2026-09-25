@@ -61,6 +61,11 @@ type Dialog =
   | { kind: "stop"; socket: string; count: number }
   | { kind: "help" };
 
+function namedSession(name: string | null | undefined): string | null {
+  const trimmed = name?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
 const FONT_MIN = 11;
 const FONT_MAX = 22;
 const FONT_DEFAULT = 13;
@@ -76,6 +81,7 @@ export default function App() {
   const [focusedPane, setFocusedPane] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [failMsg, setFailMsg] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [input, setInput] = useState("");
   const hostRef = useRef<HTMLDivElement>(null);
@@ -222,6 +228,7 @@ export default function App() {
       await rememberSession(session);
       setAttachedSession(session);
       setError(null);
+      setFailMsg(null);
       setEmpty(false);
       const tree = await fetchSnapshot();
       setSnap(tree);
@@ -247,6 +254,7 @@ export default function App() {
   );
 
   const boot = useCallback(async () => {
+    setFailMsg(null);
     try {
       const st = await tmuxStatus();
       setStatus(st);
@@ -265,19 +273,24 @@ export default function App() {
         setError(null);
         return;
       }
-      const target =
+      const target = namedSession(
         (await attachTargetName()) ??
-        st.last_session ??
-        st.default_session ??
-        tree.sessions[0].name;
+          st.last_session ??
+          st.default_session ??
+          tree.sessions.find((s) => namedSession(s.name))?.name,
+      );
+      if (!target) {
+        setFailMsg('invalid tmux target: session name: ""');
+        return;
+      }
       await connectTo(target);
     } catch (e) {
       const msg = String(e);
       if (msg.includes("missing-tmux")) setError("missing-tmux");
       else if (msg.includes("too-old")) setError("too-old");
-      else showToast(msg);
+      else setFailMsg(msg);
     }
-  }, [connectTo, showToast]);
+  }, [connectTo]);
 
   useEffect(() => {
     void boot();
@@ -302,19 +315,27 @@ export default function App() {
       const attached = attachedRef.current;
       const sess = tree.sessions.find((s) => s.name === attached);
       if (!sess) {
-        const target = (await attachTargetName()) ?? tree.sessions[0].name;
+        const target = namedSession(
+          (await attachTargetName()) ??
+            tree.sessions.find((s) => namedSession(s.name))?.name,
+        );
+        if (!target) {
+          setFailMsg('invalid tmux target: session name: ""');
+          return;
+        }
         await connectTo(target);
         return;
       }
+      setFailMsg(null);
       const vis = visibleRef.current;
       const win = sess.windows.find((w) => w.id === vis) ?? sess.windows.find((w) => w.active) ?? sess.windows[0];
       if (win && win.id !== vis) {
         await applyWindow(win);
       }
     } catch (e) {
-      showToast(String(e));
+      setFailMsg(String(e));
     }
-  }, [applyWindow, connectTo, showToast]);
+  }, [applyWindow, connectTo]);
 
   useEffect(() => {
     if (error || empty) return;
@@ -885,6 +906,12 @@ export default function App() {
                 />
               </div>
             </>
+          ) : failMsg ? (
+            <div className="panel">
+              <h1>Could not open the session</h1>
+              <p>{failMsg}</p>
+              <button onClick={() => void boot()}>Retry</button>
+            </div>
           ) : (
             <div className="panel">
               <p>Connecting…</p>

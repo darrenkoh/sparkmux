@@ -449,18 +449,20 @@ pub fn attach_target(
     last_session: Option<&str>,
     default_session: &str,
 ) -> Option<String> {
-    if snapshot.sessions.is_empty() {
-        return None;
-    }
+    let usable = |name: &str| crate::target::session_name(name).is_ok();
     if let Some(last) = last_session {
-        if snapshot.sessions.iter().any(|s| s.name == last) {
+        if usable(last) && snapshot.sessions.iter().any(|s| s.name == last) {
             return Some(last.to_string());
         }
     }
-    if snapshot.sessions.iter().any(|s| s.name == default_session) {
+    if usable(default_session) && snapshot.sessions.iter().any(|s| s.name == default_session) {
         return Some(default_session.to_string());
     }
-    snapshot.sessions.first().map(|s| s.name.clone())
+    snapshot
+        .sessions
+        .iter()
+        .find(|s| usable(&s.name))
+        .map(|s| s.name.clone())
 }
 
 pub fn new_session_args(name: &str, spawn: &SessionSpawn) -> Vec<String> {
@@ -600,6 +602,13 @@ mod tests {
             Some("alpha")
         );
         assert_eq!(attach_target(&Snapshot::empty(), None, "main"), None);
+        snap.sessions = vec![named(""), named("main")];
+        assert_eq!(
+            attach_target(&snap, Some(""), crate::DEFAULT_SESSION).as_deref(),
+            Some("main")
+        );
+        snap.sessions = vec![named("")];
+        assert_eq!(attach_target(&snap, None, "main"), None);
     }
 
     #[test]
