@@ -59,20 +59,57 @@ case "$ARCH" in
   *) die "sparkmux v0 ships for aarch64 only (got $ARCH)" ;;
 esac
 
-need_tmux() {
-  if have tmux; then
-    local raw major minor
-    raw="$(tmux -V 2>/dev/null || true)"
-    major="$(printf '%s\n' "$raw" | sed -n 's/^tmux \([0-9][0-9]*\).*/\1/p')"
-    minor="$(printf '%s\n' "$raw" | sed -n 's/^tmux [0-9][0-9]*\.\([0-9][0-9]*\).*/\1/p')"
-    if [[ -n "$major" && "$major" -gt 3 ]] || { [[ "$major" == "3" && -n "$minor" && "$minor" -ge 2 ]]; }; then
-      log "tmux ok: $raw ($(command -v tmux))"
+# PATH, then the same fallbacks as sparkmux-core discover_bin.
+tmux_bin() {
+  if command -v tmux >/dev/null 2>&1; then
+    command -v tmux
+    return 0
+  fi
+  local candidate
+  for candidate in /opt/homebrew/bin/tmux /usr/local/bin/tmux /usr/bin/tmux; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
       return 0
     fi
-    log "tmux is too old ($raw); sparkmux needs 3.2+"
-  else
-    log "tmux not found"
+  done
+  return 1
+}
+
+# curl | bash does not source ~/.zprofile, so brew may exist but not be on PATH.
+# Only prepend a prefix when brew is not already visible; do not reorder PATH.
+ensure_brew_on_path() {
+  if ! have brew; then
+    local dir
+    for dir in /opt/homebrew/bin /usr/local/bin; do
+      if [[ -x "$dir/brew" ]]; then
+        PATH="$dir:${PATH}"
+        export PATH
+        hash -r
+        break
+      fi
+    done
   fi
+  have brew
+}
+
+need_tmux() {
+  local bin raw rest major minor
+  if ! bin="$(tmux_bin)"; then
+    log "tmux not found"
+    return 1
+  fi
+  raw="$("$bin" -V 2>/dev/null || true)"
+  # sparkmux-core accepts "tmux 3.5a" and "tmux next-3.6".
+  rest="${raw#tmux}"
+  rest="${rest#"${rest%%[![:space:]]*}"}"
+  rest="${rest#next-}"
+  major="$(printf '%s\n' "$rest" | sed -n 's/^\([0-9][0-9]*\).*/\1/p')"
+  minor="$(printf '%s\n' "$rest" | sed -n 's/^[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/p')"
+  if [[ -n "$major" && "$major" -gt 3 ]] || { [[ "$major" == "3" && -n "$minor" && "$minor" -ge 2 ]]; }; then
+    log "tmux ok: $raw ($bin)"
+    return 0
+  fi
+  log "tmux is too old ($raw); sparkmux needs 3.2+"
   return 1
 }
 
@@ -84,17 +121,20 @@ install_tmux() {
     log "skipping tmux install; the app will show an in-window hint"
     return 0
   fi
-  if [[ "$OS" == "Darwin" ]] && have brew; then
+  if [[ "$OS" == "Darwin" ]] && ensure_brew_on_path; then
     log "installing tmux with Homebrew"
     brew install tmux
-    need_tmux || die "tmux still missing after brew install"
+    # bash hashed the old tmux path inside need_tmux.
+    hash -r
+    need_tmux || die "tmux is still missing or older than 3.2 after brew install"
     return 0
   fi
   if have apt-get && can_sudo; then
     log "installing tmux with apt"
     sudo apt-get update -y
     sudo apt-get install -y tmux
-    need_tmux || die "tmux still missing after apt install"
+    hash -r
+    need_tmux || die "tmux is still missing or older than 3.2 after apt install"
     return 0
   fi
   die "install tmux 3.2+ then re-run (macOS: brew install tmux / Ubuntu: sudo apt install tmux)"
