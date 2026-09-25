@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+### Fixes
+
+- Opening a session works when tmux splits the list format on a tab. The session id and name are separated with a printable token, and a plain `name: N windows` line is accepted.
+
 ## 0.1.3
 
 ### Fixes
