@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+### Fixes
+
+- Characters stay intact while Grok or Claude is streaming. A character split across two pane updates is drawn whole instead of being replaced.
+
 ## 0.1.5
 
 ### Fixes
