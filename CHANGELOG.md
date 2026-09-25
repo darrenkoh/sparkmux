@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+### Install
+
+- The curl installer accepts the DMG license agreement. Mounting no longer cancels when the script is piped into bash.
+- If tmux is missing or older than 3.2, the installer installs it with Homebrew or apt. `curl | bash` finds Homebrew even when the shell profile was not sourced.
+- `tmux next-X.Y` builds count as new enough, the same rule the app uses.
+
 ## 0.1.1
 
 ### Fixes
