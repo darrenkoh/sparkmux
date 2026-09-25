@@ -250,12 +250,26 @@ download_release() {
   curl -fL --progress-bar -o "$file" "$url"
   if [[ "$OS" == "Darwin" ]]; then
     local mount
-    mount="$(hdiutil attach -nobrowse -mountrandom /tmp "$file" | awk '/\/Volumes\// {print $3}' | tail -n 1)"
-    [[ -n "$mount" ]] || die "failed to mount DMG"
+    mount="$(mktemp -d "${TMPDIR:-/tmp}/sparkmux-dmg.XXXXXX")"
+    # The release DMG embeds the MIT license as a software license agreement.
+    # hdiutil reads the answer on stdin. `curl | bash` is already at EOF, so
+    # attach exits with "hdiutil: attach canceled" unless we pass Y on a pipe.
+    # -mountpoint avoids parsing that license text for a /Volumes path.
+    # shellcheck disable=SC2064
+    trap "hdiutil detach $(printf '%q' "$mount") >/dev/null 2>&1 || true; rmdir $(printf '%q' "$mount") 2>/dev/null || true" EXIT
+    log "mounting DMG"
+    if ! printf 'Y\n' | hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$file" >/dev/null; then
+      hdiutil detach "$mount" >/dev/null 2>&1 || true
+      rmdir "$mount" 2>/dev/null || true
+      trap - EXIT
+      die "failed to mount DMG"
+    fi
     local app
     app="$(find "$mount" -maxdepth 2 -name 'Sparkmux.app' -type d | head -n 1)" || true
     install_macos_app "$app"
     hdiutil detach "$mount" >/dev/null
+    rmdir "$mount"
+    trap - EXIT
   else
     install_linux_deb_or_bin "$file" ""
   fi
