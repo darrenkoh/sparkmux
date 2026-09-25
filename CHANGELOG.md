@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+### Fixes
+
+- Choice lists from Grok and Claude stay in order. The terminal no longer types a second cursor or size reply into the pane, and the tmux status line no longer shortens the pane by a row.
+
 ## 0.1.4
 
 ### Fixes
