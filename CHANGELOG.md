@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+### Fixes
+
+- Opening the app no longer stays on “Connecting…” when a session list line has no name. Those lines are ignored, and a failed attach stays on screen with Retry instead of repeating the error.
+
 ## 0.1.2
 
 ### Install
