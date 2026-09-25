@@ -5,16 +5,35 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 
-/// Field separator for `list-* -F`. Tab survives tmux format expansion on
-/// Linux; U+001F is stripped, which made session names parse as empty.
-pub const US: char = '\t';
+/// Field separator for `list-* -F`.
+///
+/// A tab is whitespace. Some tmux builds split the `-F` argument on it, so the
+/// format collapses to `#{session_id}` and the name never arrives. U+001F is
+/// stripped on Linux. `@@@` is printable and is substituted out of free-text
+/// fields before they are printed.
+const SEP: &str = "@@@";
 
-pub const SESS_FMT: &str =
-    "#{session_id}\t#{session_name}\t#{session_attached}\t#{session_windows}\t#{session_created}\t#{session_activity}\t#{session_path}";
-pub const WIN_FMT: &str =
-    "#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_panes}\t#{window_layout}\t#{window_bell_flag}\t#{window_activity_flag}";
-pub const PANE_FMT: &str =
-    "#{session_id}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{pane_active}\t#{pane_width}\t#{pane_height}\t#{pane_title}";
+pub const SESS_FMT: &str = concat!(
+    "#{session_id}@@@",
+    "#{s/@@@/_/:session_name}@@@",
+    "#{session_attached}@@@#{session_windows}@@@",
+    "#{session_created}@@@#{session_activity}@@@",
+    "#{s/@@@/_/:session_path}",
+);
+pub const WIN_FMT: &str = concat!(
+    "#{session_id}@@@#{window_id}@@@#{window_index}@@@",
+    "#{s/@@@/_/:window_name}@@@",
+    "#{window_active}@@@#{window_panes}@@@",
+    "#{s/@@@/_/:window_layout}@@@",
+    "#{window_bell_flag}@@@#{window_activity_flag}",
+);
+pub const PANE_FMT: &str = concat!(
+    "#{session_id}@@@#{window_id}@@@#{pane_id}@@@#{pane_index}@@@",
+    "#{s/@@@/_/:pane_current_command}@@@",
+    "#{s/@@@/_/:pane_current_path}@@@",
+    "#{pane_pid}@@@#{pane_active}@@@#{pane_width}@@@#{pane_height}@@@",
+    "#{s/@@@/_/:pane_title}",
+);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
@@ -161,18 +180,34 @@ fn is_session_id(s: &str) -> bool {
 fn parse_sessions(blob: &str) -> Result<Vec<RawSession>> {
     let mut out = Vec::new();
     let mut skipped = 0;
+    let mut sample = String::new();
     for line in non_empty_lines(blob) {
-        let f = fields(line);
-        let id = field(&f, 0);
-        let name = field(&f, 1).trim();
-        // A line that is not `$id<TAB>name` is not a session. The default
-        // `list-sessions` text has no tabs, so the whole line became the id
-        // and the name stayed empty. Connecting to that name fails forever.
-        if !is_session_id(id) || name.is_empty() {
-            skipped += 1;
-            continue;
+        if sample.is_empty() {
+            sample = line.chars().take(120).collect();
         }
-        out.push(RawSession {
+        if let Some(raw) = parse_session_line(line) {
+            out.push(raw);
+        } else {
+            skipped += 1;
+        }
+    }
+    if out.is_empty() && skipped > 0 {
+        return Err(Error::Parse(format!(
+            "session list did not include a usable name ({sample:?})"
+        )));
+    }
+    Ok(out)
+}
+
+fn parse_session_line(line: &str) -> Option<RawSession> {
+    if line.contains(SEP) || line.contains('\t') {
+        let f = fields(line);
+        let id = field(&f, 0).trim();
+        let name = field(&f, 1).trim();
+        if !is_session_id(id) || name.is_empty() {
+            return None;
+        }
+        return Some(RawSession {
             id: id.to_string(),
             name: name.to_string(),
             attached: parse_u32(field(&f, 2)) > 0,
@@ -181,12 +216,26 @@ fn parse_sessions(blob: &str) -> Result<Vec<RawSession>> {
             path: PathBuf::from(field(&f, 6)),
         });
     }
-    if out.is_empty() && skipped > 0 {
-        return Err(Error::Parse(
-            "session list did not include a usable name".into(),
-        ));
+    // `tmux list-sessions` with no -F: `main: 1 windows (created ...)`.
+    let (name, rest) = line.split_once(": ")?;
+    let mut words = rest.split_whitespace();
+    let count = words.next()?;
+    let label = words.next()?;
+    if label != "windows" || count.parse::<u32>().is_err() {
+        return None;
     }
-    Ok(out)
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(RawSession {
+        id: name.to_string(),
+        name: name.to_string(),
+        attached: false,
+        created_epoch: 0,
+        activity_epoch: 0,
+        path: PathBuf::new(),
+    })
 }
 
 fn parse_windows(blob: &str) -> Result<Vec<RawWindow>> {
@@ -248,7 +297,11 @@ fn non_empty_lines(blob: &str) -> impl Iterator<Item = &str> {
 }
 
 fn fields(line: &str) -> Vec<&str> {
-    line.split(US).collect()
+    if line.contains(SEP) {
+        line.split(SEP).collect()
+    } else {
+        line.split('\t').collect()
+    }
 }
 
 fn field<'a>(fields: &[&'a str], idx: usize) -> &'a str {
@@ -452,14 +505,28 @@ mod tests {
     }
 
     #[test]
-    fn default_list_sessions_text_is_not_a_nameless_session() {
-        let err = parse_snapshot(
+    fn default_list_sessions_text_keeps_the_name() {
+        let snap = parse_snapshot(
             "main: 1 windows (created Fri Sep 25 11:07:47 2026)\n",
             "",
             "",
         )
-        .unwrap_err();
-        assert!(err.to_string().contains("usable name"));
+        .unwrap();
+        assert_eq!(snap.sessions.len(), 1);
+        assert_eq!(snap.sessions[0].name, "main");
+    }
+
+    #[test]
+    fn at_separator_round_trip_with_window_id() {
+        let sessions = "$0@@@my work@@@0@@@1@@@1790362152@@@1790362152@@@/tmp\n";
+        let windows = "$0@@@@0@@@0@@@zsh@@@1@@@1@@@b25d,80x24,0,0,0@@@0@@@0\n";
+        let panes = "$0@@@@0@@@%0@@@0@@@zsh@@@/private/tmp@@@1@@@1@@@80@@@24@@@title\n";
+        let snap = parse_snapshot(sessions, windows, panes).unwrap();
+        assert_eq!(snap.sessions[0].name, "my work");
+        assert_eq!(snap.sessions[0].windows[0].id, "@0");
+        assert_eq!(snap.sessions[0].windows[0].name, "zsh");
+        assert_eq!(snap.sessions[0].windows[0].panes[0].id, "%0");
+        assert_eq!(snap.sessions[0].windows[0].panes[0].path, PathBuf::from("/private/tmp"));
     }
 
     #[test]
@@ -471,7 +538,7 @@ mod tests {
     #[test]
     fn junk_session_line_does_not_hide_a_real_one() {
         let snap = parse_snapshot(
-            "main: 1 windows\n$4\tmain\t0\t1\t1\t1\t/\n",
+            "not a session line\n$4\tmain\t0\t1\t1\t1\t/\n",
             "",
             "",
         )
