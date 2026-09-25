@@ -10,30 +10,39 @@ Your default tmux server is never touched. sparkmux uses `-L sparkmux`.
 
 ## Install
 
-One script installs tmux (if needed) and the desktop app. Apple Silicon or ARM64 Linux:
+One script installs tmux 3.2+ when it is missing or too old, then installs the latest [GitHub Release](https://github.com/darrenkoh/sparkmux/releases). Apple Silicon or ARM64 Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darrenkoh/sparkmux/main/scripts/install.sh | bash
 ```
 
-If there is no GitHub Release yet, the script builds from source (needs Rust, Node.js, and on Linux the WebKitGTK headers). From a clone:
+The macOS asset is a `.dmg` with the MIT license embedded. The script accepts that agreement during a piped install. The Linux asset is an ARM64 `.deb`. If that release has no asset for this machine, the script builds from source (Rust, Node.js, and on Linux the WebKitGTK headers).
+
+From a clone:
 
 ```bash
+./scripts/install.sh
 ./scripts/install.sh --from-source
+./scripts/install.sh --skip-tmux
 ```
+
+`--skip-tmux` leaves tmux alone. The app then shows an in-window setup hint when tmux is missing or older than 3.2.
 
 ### macOS (Apple Silicon)
 
-1. `brew install tmux` if you do not already have tmux 3.2+.
-2. Run the installer, or download the `.dmg` from [Releases](https://github.com/darrenkoh/sparkmux/releases).
-3. Builds are **unsigned**. First open: right-click Sparkmux.app → **Open**.
-4. Double-click Sparkmux. Create a session in the sidebar.
+The installer runs `brew install tmux` when tmux is missing or older than 3.2. `curl | bash` finds Homebrew in `/opt/homebrew` or `/usr/local` even when your shell profile was not sourced.
+
+You can download the `.dmg` from [Releases](https://github.com/darrenkoh/sparkmux/releases) instead. Opening that disk image asks you to accept the MIT license. Install tmux yourself in that case (`brew install tmux`).
+
+Builds are **unsigned**. First open: right-click Sparkmux.app → **Open**. Then double-click Sparkmux and create a session in the sidebar.
 
 ### Linux (ARM64 / DGX Spark)
 
-1. `sudo apt install tmux`
-2. Run the installer, or install the `.deb` from [Releases](https://github.com/darrenkoh/sparkmux/releases).
-3. Launch `sparkmux-desktop`. User-prefix installs land in `~/.local/bin`.
+The installer runs `sudo apt-get install -y tmux` when passwordless sudo succeeds. A `curl | bash` install stops and prints the apt command when sudo would prompt. Install tmux 3.2+, then re-run the script. Running `./scripts/install.sh` from a terminal can prompt for the password.
+
+The `.deb` is installed with `dpkg` when sudo works. Otherwise `sparkmux-desktop` is placed in `~/.local/bin` (`--prefix` or `SPARKMUX_PREFIX`).
+
+Launch `sparkmux-desktop`.
 
 ### After install
 
