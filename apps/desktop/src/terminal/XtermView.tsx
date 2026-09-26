@@ -47,6 +47,8 @@ export default function XtermView({
   const onCellSizeRef = useRef(onCellSize);
   const fontSizeRef = useRef(fontSize);
   const doFitRef = useRef<() => void>(() => {});
+  const redrawCaretRef = useRef<() => void>(() => {});
+  const syncTmuxCursorRef = useRef<() => void>(() => {});
   onFocusRef.current = onFocus;
   onCellSizeRef.current = onCellSize;
   fontSizeRef.current = fontSize;
@@ -109,6 +111,32 @@ export default function XtermView({
     termRef.current = term;
     terms.set(paneId, term);
 
+    let unmounted = false;
+
+    const redrawCaret = () => {
+      term.scrollToBottom();
+      term.refresh(0, Math.max(0, term.rows - 1));
+    };
+
+    const syncTmuxCursor = () => {
+      void paneCursor(paneId)
+        .then((pos) => {
+          if (unmounted) return;
+          const live = termRef.current;
+          if (!live) return;
+          live.write(cursorCup(pos.y, pos.x), () => {
+            live.scrollToBottom();
+            live.refresh(0, Math.max(0, live.rows - 1));
+          });
+        })
+        .catch(() => {
+          /* pane may have closed during resize */
+        });
+    };
+
+    redrawCaretRef.current = redrawCaret;
+    syncTmuxCursorRef.current = syncTmuxCursor;
+
     let seeded = false;
     const channel = new Channel<ArrayBuffer | Uint8Array | number[]>();
     channel.onmessage = (msg) => {
@@ -116,7 +144,12 @@ export default function XtermView({
       if (!seeded) {
         seeded = true;
         term.reset();
-        term.write(screenDumpToXterm(bytes));
+        term.write(screenDumpToXterm(bytes), () => {
+          if (!unmounted) {
+            redrawCaret();
+            syncTmuxCursor();
+          }
+        });
         return;
       }
       term.write(bytes);
@@ -169,6 +202,8 @@ export default function XtermView({
       onFocusRef.current(paneId);
       void focusPane(paneId);
       term.focus();
+      redrawCaret();
+      syncTmuxCursor();
     };
     host.addEventListener("mousedown", onMouse);
 
@@ -177,28 +212,6 @@ export default function XtermView({
     let seedTimer: number | undefined;
     let cursorTimer: number | undefined;
     let subscribed = false;
-    let unmounted = false;
-
-    const redrawCaret = () => {
-      term.scrollToBottom();
-      term.refresh(0, Math.max(0, term.rows - 1));
-    };
-
-    const syncTmuxCursor = () => {
-      void paneCursor(paneId)
-        .then((pos) => {
-          if (unmounted) return;
-          const live = termRef.current;
-          if (!live) return;
-          live.write(cursorCup(pos.y, pos.x), () => {
-            live.scrollToBottom();
-            live.refresh(0, Math.max(0, live.rows - 1));
-          });
-        })
-        .catch(() => {
-          /* pane may have closed during resize */
-        });
-    };
 
     const doFit = () => {
       if (unmounted || host.clientWidth < 2 || host.clientHeight < 2) return;
@@ -239,6 +252,8 @@ export default function XtermView({
     return () => {
       unmounted = true;
       doFitRef.current = () => {};
+      redrawCaretRef.current = () => {};
+      syncTmuxCursorRef.current = () => {};
       if (seedTimer) window.clearTimeout(seedTimer);
       if (cursorTimer) window.clearTimeout(cursorTimer);
       window.clearTimeout(later);
@@ -264,6 +279,8 @@ export default function XtermView({
   useEffect(() => {
     if (focused) {
       termRef.current?.focus();
+      redrawCaretRef.current();
+      syncTmuxCursorRef.current();
     }
   }, [focused]);
 

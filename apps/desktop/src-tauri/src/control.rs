@@ -119,6 +119,9 @@ pub async fn subscribe_pane(
             .await
         {
             Ok(mut text) => {
+                while text.ends_with('\n') || text.ends_with('\r') {
+                    text.pop();
+                }
                 if let Ok((y, x)) = client
                     .pane_cursor_timeout(&pane_id, Duration::from_millis(200))
                     .await

@@ -119,14 +119,21 @@ export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {
 
 /** capture-pane -p emits LF-only rows; xterm treats LF as down-without-CR (staircase).
  *  A trailing CSI CUP from the seed (tmux cursor) is preserved so the caret
- *  is not left on the last blank row of the dump. */
+ *  is not left on the last blank row of the dump.
+ *  Crucially, we strip any trailing newline before the CSI CUP so that writing
+ *  a full-height screen dump does not scroll the terminal buffer up by one row
+ *  and misalign the cursor relative to the visible prompt. */
 export function screenDumpToXterm(bytes: Uint8Array): string {
-  const s = new TextDecoder("utf-8", { fatal: false })
-    .decode(bytes)
+  const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const match = decoded.match(/\x1b\[\d+;\d+H$/);
+  const cup = match ? match[0] : "";
+  const body = match ? decoded.slice(0, match.index) : decoded;
+  const stripped = body.replace(/\r?\n$/, "");
+  const s = stripped
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
     .replace(/\n/g, "\r\n");
-  return `\x1b[H\x1b[2J${s}`;
+  return `\x1b[H\x1b[2J${s}${cup}`;
 }
 
 export async function listenLayoutChange(
