@@ -9,12 +9,14 @@ import {
   clipboardWrite,
   pasteIntoPane,
   focusPane,
+  paneCursor,
   paneSubscribe,
   paneUnsubscribe,
   paneWrite,
   screenDumpToXterm,
   toBytes,
 } from "../api";
+import { cursorCup } from "./cursorCup";
 import { isEmulatorReport } from "./emulatorReports";
 
 const isMac = navigator.userAgent.includes("Mac");
@@ -44,6 +46,7 @@ export default function XtermView({
   const onFocusRef = useRef(onFocus);
   const onCellSizeRef = useRef(onCellSize);
   const fontSizeRef = useRef(fontSize);
+  const doFitRef = useRef<() => void>(() => {});
   onFocusRef.current = onFocus;
   onCellSizeRef.current = onCellSize;
   fontSizeRef.current = fontSize;
@@ -172,8 +175,30 @@ export default function XtermView({
     let lastCols = 0;
     let lastRows = 0;
     let seedTimer: number | undefined;
+    let cursorTimer: number | undefined;
     let subscribed = false;
     let unmounted = false;
+
+    const redrawCaret = () => {
+      term.scrollToBottom();
+      term.refresh(0, Math.max(0, term.rows - 1));
+    };
+
+    const syncTmuxCursor = () => {
+      void paneCursor(paneId)
+        .then((pos) => {
+          if (unmounted) return;
+          const live = termRef.current;
+          if (!live) return;
+          live.write(cursorCup(pos.y, pos.x), () => {
+            live.scrollToBottom();
+            live.refresh(0, Math.max(0, live.rows - 1));
+          });
+        })
+        .catch(() => {
+          /* pane may have closed during resize */
+        });
+    };
 
     const doFit = () => {
       if (unmounted || host.clientWidth < 2 || host.clientHeight < 2) return;
@@ -183,9 +208,17 @@ export default function XtermView({
       } catch {
         return;
       }
+      redrawCaret();
       if (term.cols === lastCols && term.rows === lastRows) return;
+      const hadGrid = lastCols > 0 && lastRows > 0;
       lastCols = term.cols;
       lastRows = term.rows;
+      if (hadGrid) {
+        if (cursorTimer) window.clearTimeout(cursorTimer);
+        cursorTimer = window.setTimeout(() => {
+          if (!unmounted) syncTmuxCursor();
+        }, 120);
+      }
       if (subscribed) return;
       subscribed = true;
       seedTimer = window.setTimeout(() => {
@@ -194,6 +227,7 @@ export default function XtermView({
       }, 120);
     };
 
+    doFitRef.current = doFit;
     requestAnimationFrame(doFit);
     const later = window.setTimeout(doFit, 50);
 
@@ -204,7 +238,9 @@ export default function XtermView({
 
     return () => {
       unmounted = true;
+      doFitRef.current = () => {};
       if (seedTimer) window.clearTimeout(seedTimer);
+      if (cursorTimer) window.clearTimeout(cursorTimer);
       window.clearTimeout(later);
       host.removeEventListener("mousedown", onMouse);
       host.removeEventListener("paste", onPaste, true);
@@ -220,15 +256,9 @@ export default function XtermView({
 
   useEffect(() => {
     const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit) return;
+    if (!term) return;
     term.options.fontSize = fontSize;
-    try {
-      fit.fit();
-      reportCell(term, onCellSizeRef.current);
-    } catch {
-      /* host may be hidden */
-    }
+    doFitRef.current();
   }, [fontSize]);
 
   useEffect(() => {

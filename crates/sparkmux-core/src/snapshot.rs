@@ -526,7 +526,10 @@ mod tests {
         assert_eq!(snap.sessions[0].windows[0].id, "@0");
         assert_eq!(snap.sessions[0].windows[0].name, "zsh");
         assert_eq!(snap.sessions[0].windows[0].panes[0].id, "%0");
-        assert_eq!(snap.sessions[0].windows[0].panes[0].path, PathBuf::from("/private/tmp"));
+        assert_eq!(
+            snap.sessions[0].windows[0].panes[0].path,
+            PathBuf::from("/private/tmp")
+        );
     }
 
     #[test]
@@ -537,12 +540,7 @@ mod tests {
 
     #[test]
     fn junk_session_line_does_not_hide_a_real_one() {
-        let snap = parse_snapshot(
-            "not a session line\n$4\tmain\t0\t1\t1\t1\t/\n",
-            "",
-            "",
-        )
-        .unwrap();
+        let snap = parse_snapshot("not a session line\n$4\tmain\t0\t1\t1\t1\t/\n", "", "").unwrap();
         assert_eq!(snap.sessions.len(), 1);
         assert_eq!(snap.sessions[0].name, "main");
     }

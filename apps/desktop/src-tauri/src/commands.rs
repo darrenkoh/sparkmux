@@ -344,6 +344,28 @@ pub async fn window_resize(state: State<'_, AppState>, cols: u16, rows: u16) -> 
         .map_err(|e| map_error(&e))
 }
 
+#[derive(Debug, Serialize)]
+pub struct PaneCursor {
+    pub y: u16,
+    pub x: u16,
+}
+
+#[tauri::command]
+pub async fn pane_cursor(
+    state: State<'_, AppState>,
+    pane_id: String,
+) -> Result<PaneCursor, String> {
+    let client = {
+        let inner = state.inner.lock().await;
+        inner.client()?.clone()
+    };
+    let (y, x) = client
+        .pane_cursor_timeout(&pane_id, Duration::from_millis(200))
+        .await
+        .map_err(|e| map_error(&e))?;
+    Ok(PaneCursor { y, x })
+}
+
 #[tauri::command]
 pub async fn focus_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), String> {
     let client = {

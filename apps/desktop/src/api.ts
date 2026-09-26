@@ -78,6 +78,10 @@ export function windowResize(cols: number, rows: number): Promise<void> {
   return invoke("window_resize", { cols, rows });
 }
 
+export function paneCursor(paneId: string): Promise<{ y: number; x: number }> {
+  return invoke("pane_cursor", { paneId });
+}
+
 export function focusPane(paneId: string): Promise<void> {
   return invoke("focus_pane", { paneId });
 }

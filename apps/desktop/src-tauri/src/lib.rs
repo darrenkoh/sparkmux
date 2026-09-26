@@ -33,6 +33,7 @@ pub fn run() {
             commands::pane_unsubscribe,
             commands::pane_write,
             commands::window_resize,
+            commands::pane_cursor,
             commands::focus_pane,
             commands::stop_server,
             commands::remember_session,
