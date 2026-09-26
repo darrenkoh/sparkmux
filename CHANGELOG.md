@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8
+
+### Fixes
+
+- Switching sessions and clicking the console keeps the terminal caret aligned with the prompt. Full-height seed dumps no longer scroll the buffer by a row, and the caret resyncs with tmux on focus and mouse click.
+
 ## 0.1.7
 
 ### Fixes
