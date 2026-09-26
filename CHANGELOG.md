@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+### Fixes
+
+- Resizing the window no longer leaves the terminal caret on the wrong cell. It follows tmux again without needing a keypress.
+
 ## 0.1.6
 
 ### Fixes
