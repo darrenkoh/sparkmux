@@ -146,6 +146,15 @@ impl ControlClient {
             .kill_on_drop(true);
         cmd.env_remove("TMUX");
         cmd.env_remove("STY");
+        if std::env::var("LANG").map(|s| s.is_empty()).unwrap_or(true) {
+            cmd.env("LANG", "en_US.UTF-8");
+        }
+        if std::env::var("LC_ALL")
+            .map(|s| s.is_empty())
+            .unwrap_or(true)
+        {
+            cmd.env("LC_ALL", "en_US.UTF-8");
+        }
         let mut child = cmd.spawn()?;
         let stdin = child
             .stdin

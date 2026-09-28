@@ -206,6 +206,7 @@ impl TmuxClient {
 
     pub fn control_argv(&self, session: &str) -> Result<(PathBuf, Vec<OsString>)> {
         let mut args = Vec::new();
+        args.push("-u".into());
         if let Some(path) = &self.socket_path {
             args.push("-S".into());
             args.push(path.into());
@@ -378,6 +379,7 @@ impl TmuxClient {
     }
 
     fn apply_socket(&self, cmd: &mut Command) {
+        cmd.arg("-u");
         if let Some(path) = &self.socket_path {
             cmd.arg("-S").arg(path);
         } else if let Some(name) = &self.socket_name {
@@ -386,6 +388,7 @@ impl TmuxClient {
     }
 
     fn apply_socket_tokio(&self, cmd: &mut tokio::process::Command) {
+        cmd.arg("-u");
         if let Some(path) = &self.socket_path {
             cmd.arg("-S").arg(path);
         } else if let Some(name) = &self.socket_name {
@@ -672,7 +675,7 @@ mod tests {
             .collect();
         assert_eq!(
             args,
-            vec!["-L", "sock", "-C", "attach-session", "-t", "main"]
+            vec!["-u", "-L", "sock", "-C", "attach-session", "-t", "main"]
         );
         assert!(!args.windows(1).any(|w| w == ["new-session"]));
     }

@@ -1,5 +1,6 @@
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { Terminal } from "@xterm/xterm";
 import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
@@ -57,10 +58,8 @@ export default function XtermView({
     const host = hostRef.current;
     if (!host) return;
     const term = new Terminal({
+      allowProposedApi: true,
       scrollback: 5000,
-      // tmux %output is LF-only; without this, \n moves down and stays in
-      // column, zsh PROMPT_SP thinks the line is partial and prints '%'.
-      convertEol: true,
       fontFamily:
         "'0xProto Nerd Font Mono', '0xProto Nerd Font', 'MesloLGS NF', Menlo, ui-monospace, monospace",
       fontSize: fontSizeRef.current,
@@ -100,6 +99,9 @@ export default function XtermView({
     const fit = new FitAddon();
     fitRef.current = fit;
     term.loadAddon(fit);
+    const unicode11 = new Unicode11Addon();
+    term.loadAddon(unicode11);
+    term.unicode.activeVersion = "11";
     if (!isMac) {
       try {
         term.loadAddon(new CanvasAddon());

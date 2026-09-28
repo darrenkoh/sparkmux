@@ -151,6 +151,24 @@ pub fn gui_spawn_env() -> crate::client::SessionSpawn {
             env.push(("SSH_AUTH_SOCK".into(), sock));
         }
     }
+    let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_string());
+    let lang = if lang.is_empty() {
+        "en_US.UTF-8".to_string()
+    } else {
+        lang
+    };
+    env.push(("LANG".into(), lang));
+    if let Ok(lc_all) = std::env::var("LC_ALL") {
+        if !lc_all.is_empty() {
+            env.push(("LC_ALL".into(), lc_all));
+        }
+    }
+    if let Ok(lc_ctype) = std::env::var("LC_CTYPE") {
+        if !lc_ctype.is_empty() {
+            env.push(("LC_CTYPE".into(), lc_ctype));
+        }
+    }
+    env.push(("COLORTERM".into(), "truecolor".into()));
     crate::client::SessionSpawn { cwd: home, env }
 }
 
