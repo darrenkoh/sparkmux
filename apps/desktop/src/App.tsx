@@ -224,6 +224,16 @@ export default function App() {
   const connectTo = useCallback(
     async (session: string, preferredWindow?: string) => {
       const { cols, rows } = pixelClientSize();
+      const curSess = snapRef.current.sessions.find((s) => s.name === session);
+      const expectedWin =
+        (preferredWindow
+          ? curSess?.windows.find((w) => w.id === preferredWindow)
+          : undefined) ??
+        curSess?.windows.find((w) => w.active) ??
+        curSess?.windows[0];
+      if (expectedWin) {
+        visibleRef.current = expectedWin.id;
+      }
       await controlConnect(session, cols, rows);
       await rememberSession(session);
       setAttachedSession(session);
@@ -329,8 +339,19 @@ export default function App() {
       setFailMsg(null);
       const vis = visibleRef.current;
       const win = sess.windows.find((w) => w.id === vis) ?? sess.windows.find((w) => w.active) ?? sess.windows[0];
-      if (win && win.id !== vis) {
-        await applyWindow(win);
+      if (win) {
+        if (win.id !== vis) {
+          await applyWindow(win);
+        } else if (win.layout) {
+          try {
+            const node = await parseLayout(win.layout);
+            if (JSON.stringify(node) !== JSON.stringify(layoutRef.current)) {
+              setLayout(node);
+            }
+          } catch {
+            /* layout parse error handled elsewhere */
+          }
+        }
       }
     } catch (e) {
       setFailMsg(String(e));

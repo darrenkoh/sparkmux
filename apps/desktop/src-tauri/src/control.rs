@@ -100,7 +100,7 @@ pub async fn subscribe_pane(
     on_data: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
     sparkmux_core::pane_id(&pane_id).map_err(|e| map_error(&e))?;
-    let client = {
+    let (ctl, client) = {
         let inner = state.inner.lock().await;
         inner.channels.lock().await.insert(
             pane_id.clone(),
@@ -110,22 +110,33 @@ pub async fn subscribe_pane(
                 buf: Vec::new(),
             },
         );
-        inner.client.clone()
+        (inner.control.clone(), inner.client.clone())
     };
     let mut seed = Vec::new();
     if let Some(client) = client {
         match client
-            .capture_pane_timeout(&pane_id, Duration::from_millis(300))
+            .capture_pane_timeout(&pane_id, Duration::from_secs(1))
             .await
         {
             Ok(mut text) => {
                 while text.ends_with('\n') || text.ends_with('\r') {
                     text.pop();
                 }
-                if let Ok((y, x)) = client
-                    .pane_cursor_timeout(&pane_id, Duration::from_millis(200))
-                    .await
-                {
+                let cursor_pos = if let Some(ctl) = &ctl {
+                    match ctl.pane_cursor(&pane_id).await {
+                        Ok(pos) => Some(pos),
+                        Err(_) => client
+                            .pane_cursor_timeout(&pane_id, Duration::from_secs(1))
+                            .await
+                            .ok(),
+                    }
+                } else {
+                    client
+                        .pane_cursor_timeout(&pane_id, Duration::from_secs(1))
+                        .await
+                        .ok()
+                };
+                if let Some((y, x)) = cursor_pos {
                     text.push_str(&sparkmux_core::TmuxClient::cursor_cup(y, x));
                 }
                 seed = text.into_bytes();

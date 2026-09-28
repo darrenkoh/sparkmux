@@ -227,6 +227,17 @@ impl ControlClient {
         Ok(())
     }
 
+    pub async fn pane_cursor(&self, pane_id: &str) -> Result<(u16, u16)> {
+        let pane_id = crate::target::pane_id(pane_id)?;
+        let out = self
+            .command(&format!(
+                "display-message -p -t {pane_id} \"#{{cursor_y}} #{{cursor_x}}\""
+            ))
+            .await?;
+        crate::client::TmuxClient::parse_cursor_pair(&out)
+            .ok_or_else(|| Error::Command("invalid cursor format".into()))
+    }
+
     pub async fn shutdown(&self) -> Result<()> {
         // The writer may be blocked in write_all and holding stdin. Don't wait
         // forever to close it; killing the client process still only detaches.

@@ -39,5 +39,30 @@ test("screenDumpToXterm strips trailing newline before CSI CUP to avoid terminal
 test("screenDumpToXterm handles dump without trailing CSI CUP", () => {
   const bytes = new TextEncoder().encode("line 1\nline 2\n");
   const dump = screenDumpToXterm(bytes);
-  assert.equal(dump, "\x1b[H\x1b[2Jline 1\r\nline 2");
+  assert.equal(dump, "\x1b[H\x1b[2J\x1b[1;1Hline 1\x1b[2;1Hline 2");
+});
+
+test("screenDumpToXterm prevents scroll even when lines wrap past terminal width", async () => {
+  const t = new Terminal({ cols: 80, rows: 24, convertEol: true });
+
+  // Simulate a dump where line 10 wraps past 80 cols and prompt is at row 23
+  let text = "";
+  for (let i = 0; i < 24; i++) {
+    if (i === 10) text += "W".repeat(120) + "\n";
+    else if (i === 23) text += "prompt$ \n";
+    else text += `line ${i}\n`;
+  }
+  text += "\x1b[24;9H";
+
+  const bytes = new TextEncoder().encode(text);
+  const dump = screenDumpToXterm(bytes);
+
+  await new Promise<void>((resolve) => {
+    t.write(dump, () => {
+      assert.equal(t.buffer.active.baseY, 0, "wrapped line must not scroll buffer");
+      assert.equal(t.buffer.active.cursorY, 23, "cursorY must be row 23");
+      assert.equal(t.buffer.active.cursorX, 8, "cursorX must be col 8");
+      resolve();
+    });
+  });
 });

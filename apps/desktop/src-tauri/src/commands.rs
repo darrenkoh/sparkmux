@@ -355,14 +355,24 @@ pub async fn pane_cursor(
     state: State<'_, AppState>,
     pane_id: String,
 ) -> Result<PaneCursor, String> {
-    let client = {
+    let (ctl, client) = {
         let inner = state.inner.lock().await;
-        inner.client()?.clone()
+        (inner.control.clone(), inner.client()?.clone())
     };
-    let (y, x) = client
-        .pane_cursor_timeout(&pane_id, Duration::from_millis(200))
-        .await
-        .map_err(|e| map_error(&e))?;
+    let (y, x) = if let Some(ctl) = ctl {
+        match ctl.pane_cursor(&pane_id).await {
+            Ok(pos) => pos,
+            Err(_) => client
+                .pane_cursor_timeout(&pane_id, Duration::from_secs(1))
+                .await
+                .map_err(|e| map_error(&e))?,
+        }
+    } else {
+        client
+            .pane_cursor_timeout(&pane_id, Duration::from_secs(1))
+            .await
+            .map_err(|e| map_error(&e))?
+    };
     Ok(PaneCursor { y, x })
 }
 

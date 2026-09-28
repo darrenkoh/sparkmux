@@ -24,8 +24,9 @@ export default function TiledWindow({
     const paneId = `%${node.Pane.pane_id}`;
     const focused = focusedPane === paneId;
     return (
-      <div className={`tile-leaf pane-frame ${focused ? "focused" : ""}`}>
+      <div key={paneId} className={`tile-leaf pane-frame ${focused ? "focused" : ""}`}>
         <XtermView
+          key={paneId}
           paneId={paneId}
           focused={focused}
           onFocus={onFocus}

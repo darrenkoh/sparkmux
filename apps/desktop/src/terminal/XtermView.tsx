@@ -237,7 +237,7 @@ export default function XtermView({
       seedTimer = window.setTimeout(() => {
         if (unmounted) return;
         void paneSubscribe(paneId, channel);
-      }, 120);
+      }, 0);
     };
 
     doFitRef.current = doFit;
