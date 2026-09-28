@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9
+
+### Fixes
+
+- Console rendering and caret alignment no longer desync when switching sessions. Screen dumps use explicit row positioning to prevent buffer scrolling on wrapped or full-height lines, cursor queries use the control client directly without subprocess timeouts, and session window layouts are preserved during client switch.
+
 ## 0.1.8
 
 ### Fixes
