@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.10
+
+### Fixes
+
+- Terminal character alignment and cursor positions are preserved during relative cursor indexing. Bare line feeds no longer force the cursor column to zero, preventing CLI tools such as Antigravity (`agy`) from corrupting prompts or cutting off characters when rendering interactive slash menus.
+- Unicode 11 addon is enabled in xterm.js for accurate emoji, wide-character, and symbol measuring.
+- Control client and GUI spawn environments enforce UTF-8 mode (`tmux -u`, `LANG=en_US.UTF-8`, `COLORTERM=truecolor`).
+
 ## 0.1.9
 
 ### Fixes
