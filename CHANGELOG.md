@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.11
+
+### Improvements
+
+- Removed the light blue focus border around the console terminal pane.
+
 ## 0.1.10
 
 ### Fixes
