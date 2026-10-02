@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.13
+
+### Fixes
+
+- After the app restarts, opening a session tab can scroll up through the console output that was already there.
+
 ## 0.1.12
 
 ### Fixes
