@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.12
+
+### Fixes
+
+- Clicking an http or https link in the session console opens it in the default browser.
+
 ## 0.1.11
 
 ### Improvements
