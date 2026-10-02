@@ -100,7 +100,7 @@ pub async fn subscribe_pane(
     on_data: Channel<InvokeResponseBody>,
 ) -> Result<(), String> {
     sparkmux_core::pane_id(&pane_id).map_err(|e| map_error(&e))?;
-    let (ctl, client) = {
+    let client = {
         let inner = state.inner.lock().await;
         inner.channels.lock().await.insert(
             pane_id.clone(),
@@ -110,41 +110,11 @@ pub async fn subscribe_pane(
                 buf: Vec::new(),
             },
         );
-        (inner.control.clone(), inner.client.clone())
+        inner.client.clone()
     };
     let mut seed = Vec::new();
     if let Some(client) = client {
-        match client
-            .capture_pane_timeout(&pane_id, Duration::from_secs(1))
-            .await
-        {
-            Ok(mut text) => {
-                while text.ends_with('\n') || text.ends_with('\r') {
-                    text.pop();
-                }
-                let cursor_pos = if let Some(ctl) = &ctl {
-                    match ctl.pane_cursor(&pane_id).await {
-                        Ok(pos) => Some(pos),
-                        Err(_) => client
-                            .pane_cursor_timeout(&pane_id, Duration::from_secs(1))
-                            .await
-                            .ok(),
-                    }
-                } else {
-                    client
-                        .pane_cursor_timeout(&pane_id, Duration::from_secs(1))
-                        .await
-                        .ok()
-                };
-                if let Some((y, x)) = cursor_pos {
-                    text.push_str(&sparkmux_core::TmuxClient::cursor_cup(y, x));
-                }
-                seed = text.into_bytes();
-            }
-            Err(e) => {
-                tracing::debug!(pane = %pane_id, error = %e, "seed capture-pane failed");
-            }
-        }
+        seed = seed_pane_bytes(&client, &pane_id).await;
     }
     let channels = {
         let inner = state.inner.lock().await;
@@ -160,6 +130,51 @@ pub async fn subscribe_pane(
         let _ = feed.channel.send(InvokeResponseBody::Raw(bytes));
     }
     Ok(())
+}
+
+/// First payload for a pane: tmux scrollback, then the visible screen and cursor.
+/// A failed history capture falls back to the visible screen so the pane still opens.
+async fn seed_pane_bytes(client: &sparkmux_core::TmuxClient, pane_id: &str) -> Vec<u8> {
+    let timeout = Duration::from_secs(1);
+    match client
+        .capture_pane_scrollback_timeout(pane_id, sparkmux_core::PANE_SCROLLBACK_LINES, timeout)
+        .await
+    {
+        Ok(text) => match client.pane_seed_meta_timeout(pane_id, timeout).await {
+            Ok((y, x, height)) if height > 0 => {
+                let (history, visible) = sparkmux_core::split_pane_capture(&text, height);
+                let mut body = sparkmux_core::visible_seed_body(&visible);
+                body.push_str(&sparkmux_core::TmuxClient::cursor_cup(y, x));
+                sparkmux_core::format_pane_seed(&history, &body).into_bytes()
+            }
+            Ok(_) => {
+                tracing::debug!(pane = %pane_id, "pane height missing; seeding the visible screen");
+                visible_only_seed(client, pane_id).await
+            }
+            Err(e) => {
+                tracing::debug!(pane = %pane_id, error = %e, "pane meta failed; seeding the visible screen");
+                visible_only_seed(client, pane_id).await
+            }
+        },
+        Err(e) => {
+            tracing::debug!(pane = %pane_id, error = %e, "scrollback capture failed");
+            visible_only_seed(client, pane_id).await
+        }
+    }
+}
+
+async fn visible_only_seed(client: &sparkmux_core::TmuxClient, pane_id: &str) -> Vec<u8> {
+    let timeout = Duration::from_secs(1);
+    let Ok(mut text) = client.capture_pane_timeout(pane_id, timeout).await else {
+        return Vec::new();
+    };
+    while text.ends_with('\n') || text.ends_with('\r') {
+        text.pop();
+    }
+    if let Ok((y, x)) = client.pane_cursor_timeout(pane_id, timeout).await {
+        text.push_str(&sparkmux_core::TmuxClient::cursor_cup(y, x));
+    }
+    text.into_bytes()
 }
 
 pub async fn unsubscribe_pane(state: &State<'_, AppState>, pane_id: &str) {

@@ -242,6 +242,57 @@ impl TmuxClient {
         .await
     }
 
+    /// Visible pane plus up to `history_lines` rows above it.
+    /// `-S -<n>` starts that many rows before the viewport and still ends at
+    /// the bottom of the screen, so the last `pane_height` rows are visible.
+    pub async fn capture_pane_scrollback_timeout(
+        &self,
+        pane_id: &str,
+        history_lines: u32,
+        timeout: Duration,
+    ) -> Result<String> {
+        let pane_id = crate::target::pane_id(pane_id)?;
+        let start = format!("-{history_lines}");
+        self.run_timeout(
+            &[
+                "capture-pane",
+                "-p",
+                "-e",
+                "-S",
+                start.as_str(),
+                "-t",
+                pane_id,
+            ],
+            timeout,
+            pane_id,
+        )
+        .await
+    }
+
+    /// Cursor plus the pane height, from one `display-message`.
+    pub async fn pane_seed_meta_timeout(
+        &self,
+        pane_id: &str,
+        timeout: Duration,
+    ) -> Result<(u16, u16, u16)> {
+        let pane_id = crate::target::pane_id(pane_id)?;
+        let out = self
+            .run_timeout(
+                &[
+                    "display-message",
+                    "-p",
+                    "-t",
+                    pane_id,
+                    "#{cursor_y},#{cursor_x},#{pane_height}",
+                ],
+                timeout,
+                pane_id,
+            )
+            .await?;
+        crate::pane_seed::parse_pane_meta(&out)
+            .ok_or_else(|| Error::Parse(format!("pane meta: {out:?}")))
+    }
+
     /// tmux `#{cursor_y}` / `#{cursor_x}` are 0-based; CSI CUP is 1-based.
     pub fn cursor_cup(y: u16, x: u16) -> String {
         format!("\x1b[{};{}H", y.saturating_add(1), x.saturating_add(1))
@@ -770,6 +821,84 @@ mod tests {
             u32::from(y) + 1 < u32::from(height.max(2)),
             "cursor y={y} h={height} should not sit on the last dump row"
         );
+    }
+
+    #[tokio::test]
+    async fn capture_scrollback_keeps_lines_above_the_pane() {
+        let _live = live_lock();
+        let Ok(client) = TmuxClient::new(
+            None,
+            Some(format!("smux-hist-{}", std::process::id())),
+            None,
+        ) else {
+            return;
+        };
+        if client
+            .run(&["new-session", "-d", "-x", "80", "-y", "8", "-s", "hist"])
+            .is_err()
+        {
+            let _ = client.kill_server();
+            return;
+        }
+        struct Guard<'a>(&'a TmuxClient);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.kill_server();
+            }
+        }
+        let _guard = Guard(&client);
+
+        let snap = wait_snapshot(&client);
+        let Some(pane) = snap.sessions.iter().find_map(|session| {
+            session
+                .windows
+                .iter()
+                .find_map(|window| window.panes.first().map(|pane| pane.id.clone()))
+        }) else {
+            return;
+        };
+        let cmd =
+            "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do echo HIST-$i; done";
+        let mut found = None;
+        for attempt in 0..40 {
+            if attempt % 5 == 0 {
+                let _ = client.run(&["send-keys", "-t", &pane, cmd, "Enter"]);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let Ok(text) = client
+                .capture_pane_scrollback_timeout(&pane, 5000, Duration::from_secs(1))
+                .await
+            else {
+                continue;
+            };
+            let Ok((_y, _x, height)) = client
+                .pane_seed_meta_timeout(&pane, Duration::from_secs(1))
+                .await
+            else {
+                continue;
+            };
+            if height == 0 {
+                continue;
+            }
+            let (history, visible) = crate::pane_seed::split_pane_capture(&text, height);
+            if history.iter().any(|line| row_has_word(line, "HIST-1"))
+                && visible.iter().any(|line| row_has_word(line, "HIST-20"))
+            {
+                found = Some((history, visible, height));
+                break;
+            }
+        }
+        let (history, visible, height) = found.expect("HIST-1 never left the visible pane");
+        assert!(
+            visible.iter().all(|line| !row_has_word(line, "HIST-1")),
+            "scrolled-off line still on screen: {visible:?}"
+        );
+        assert_eq!(visible.len(), usize::from(height));
+        assert!(history.len() > 1);
+    }
+
+    fn row_has_word(line: &str, word: &str) -> bool {
+        line.split_whitespace().any(|token| token == word)
     }
 
     #[test]

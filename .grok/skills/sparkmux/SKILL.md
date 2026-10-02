@@ -14,6 +14,6 @@ Layout: sidebar (sessions/windows/panes of `-L sparkmux` only) + tiled xterm.js,
 
 - Quit = `control_disconnect` (server stays up). Stop server is nested + confirm.
 - New Session… = `new_session_ex` only. Never `ensure_ready` on that path.
-- Live bytes: control-mode `%output`. `capture-pane` is a one-time seed.
+- Live bytes: control-mode `%output`. `capture-pane` is a one-time seed and includes scrollback (`-S`), so a remounted pane can scroll to output from before attach.
 - Linux: no Ctrl+D/W/Q GUI chords.
 - tmux I/O: sparkmux-core skill. Do not `Command::new("tmux")` from the desktop crate.

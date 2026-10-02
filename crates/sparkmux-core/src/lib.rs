@@ -6,6 +6,7 @@ mod control;
 mod detect;
 mod error;
 mod layout;
+mod pane_seed;
 mod preview;
 mod snapshot;
 mod target;
@@ -23,6 +24,9 @@ pub use control::{parse_control_line, unescape_output, ControlClient, ControlEve
 pub use detect::{is_inside_tmux, is_inside_tmux_from};
 pub use error::{Error, Result};
 pub use layout::{parse_window_layout, LayoutNode, SplitDir};
+pub use pane_seed::{
+    format_pane_seed, parse_pane_meta, split_pane_capture, visible_seed_body, PANE_SCROLLBACK_LINES,
+};
 pub use preview::cap_lines;
 pub use snapshot::{
     first_cursor, parse_snapshot, restore_cursor, Cursor, Pane, Session, Snapshot, Window,

@@ -16,11 +16,11 @@ import {
   paneSubscribe,
   paneUnsubscribe,
   paneWrite,
-  screenDumpToXterm,
   toBytes,
 } from "../api";
 import { cursorCup } from "./cursorCup";
 import { isEmulatorReport } from "./emulatorReports";
+import { applyPaneSeed } from "./paneSeed";
 
 const isMac = navigator.userAgent.includes("Mac");
 
@@ -61,6 +61,7 @@ export default function XtermView({
     if (!host) return;
     const term = new Terminal({
       allowProposedApi: true,
+      // Keep in step with sparkmux_core::PANE_SCROLLBACK_LINES.
       scrollback: 5000,
       fontFamily:
         "'0xProto Nerd Font Mono', '0xProto Nerd Font', 'MesloLGS NF', Menlo, ui-monospace, monospace",
@@ -129,13 +130,16 @@ export default function XtermView({
     terms.set(paneId, term);
 
     let unmounted = false;
+    let applyingSeed = false;
 
     const redrawCaret = () => {
+      if (applyingSeed) return;
       term.scrollToBottom();
       term.refresh(0, Math.max(0, term.rows - 1));
     };
 
     const syncTmuxCursor = () => {
+      if (applyingSeed) return;
       void paneCursor(paneId)
         .then((pos) => {
           if (unmounted) return;
@@ -160,13 +164,21 @@ export default function XtermView({
       const bytes = toBytes(msg);
       if (!seeded) {
         seeded = true;
-        term.reset();
-        term.write(screenDumpToXterm(bytes), () => {
-          if (!unmounted) {
-            redrawCaret();
+        applyPaneSeed(
+          term,
+          bytes,
+          () => {
+            applyingSeed = false;
+            host.style.visibility = "";
+            if (unmounted) return;
+            doFitRef.current();
             syncTmuxCursor();
-          }
-        });
+          },
+          () => {
+            applyingSeed = true;
+            host.style.visibility = "hidden";
+          },
+        );
         return;
       }
       term.write(bytes);
@@ -248,7 +260,7 @@ export default function XtermView({
     let subscribed = false;
 
     const doFit = () => {
-      if (unmounted || host.clientWidth < 2 || host.clientHeight < 2) return;
+      if (applyingSeed || unmounted || host.clientWidth < 2 || host.clientHeight < 2) return;
       try {
         fit.fit();
         reportCell(term, onCellSizeRef.current);
