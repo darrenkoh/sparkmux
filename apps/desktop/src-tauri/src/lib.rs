@@ -2,6 +2,7 @@ mod commands;
 mod control;
 mod error;
 mod menu;
+mod open_url;
 mod state;
 
 use tauri::Manager;
@@ -41,6 +42,7 @@ pub fn run() {
             commands::attach_target_name,
             commands::paste_into_pane,
             commands::clipboard_write,
+            open_url::open_http_url,
         ])
         .setup(|app| {
             let menu = menu::build(app.handle())?;

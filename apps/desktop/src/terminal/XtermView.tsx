@@ -1,6 +1,7 @@
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
@@ -8,6 +9,7 @@ import "@xterm/xterm/css/xterm.css";
 
 import {
   clipboardWrite,
+  openHttpUrl,
   pasteIntoPane,
   focusPane,
   paneCursor,
@@ -69,6 +71,14 @@ export default function XtermView({
       cursorStyle: "bar",
       cursorWidth: 1.5,
       macOptionIsMeta: isMac,
+      // The default handler confirms, then calls window.open. The webview
+      // blocks that, so the click does nothing. http(s) only; other schemes
+      // are dropped here and rejected again in open_http_url.
+      linkHandler: {
+        activate(_event, uri) {
+          openTerminalLink(uri);
+        },
+      },
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
       theme: {
@@ -102,6 +112,11 @@ export default function XtermView({
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
     term.unicode.activeVersion = "11";
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        openTerminalLink(uri);
+      }),
+    );
     if (!isMac) {
       try {
         term.loadAddon(new CanvasAddon());
@@ -200,14 +215,31 @@ export default function XtermView({
       return true;
     });
 
-    const onMouse = () => {
+    let downX = 0;
+    let downY = 0;
+    let pressed = false;
+    const onMouseDown = (ev: MouseEvent) => {
+      pressed = true;
+      downX = ev.clientX;
+      downY = ev.clientY;
       onFocusRef.current(paneId);
       void focusPane(paneId);
       term.focus();
+    };
+    // xterm activates a link on mouseup of the screen element. Refreshing on
+    // mousedown clears the hovered link first, so the click never opens.
+    // Listen on window so this runs after that, including when the button is
+    // released outside the pane. A drag is a selection; leave scrollback put.
+    const onMouseUp = (ev: MouseEvent) => {
+      if (!pressed) return;
+      pressed = false;
+      const moved = Math.abs(ev.clientX - downX) + Math.abs(ev.clientY - downY) > 3;
+      if (moved || term.hasSelection()) return;
       redrawCaret();
       syncTmuxCursor();
     };
-    host.addEventListener("mousedown", onMouse);
+    host.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mouseup", onMouseUp);
 
     let lastCols = 0;
     let lastRows = 0;
@@ -259,7 +291,8 @@ export default function XtermView({
       if (seedTimer) window.clearTimeout(seedTimer);
       if (cursorTimer) window.clearTimeout(cursorTimer);
       window.clearTimeout(later);
-      host.removeEventListener("mousedown", onMouse);
+      host.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mouseup", onMouseUp);
       host.removeEventListener("paste", onPaste, true);
       ro.disconnect();
       dataDisp.dispose();
@@ -287,6 +320,12 @@ export default function XtermView({
   }, [focused]);
 
   return <div ref={hostRef} className="xterm-host" />;
+}
+
+function openTerminalLink(uri: string) {
+  void openHttpUrl(uri).catch((err: unknown) => {
+    console.warn("could not open link", err);
+  });
 }
 
 function reportCell(

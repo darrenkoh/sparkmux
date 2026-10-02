@@ -110,6 +110,10 @@ export function clipboardWrite(text: string): Promise<void> {
   return invoke("clipboard_write", { text });
 }
 
+export function openHttpUrl(url: string): Promise<void> {
+  return invoke("open_http_url", { url });
+}
+
 export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {
   if (msg instanceof ArrayBuffer) return new Uint8Array(msg);
   if (msg instanceof Uint8Array) return msg;
