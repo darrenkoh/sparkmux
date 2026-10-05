@@ -47,6 +47,7 @@ Launch `sparkmux-desktop`.
 ### After install
 
 - Quit the app **detaches**; the tmux server keeps running. Reopen to reconnect.
+- A packaged app checks for a newer signed release when it opens. **Update Now** installs that release and relaunches Sparkmux. The tmux server stays up. On Linux, installing the package can ask for permission. The check runs in a packaged build. Tagged releases sign the packages with the `TAURI_SIGNING_PRIVATE_KEY` secret.
 - Attach from any terminal: `tmux -L sparkmux attach`
 - Optional: a nerd font such as [0xProto](https://github.com/ryanoasis/nerd-fonts) improves glyph rendering.
 

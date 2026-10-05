@@ -3,6 +3,7 @@ mod control;
 mod error;
 mod menu;
 mod open_url;
+mod relaunch;
 mod state;
 
 use tauri::Manager;
@@ -14,6 +15,7 @@ use crate::state::AppState;
 pub fn run() {
     init_tracing();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::tmux_status,
@@ -43,6 +45,7 @@ pub fn run() {
             commands::paste_into_pane,
             commands::clipboard_write,
             open_url::open_http_url,
+            relaunch::relaunch_after_update,
         ])
         .setup(|app| {
             let menu = menu::build(app.handle())?;
@@ -54,6 +57,9 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if crate::relaunch::is_relaunching() {
+                    return;
+                }
                 api.prevent_close();
                 crate::menu::quit_detach(window.app_handle());
             }

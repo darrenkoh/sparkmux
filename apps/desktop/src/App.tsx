@@ -38,6 +38,8 @@ import StatusBar from "./chrome/StatusBar";
 import WindowTabs from "./chrome/WindowTabs";
 import Modal from "./dialogs/Modal";
 import Sidebar from "./sidebar/Sidebar";
+import UpdateNotice from "./update/UpdateNotice";
+import { useUpdateNotice } from "./update/useUpdateNotice";
 import TiledWindow, {
   clientSizeFromFits,
   fallbackLayout,
@@ -81,6 +83,7 @@ export default function App() {
   const [focusedPane, setFocusedPane] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const updateNotice = useUpdateNotice();
   const [failMsg, setFailMsg] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [input, setInput] = useState("");
@@ -941,6 +944,11 @@ export default function App() {
         </main>
       </div>
       <StatusBar status={status} session={attachedSession} windowName={winName} />
+      <UpdateNotice
+        phase={updateNotice.phase}
+        onUpdate={updateNotice.start}
+        onDismiss={updateNotice.dismiss}
+      />
       {toast && <div className="toast">{toast}</div>}
       {dialog?.kind === "new-session" && (
         <Modal title="New Session" onClose={() => setDialog(null)}>
