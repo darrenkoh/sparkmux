@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.14
+
+### Fixes
+
+- With text already in the console prompt, scrolling up to select earlier output stays on that text.
+
 ## 0.1.13
 
 ### Fixes
