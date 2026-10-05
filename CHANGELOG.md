@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.15
+
+### Improvements
+
+- A notice appears when a newer Sparkmux release is available. Update Now installs it and relaunches the app.
+
 ## 0.1.14
 
 ### Fixes
