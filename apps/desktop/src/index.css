@@ -758,6 +758,7 @@ body.is-resizing * {
 
 .xterm-host .xterm-viewport {
   overflow-y: auto !important;
+  overflow-anchor: none;
   background-color: transparent !important;
 }
 

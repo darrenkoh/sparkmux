@@ -21,6 +21,12 @@ import {
 import { cursorCup } from "./cursorCup";
 import { isEmulatorReport } from "./emulatorReports";
 import { applyPaneSeed } from "./paneSeed";
+import {
+  decideWheel,
+  inputFollowsPrompt,
+  viewportAtBottom,
+  type WheelContext,
+} from "./promptScroll";
 
 const isMac = navigator.userAgent.includes("Mac");
 
@@ -72,6 +78,9 @@ export default function XtermView({
       cursorStyle: "bar",
       cursorWidth: 1.5,
       macOptionIsMeta: isMac,
+      // Mouse reports and alt-screen arrow keys are user input. Following
+      // them scrolls a selection back onto the prompt.
+      scrollOnUserInput: false,
       // The default handler confirms, then calls window.open. The webview
       // blocks that, so the click does nothing. http(s) only; other schemes
       // are dropped here and rejected again in open_http_url.
@@ -132,13 +141,20 @@ export default function XtermView({
     let unmounted = false;
     let applyingSeed = false;
 
-    const redrawCaret = () => {
-      if (applyingSeed) return;
-      term.scrollToBottom();
-      term.refresh(0, Math.max(0, term.rows - 1));
+    const showCaret = (target: Terminal, forceBottom: boolean) => {
+      const buf = target.buffer.active;
+      if (forceBottom || (viewportAtBottom(buf.viewportY, buf.baseY) && !target.hasSelection())) {
+        target.scrollToBottom();
+      }
+      target.refresh(0, Math.max(0, target.rows - 1));
     };
 
-    const syncTmuxCursor = () => {
+    const redrawCaret = (forceBottom = false) => {
+      if (applyingSeed) return;
+      showCaret(term, forceBottom);
+    };
+
+    const syncTmuxCursor = (forceBottom = false) => {
       if (applyingSeed) return;
       void paneCursor(paneId)
         .then((pos) => {
@@ -146,8 +162,7 @@ export default function XtermView({
           const live = termRef.current;
           if (!live) return;
           live.write(cursorCup(pos.y, pos.x), () => {
-            live.scrollToBottom();
-            live.refresh(0, Math.max(0, live.rows - 1));
+            showCaret(live, forceBottom);
           });
         })
         .catch(() => {
@@ -188,6 +203,9 @@ export default function XtermView({
       // tmux already answered the query that produced this. A second reply
       // is typed into the select prompt and the options redraw out of order.
       if (isEmulatorReport(data)) return;
+      // Letters and editing keys reveal the prompt. Wheel, mouse, and arrows
+      // must not, or a scroll-to-select snaps back down.
+      if (inputFollowsPrompt(data) && !term.hasSelection()) term.scrollToBottom();
       const bytes = Array.from(new TextEncoder().encode(data));
       void paneWrite(paneId, bytes);
     });
@@ -206,6 +224,31 @@ export default function XtermView({
       pasteNow();
     };
     host.addEventListener("paste", onPaste, true);
+
+    // Page Up/Down while a draft is showing. A trackpad emits a wheel event
+    // per frame; one page per event would fly through the transcript.
+    let pageLines = 0;
+    let lastPageAt = 0;
+    term.attachCustomWheelEventHandler((ev) => {
+      const decision = decideWheel(wheelContext(term, ev));
+      if (decision.kind === "passthrough") return true;
+      if (decision.kind === "scroll") {
+        term.scrollLines(decision.lines);
+      } else {
+        pageLines += decision.lines;
+        const now = performance.now();
+        if (pageLines !== 0 && now - lastPageAt >= 48) {
+          const key = pageLines < 0 ? "\x1b[5~" : "\x1b[6~";
+          const pages = Math.min(2, Math.max(1, Math.round(Math.abs(pageLines) / 12)));
+          term.input(key.repeat(pages), false);
+          pageLines = 0;
+          lastPageAt = now;
+        }
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      return false;
+    });
 
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
@@ -247,8 +290,8 @@ export default function XtermView({
       pressed = false;
       const moved = Math.abs(ev.clientX - downX) + Math.abs(ev.clientY - downY) > 3;
       if (moved || term.hasSelection()) return;
-      redrawCaret();
-      syncTmuxCursor();
+      redrawCaret(true);
+      syncTmuxCursor(true);
     };
     host.addEventListener("mousedown", onMouseDown);
     window.addEventListener("mouseup", onMouseUp);
@@ -332,6 +375,35 @@ export default function XtermView({
   }, [focused]);
 
   return <div ref={hostRef} className="xterm-host" />;
+}
+
+function wheelContext(term: Terminal, ev: WheelEvent): WheelContext {
+  const buf = term.buffer.active;
+  const cursorLine = buf.getLine(buf.baseY + buf.cursorY)?.translateToString(true) ?? "";
+  const mode = term.modes?.mouseTrackingMode;
+  return {
+    alt: buf.type === "alternate",
+    mouseWheel: mode === "vt200" || mode === "drag" || mode === "any",
+    baseY: buf.baseY,
+    rows: term.rows,
+    cursorY: buf.cursorY,
+    cursorX: buf.cursorX,
+    cursorLine,
+    deltaY: ev.deltaY,
+    deltaMode: ev.deltaMode,
+    shiftKey: ev.shiftKey,
+    rowHeight: cellHeight(term),
+  };
+}
+
+function cellHeight(term: Terminal): number {
+  const core = term as unknown as {
+    _core?: {
+      _renderService?: { dimensions?: { css?: { cell?: { height: number } } } };
+    };
+  };
+  const height = core._core?._renderService?.dimensions?.css?.cell?.height;
+  return height && height > 0 ? height : 16;
 }
 
 function openTerminalLink(uri: string) {
