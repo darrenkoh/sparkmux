@@ -19,7 +19,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
       - name: macOS tmux
         if: runner.os == 'macOS'
-        run: brew install tmux
+        run: brew install tmux cmake
       - name: Linux tmux and WebKitGTK
         if: runner.os == 'Linux'
         run: |
@@ -32,6 +32,8 @@ jobs:
             librsvg2-dev \
             libssl-dev \
             pkg-config \
-            libxdo-dev
+            libxdo-dev \
+            cmake \
+            build-essential
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings

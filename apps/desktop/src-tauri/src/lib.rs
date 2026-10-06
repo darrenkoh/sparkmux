@@ -1,6 +1,8 @@
 mod commands;
 mod control;
 mod error;
+mod helper;
+mod helper_model;
 mod menu;
 mod open_url;
 mod relaunch;
@@ -44,12 +46,17 @@ pub fn run() {
             commands::attach_target_name,
             commands::paste_into_pane,
             commands::clipboard_write,
+            helper::command_helper_status,
+            helper::enable_command_helper,
+            helper::disable_command_helper,
+            helper::suggest_shell_command,
             open_url::open_http_url,
             relaunch::relaunch_after_update,
         ])
         .setup(|app| {
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;
+            menu::set_command_helper_label(app.handle(), helper::command_helper_status().enabled);
             Ok(())
         })
         .on_menu_event(|app, event| {

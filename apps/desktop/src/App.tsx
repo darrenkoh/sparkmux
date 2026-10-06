@@ -4,7 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   attachTargetName,
   clipboardWrite,
+  commandHelperStatus,
+  disableCommandHelper,
+  enableCommandHelper,
   pasteIntoPane,
+  paneWrite,
+  suggestShellCommand,
   controlConnect,
   ensureReady,
   focusPane,
@@ -45,6 +50,15 @@ import TiledWindow, {
   fallbackLayout,
 } from "./terminal/TiledWindow";
 import { getTerm } from "./terminal/XtermView";
+import {
+  focusedShell,
+  insertPayload,
+  invokeError,
+  isDestructive,
+  licenseNotice,
+  shellEligible,
+  usageText,
+} from "./terminal/commandHelper";
 import type {
   GuiError,
   LayoutNode,
@@ -61,7 +75,10 @@ type Dialog =
   | { kind: "close-tab"; id: string; name: string; last: boolean; session: string }
   | { kind: "close-session"; name: string; tabs: number }
   | { kind: "stop"; socket: string; count: number }
-  | { kind: "help" };
+  | { kind: "help" }
+  | { kind: "helper-enabling" }
+  | { kind: "helper-ask" }
+  | { kind: "helper-refused"; message: string };
 
 function namedSession(name: string | null | undefined): string | null {
   const trimmed = name?.trim() ?? "";
@@ -87,6 +104,12 @@ export default function App() {
   const [failMsg, setFailMsg] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [input, setInput] = useState("");
+  const [helperOn, setHelperOn] = useState(false);
+  const [helperBusy, setHelperBusy] = useState(false);
+  const helperBusyRef = useRef(false);
+  const helperOnRef = useRef(false);
+  const askGenRef = useRef(0);
+  helperOnRef.current = helperOn;
   const hostRef = useRef<HTMLDivElement>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const raw = Number(window.localStorage.getItem("sparkmux.sidebarWidth"));
@@ -115,6 +138,12 @@ export default function App() {
   const errorRef = useRef<GuiError>(null);
   const chromeFocus = useRef<"sidebar" | "terminal">("terminal");
   const selectionRef = useRef<Selection | null>(null);
+
+  useEffect(() => {
+    void commandHelperStatus()
+      .then((status) => setHelperOn(status.enabled))
+      .catch(() => setHelperOn(false));
+  }, []);
 
   useEffect(() => {
     attachedRef.current = attachedSession;
@@ -506,6 +535,12 @@ export default function App() {
         case "help":
           setDialog({ kind: "help" });
           break;
+        case "enable-command-helper": {
+          if (helperBusyRef.current) break;
+          if (helperOnRef.current) await turnHelperOff();
+          else await turnHelperOn();
+          break;
+        }
         default:
           break;
       }
@@ -774,6 +809,9 @@ export default function App() {
   const attached = snap.sessions.find((s) => s.name === attachedSession);
   const visibleWin = attached?.windows.find((w) => w.id === visibleWindowId);
   const winName = visibleWin?.name ?? null;
+  const shellNow = focusedShell(snap, focusedPane);
+  const offerAsk =
+    helperOn && shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
   const showTiles = !error && !empty && layout && attachedSession;
 
   return (
@@ -943,7 +981,19 @@ export default function App() {
           )}
         </main>
       </div>
-      <StatusBar status={status} session={attachedSession} windowName={winName} />
+      <StatusBar
+        status={status}
+        session={attachedSession}
+        windowName={winName}
+        onAsk={
+          offerAsk
+            ? () => {
+                setInput("");
+                setDialog({ kind: "helper-ask" });
+              }
+            : undefined
+        }
+      />
       <UpdateNotice
         phase={updateNotice.phase}
         onUpdate={updateNotice.start}
@@ -1110,6 +1160,129 @@ export default function App() {
           </div>
         </Modal>
       )}
+      {dialog?.kind === "helper-enabling" && (
+        <Modal title="Command helper" onClose={() => {}}>
+          <p>Downloading the command helper.</p>
+          <div className="helper-progress" role="progressbar" aria-label="Downloading">
+            <span />
+          </div>
+          <p className="hint">{licenseNotice()}</p>
+        </Modal>
+      )}
+      {dialog?.kind === "helper-refused" && (
+        <Modal title="Command helper" onClose={() => setDialog(null)}>
+          <p>{dialog.message}</p>
+          <div className="modal-actions">
+            <button className="primary" onClick={() => setDialog(null)}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === "helper-ask" && (
+        <Modal title="Ask for a command" onClose={() => cancelAsk()}>
+          <p className="hint">{usageText()}</p>
+          <input
+            autoFocus
+            value={input}
+            placeholder="find files named notes.txt"
+            disabled={helperBusy}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void submitAsk();
+              if (e.key === "Escape") cancelAsk();
+            }}
+          />
+          {helperBusy && (
+            <>
+              <p>Writing a command.</p>
+              <div className="helper-progress" role="progressbar" aria-label="Writing a command">
+                <span />
+              </div>
+            </>
+          )}
+          <div className="modal-actions">
+            <button onClick={() => cancelAsk()}>Cancel</button>
+            <button className="primary" onClick={() => void submitAsk()} disabled={helperBusy}>
+              Write command
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
+
+  function cancelAsk() {
+    askGenRef.current += 1;
+    helperBusyRef.current = false;
+    setHelperBusy(false);
+    setDialog(null);
+  }
+
+  async function turnHelperOn() {
+    helperBusyRef.current = true;
+    setHelperBusy(true);
+    setDialog({ kind: "helper-enabling" });
+    try {
+      const enabled = await enableCommandHelper();
+      setHelperOn(enabled.enabled);
+      setDialog(null);
+      showToast("Command helper is on.");
+    } catch (err) {
+      setDialog({ kind: "helper-refused", message: invokeError(err) });
+    } finally {
+      helperBusyRef.current = false;
+      setHelperBusy(false);
+    }
+  }
+
+  async function turnHelperOff() {
+    askGenRef.current += 1;
+    helperBusyRef.current = true;
+    setHelperBusy(true);
+    setDialog(null);
+    try {
+      const disabled = await disableCommandHelper();
+      setHelperOn(disabled.enabled);
+      showToast("Command helper is off.");
+    } catch (err) {
+      setDialog({ kind: "helper-refused", message: invokeError(err) });
+    } finally {
+      helperBusyRef.current = false;
+      setHelperBusy(false);
+    }
+  }
+
+  async function submitAsk() {
+    const request = input.trim();
+    if (!request || helperBusyRef.current) return;
+    const pane = focusedRef.current;
+    const shell = focusedShell(snapRef.current, pane);
+    if (!pane || !shell || !shellEligible(shell.command, shell.alternate)) {
+      showToast("Ask is only available at a bare shell");
+      return;
+    }
+    const gen = askGenRef.current + 1;
+    askGenRef.current = gen;
+    helperBusyRef.current = true;
+    setHelperBusy(true);
+    try {
+      const suggestion = await suggestShellCommand(request, shell.command, shell.alternate);
+      if (askGenRef.current !== gen) return;
+      await paneWrite(pane, insertPayload(suggestion.command));
+      setDialog(null);
+      setInput("");
+      if (suggestion.destructive || isDestructive(suggestion.command)) {
+        showToast("This deletes or overwrites files. It is in the pane. You run it.");
+      }
+    } catch (err) {
+      if (askGenRef.current !== gen) return;
+      showToast(invokeError(err));
+    } finally {
+      if (askGenRef.current === gen) {
+        helperBusyRef.current = false;
+        setHelperBusy(false);
+      }
+    }
+  }
 }

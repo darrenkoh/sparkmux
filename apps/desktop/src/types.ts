@@ -23,6 +23,7 @@ export interface Pane {
   width: number;
   height: number;
   title: string;
+  alternate: boolean;
 }
 
 export interface Window {

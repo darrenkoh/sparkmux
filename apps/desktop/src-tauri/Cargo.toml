@@ -30,3 +30,7 @@ directories = "6"
 arboard = "3"
 url = "2"
 tauri-plugin-updater = "2"
+toml = { workspace = true }
+libc = "0.2"
+ureq = "2"
+llama-cpp-2 = "=0.1.158"

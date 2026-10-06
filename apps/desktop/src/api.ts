@@ -114,6 +114,38 @@ export function openHttpUrl(url: string): Promise<void> {
   return invoke("open_http_url", { url });
 }
 
+export interface HelperStatus {
+  enabled: boolean;
+  weight_path: string | null;
+  usage: string;
+}
+
+export interface ShellSuggestion {
+  command: string;
+  destructive: boolean;
+  raw: string;
+}
+
+export function commandHelperStatus(): Promise<HelperStatus> {
+  return invoke("command_helper_status");
+}
+
+export function enableCommandHelper(): Promise<HelperStatus> {
+  return invoke("enable_command_helper");
+}
+
+export function disableCommandHelper(): Promise<HelperStatus> {
+  return invoke("disable_command_helper");
+}
+
+export function suggestShellCommand(
+  request: string,
+  shell: string,
+  alternate: boolean,
+): Promise<ShellSuggestion> {
+  return invoke("suggest_shell_command", { request, shell, alternate });
+}
+
 export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {
   if (msg instanceof ArrayBuffer) return new Uint8Array(msg);
   if (msg instanceof Uint8Array) return msg;

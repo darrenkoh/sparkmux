@@ -32,7 +32,8 @@ pub const PANE_FMT: &str = concat!(
     "#{s/@@@/_/:pane_current_command}@@@",
     "#{s/@@@/_/:pane_current_path}@@@",
     "#{pane_pid}@@@#{pane_active}@@@#{pane_width}@@@#{pane_height}@@@",
-    "#{s/@@@/_/:pane_title}",
+    "#{s/@@@/_/:pane_title}@@@",
+    "#{alternate_on}",
 );
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +86,8 @@ pub struct Pane {
     pub width: u16,
     pub height: u16,
     pub title: String,
+    /// True while the pane is on the alternate screen (vim, less, agent TUIs).
+    pub alternate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,6 +287,7 @@ fn parse_panes(blob: &str) -> Result<Vec<RawPane>> {
                 width: parse_u16(field(&f, 8)),
                 height: parse_u16(field(&f, 9)),
                 title: field(&f, 10).to_string(),
+                alternate: parse_flag(field(&f, 11)),
             },
         });
     }
@@ -621,7 +625,23 @@ mod tests {
             width: 0,
             height: 0,
             title: String::new(),
+            alternate: false,
         }
+    }
+
+    #[test]
+    fn pane_alternate_screen_comes_from_the_flag() {
+        let on = "$0@@@$0@@@%0@@@0@@@vim@@@/tmp@@@1@@@1@@@80@@@24@@@title@@@1\n";
+        let off = "$0@@@$0@@@%1@@@0@@@zsh@@@/tmp@@@1@@@1@@@80@@@24@@@title@@@0\n";
+        let snap = parse_snapshot(
+            "$0@@@s@@@0@@@1@@@1@@@1@@@/\n",
+            "$0@@@$0@@@0@@@w@@@1@@@1@@@l@@@0@@@0\n",
+            &format!("{on}{off}"),
+        )
+        .unwrap();
+        let panes = &snap.sessions[0].windows[0].panes;
+        assert!(panes[0].alternate);
+        assert!(!panes[1].alternate);
     }
 
     #[test]

@@ -47,7 +47,11 @@ jobs:
             file \
             libxdo-dev \
             pkg-config \
-            tmux
+            tmux \
+            cmake
+      - name: macOS cmake
+        if: runner.os == 'macOS'
+        run: brew install cmake
       - name: Frontend deps
         working-directory: apps/desktop
         run: npm ci

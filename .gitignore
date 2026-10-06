@@ -1,6 +1,7 @@
 /target
 .idea
 .DS_Store
+*.gguf
 *.swp
 *.swo
 apps/desktop/dist
