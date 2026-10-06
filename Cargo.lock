@@ -3725,7 +3725,7 @@ dependencies = [
 
 [[package]]
 name = "sparkmux"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "clap",
  "color-eyre",
@@ -3737,7 +3737,7 @@ dependencies = [
 
 [[package]]
 name = "sparkmux-core"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "directories",
  "serde",
@@ -3749,7 +3749,7 @@ dependencies = [
 
 [[package]]
 name = "sparkmux-desktop"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "arboard",
  "directories",

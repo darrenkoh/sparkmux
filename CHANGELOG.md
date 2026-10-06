@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.17
+
+### Fixes
+
+- Ask stays on the bottom panel after Command Helper is turned on.
+- A content search looks for the word itself, not the quotes around it.
+
 ## 0.1.16
 
 ### Improvements
