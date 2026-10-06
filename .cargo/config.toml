@@ -4,3 +4,5 @@
 [env]
 DEVELOPER_DIR = { value = "/Library/Developer/CommandLineTools", force = true }
 SDKROOT = { value = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk", force = true }
+# CPU only. A Metal build links MTLResidencySetDescriptor, which macOS 14 does not have.
+GGML_METAL = { value = "OFF", force = true }
