@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16
+
+### Improvements
+
+- Command Helper can be turned on from the Sparkmux menu. It downloads a local model once from GitHub.
+- Ask, on the right of the bottom panel, takes a plain-language request and inserts one shell command. You run it. It is offered only at a normal shell.
+
 ## 0.1.15
 
 ### Improvements
