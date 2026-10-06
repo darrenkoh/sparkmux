@@ -598,16 +598,68 @@ pub fn quote_find_globs(command: &str) -> String {
 /// A content question answered with `find -name` searches the wrong thing.
 /// List the files whose contents match instead.
 pub fn align_content_search(request: &str, command: &str) -> String {
-    if !asks_for_file_content(request) || command.split_whitespace().next() == Some("grep") {
+    if !asks_for_file_content(request) {
         return command.to_string();
+    }
+    if command.split_whitespace().next() == Some("grep") {
+        return normalize_grep_pattern(command);
     }
     let Some(needle) = find_name_argument(command).or_else(|| content_needle(request)) else {
         return command.to_string();
     };
+    let needle = strip_all_quotes(&needle);
     if needle.is_empty() {
         return command.to_string();
     }
     format!("grep -l -F -R -- {} .", shell_word(&needle))
+}
+
+/// The quotes in the request mark the word. They are not part of the text to find.
+fn normalize_grep_pattern(command: &str) -> String {
+    let mut tokens = shell_tokens(command);
+    let mut index = 1;
+    let mut pattern_at = None;
+    while index < tokens.len() {
+        let token = &tokens[index];
+        if token == "--" {
+            pattern_at = Some(index + 1);
+            break;
+        }
+        if token.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        pattern_at = Some(index);
+        break;
+    }
+    let Some(at) = pattern_at else {
+        return command.to_string();
+    };
+    let Some(pattern) = tokens.get(at) else {
+        return command.to_string();
+    };
+    let bare = strip_all_quotes(pattern);
+    if bare.is_empty() {
+        return command.to_string();
+    }
+    tokens[at] = shell_word(&bare);
+    tokens.join(" ")
+}
+
+fn strip_all_quotes(token: &str) -> String {
+    let mut out = token.trim().to_string();
+    loop {
+        let bytes = out.as_bytes();
+        if bytes.len() >= 2
+            && ((bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+                || (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"'))
+        {
+            out = out[1..out.len() - 1].to_string();
+            continue;
+        }
+        break;
+    }
+    out
 }
 
 fn asks_for_file_content(request: &str) -> bool {
@@ -1235,6 +1287,24 @@ mod tests {
                 "grep -R TODO .",
             ),
             "grep -R TODO ."
+        );
+        assert_eq!(
+            align_content_search("find file with content \"box\"", "grep -l -F -R -- 'box' .",),
+            "grep -l -F -R -- box ."
+        );
+        assert_eq!(
+            align_content_search(
+                "find file with content \"box\"",
+                "grep -l -F -R -- ''box'' .",
+            ),
+            "grep -l -F -R -- box ."
+        );
+        assert_eq!(
+            align_content_search(
+                "find file with content \"box\"",
+                "grep -l -F -R -- \"box\" .",
+            ),
+            "grep -l -F -R -- box ."
         );
     }
 

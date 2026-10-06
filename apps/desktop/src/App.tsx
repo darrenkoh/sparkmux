@@ -810,8 +810,8 @@ export default function App() {
   const visibleWin = attached?.windows.find((w) => w.id === visibleWindowId);
   const winName = visibleWin?.name ?? null;
   const shellNow = focusedShell(snap, focusedPane);
-  const offerAsk =
-    helperOn && shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
+  const shellReady = shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
+  const offerAsk = helperOn;
   const showTiles = !error && !empty && layout && attachedSession;
 
   return (
@@ -1182,11 +1182,14 @@ export default function App() {
       {dialog?.kind === "helper-ask" && (
         <Modal title="Ask for a command" onClose={() => cancelAsk()}>
           <p className="hint">{usageText()}</p>
+          {!shellReady && (
+            <p>Ask inserts a command into a normal shell. This pane is not one.</p>
+          )}
           <input
             autoFocus
             value={input}
             placeholder="find files named notes.txt"
-            disabled={helperBusy}
+            disabled={helperBusy || !shellReady}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") void submitAsk();
@@ -1203,7 +1206,11 @@ export default function App() {
           )}
           <div className="modal-actions">
             <button onClick={() => cancelAsk()}>Cancel</button>
-            <button className="primary" onClick={() => void submitAsk()} disabled={helperBusy}>
+            <button
+              className="primary"
+              onClick={() => void submitAsk()}
+              disabled={helperBusy || !shellReady}
+            >
               Write command
             </button>
           </div>

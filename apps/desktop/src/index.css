@@ -846,12 +846,13 @@ body.is-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: transparent;
+  background: #1a1e26;
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: var(--radius);
   padding: 2px 8px;
   cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .status-ask svg {
