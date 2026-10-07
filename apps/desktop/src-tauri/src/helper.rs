@@ -13,6 +13,8 @@ use tauri::AppHandle;
 /// Apache-2.0, Copyright 2024 Alibaba Cloud. Unmodified from the Qwen Hugging Face repo.
 pub const WEIGHT_URL: &str = "https://github.com/darrenkoh/sparkmux/releases/download/model-qwen2.5-coder-1.5b/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf";
 pub const WEIGHT_NAME: &str = "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf";
+/// Name shown for the command helper. The weight file is this model, unmodified.
+pub const MODEL_NAME: &str = "Qwen2.5-Coder-1.5B-Instruct";
 /// Byte size of that exact Q4_K_M file.
 pub const WEIGHT_BYTES: u64 = 1_117_320_768;
 pub const MIN_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -312,6 +314,16 @@ pub struct Suggestion {
 static GENERATOR: std::sync::Mutex<Option<crate::helper_model::ShellGenerator>> =
     std::sync::Mutex::new(None);
 static ENABLE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// True when the weights are in this process. A generate call holds the same
+/// lock, and that also means the model is loaded.
+pub fn command_helper_loaded() -> bool {
+    match GENERATOR.try_lock() {
+        Ok(slot) => slot.is_some(),
+        Err(std::sync::TryLockError::WouldBlock) => true,
+        Err(std::sync::TryLockError::Poisoned(guard)) => guard.into_inner().is_some(),
+    }
+}
 
 #[tauri::command]
 pub fn command_helper_status() -> HelperStatus {

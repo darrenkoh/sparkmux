@@ -1,9 +1,11 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   attachTargetName,
   clipboardWrite,
+  appTelemetry,
   commandHelperStatus,
   disableCommandHelper,
   enableCommandHelper,
@@ -40,11 +42,18 @@ import Splitter, {
   SIDEBAR_MIN,
 } from "./chrome/Splitter";
 import StatusBar from "./chrome/StatusBar";
+import { formatCpu, formatMemory, helperStateText, modelText } from "./chrome/telemetry";
 import WindowTabs from "./chrome/WindowTabs";
 import Modal from "./dialogs/Modal";
 import Sidebar from "./sidebar/Sidebar";
 import UpdateNotice from "./update/UpdateNotice";
 import { useUpdateNotice } from "./update/useUpdateNotice";
+import {
+  charBeforeCursor,
+  clientPointFromDrop,
+  insertDroppedPaths,
+  paneIdFromHit,
+} from "./terminal/fileDrop";
 import TiledWindow, {
   clientSizeFromFits,
   fallbackLayout,
@@ -66,6 +75,7 @@ import type {
   Snapshot,
   TmuxStatus,
   Window as TmuxWindow,
+  AppTelemetry,
 } from "./types";
 
 type Dialog =
@@ -98,6 +108,7 @@ export default function App() {
   const [visibleWindowId, setVisibleWindowId] = useState<string | null>(null);
   const [layout, setLayout] = useState<LayoutNode | null>(null);
   const [focusedPane, setFocusedPane] = useState<string | null>(null);
+  const [dropPane, setDropPane] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const updateNotice = useUpdateNotice();
@@ -105,6 +116,7 @@ export default function App() {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [input, setInput] = useState("");
   const [helperOn, setHelperOn] = useState(false);
+  const [telemetry, setTelemetry] = useState<AppTelemetry | null>(null);
   const [helperBusy, setHelperBusy] = useState(false);
   const helperBusyRef = useRef(false);
   const helperOnRef = useRef(false);
@@ -145,6 +157,18 @@ export default function App() {
       .catch(() => setHelperOn(false));
   }, []);
 
+  const refreshTelemetry = useCallback(() => {
+    void appTelemetry()
+      .then((next) => setTelemetry(next))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshTelemetry();
+    const id = window.setInterval(refreshTelemetry, 1000);
+    return () => window.clearInterval(id);
+  }, [refreshTelemetry]);
+
   useEffect(() => {
     attachedRef.current = attachedSession;
   }, [attachedSession]);
@@ -180,6 +204,33 @@ export default function App() {
     setToast(msg);
     window.setTimeout(() => setToast(null), 4000);
   }, []);
+
+  const onFileDropRef = useRef<(paneId: string, paths: readonly string[]) => void>(() => {});
+
+  function focusTerminalPane(id: string) {
+    chromeFocus.current = "terminal";
+    setFocusedPane(id);
+    const sess = snapRef.current.sessions.find((s) => s.name === attachedRef.current);
+    const win = sess?.windows.find((w) => w.id === visibleRef.current);
+    setSelection({
+      kind: "pane",
+      id,
+      sessionName: attachedRef.current ?? "",
+      windowId: win?.id ?? "",
+    });
+  }
+
+  onFileDropRef.current = (paneId, paths) => {
+    focusTerminalPane(paneId);
+    void focusPane(paneId);
+    const term = getTerm(paneId);
+    if (!term) return;
+    try {
+      insertDroppedPaths(term, paths, charBeforeCursor(term.buffer.active));
+    } catch (err) {
+      showToast(String(err));
+    }
+  };
 
   const pixelClientSize = useCallback(() => {
     const cw = cellRef.current.w || 8.4;
@@ -457,6 +508,43 @@ export default function App() {
       un.forEach((p) => {
         void p.then((fn) => fn());
       });
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "leave") {
+          setDropPane(null);
+          return;
+        }
+        const point = clientPointFromDrop(payload.position, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+          devicePixelRatio: window.devicePixelRatio || 1,
+        });
+        const paneId = paneIdFromHit(document.elementFromPoint(point.x, point.y));
+        if (payload.type === "drop") {
+          setDropPane(null);
+          if (paneId) onFileDropRef.current(paneId, payload.paths);
+          return;
+        }
+        setDropPane(paneId);
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {
+        /* The page is open outside the desktop shell. */
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+      setDropPane(null);
     };
   }, []);
 
@@ -941,21 +1029,9 @@ export default function App() {
                 <TiledWindow
                   node={layout}
                   focusedPane={focusedPane}
+                  dropTarget={dropPane}
                   fontSize={fontSize}
-                  onFocus={(id) => {
-                    chromeFocus.current = "terminal";
-                    setFocusedPane(id);
-                    const sess = snapRef.current.sessions.find(
-                      (s) => s.name === attachedRef.current,
-                    );
-                    const win = sess?.windows.find((w) => w.id === visibleRef.current);
-                    setSelection({
-                      kind: "pane",
-                      id,
-                      sessionName: attachedRef.current ?? "",
-                      windowId: win?.id ?? "",
-                    });
-                  }}
+                  onFocus={focusTerminalPane}
                   onCellSize={(paneId, w, h, cols, rows) => {
                     if (w > 0 && h > 0) {
                       cellRef.current = { w, h };
@@ -985,6 +1061,7 @@ export default function App() {
         status={status}
         session={attachedSession}
         windowName={winName}
+        telemetry={telemetry}
         onAsk={
           offerAsk
             ? () => {
@@ -1120,6 +1197,24 @@ export default function App() {
           <p>
             Desktop {status?.app_version ?? "0.1.0"} · {status?.version ?? "tmux unknown"}
           </p>
+          <dl className="help-keys">
+            <dt>Helper</dt>
+            <dd>{helperStateText(telemetry)}</dd>
+            <dt>Model</dt>
+            <dd>{modelText(telemetry)}</dd>
+            <dt>Memory</dt>
+            <dd>
+              {telemetry && telemetry.memory_bytes > 0
+                ? `${formatMemory(telemetry.memory_bytes)} of Sparkmux`
+                : "—"}
+            </dd>
+            <dt>CPU</dt>
+            <dd>
+              {telemetry && telemetry.cpu_percent != null
+                ? `${formatCpu(telemetry.cpu_percent)} of Sparkmux`
+                : "—"}
+            </dd>
+          </dl>
           <p>
             This window owns a <strong>private</strong> tmux server (
             <code>-L {status?.socket_name ?? "sparkmux"}</code>
@@ -1141,6 +1236,8 @@ export default function App() {
             <dd>⌘W / tab × (asks first)</dd>
             <dt>Copy / paste</dt>
             <dd>⌘C ⌘V / Ctrl+Shift+V</dd>
+            <dt>Drop a file</dt>
+            <dd>Pastes its path into the prompt</dd>
             <dt>Split</dt>
             <dd>⌘D and ⇧⌘D (macOS)</dd>
             <dt>Text size</dt>
@@ -1233,6 +1330,7 @@ export default function App() {
     try {
       const enabled = await enableCommandHelper();
       setHelperOn(enabled.enabled);
+      refreshTelemetry();
       setDialog(null);
       showToast("Command helper is on.");
     } catch (err) {
@@ -1251,6 +1349,7 @@ export default function App() {
     try {
       const disabled = await disableCommandHelper();
       setHelperOn(disabled.enabled);
+      refreshTelemetry();
       showToast("Command helper is off.");
     } catch (err) {
       setDialog({ kind: "helper-refused", message: invokeError(err) });
@@ -1282,6 +1381,7 @@ export default function App() {
       if (suggestion.destructive || isDestructive(suggestion.command)) {
         showToast("This deletes or overwrites files. It is in the pane. You run it.");
       }
+      refreshTelemetry();
     } catch (err) {
       if (askGenRef.current !== gen) return;
       showToast(invokeError(err));

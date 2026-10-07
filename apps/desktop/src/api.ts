@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import type { LayoutChangePayload, LayoutNode, Snapshot, TmuxStatus } from "./types";
+import type { AppTelemetry, LayoutChangePayload, LayoutNode, Snapshot, TmuxStatus } from "./types";
 
 export function tmuxStatus(): Promise<TmuxStatus> {
   return invoke("tmux_status");
@@ -128,6 +128,10 @@ export interface ShellSuggestion {
 
 export function commandHelperStatus(): Promise<HelperStatus> {
   return invoke("command_helper_status");
+}
+
+export function appTelemetry(): Promise<AppTelemetry> {
+  return invoke("app_telemetry");
 }
 
 export function enableCommandHelper(): Promise<HelperStatus> {

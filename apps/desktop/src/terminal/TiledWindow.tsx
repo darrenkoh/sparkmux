@@ -4,12 +4,14 @@ import XtermView from "./XtermView";
 export default function TiledWindow({
   node,
   focusedPane,
+  dropTarget,
   onFocus,
   onCellSize,
   fontSize,
 }: {
   node: LayoutNode;
   focusedPane: string | null;
+  dropTarget: string | null;
   onFocus: (paneId: string) => void;
   onCellSize?: (
     paneId: string,
@@ -23,8 +25,13 @@ export default function TiledWindow({
   if ("Pane" in node) {
     const paneId = `%${node.Pane.pane_id}`;
     const focused = focusedPane === paneId;
+    const dropping = dropTarget === paneId;
     return (
-      <div key={paneId} className={`tile-leaf pane-frame ${focused ? "focused" : ""}`}>
+      <div
+        key={paneId}
+        data-pane-id={paneId}
+        className={`tile-leaf pane-frame${focused ? " focused" : ""}${dropping ? " drop-target" : ""}`}
+      >
         <XtermView
           key={paneId}
           paneId={paneId}
@@ -57,6 +64,7 @@ export default function TiledWindow({
             <TiledWindow
               node={child}
               focusedPane={focusedPane}
+              dropTarget={dropTarget}
               onFocus={onFocus}
               onCellSize={onCellSize}
               fontSize={fontSize}

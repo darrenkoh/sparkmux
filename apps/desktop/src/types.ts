@@ -51,6 +51,14 @@ export interface Snapshot {
   sessions: Session[];
 }
 
+export interface AppTelemetry {
+  memory_bytes: number;
+  cpu_percent: number | null;
+  helper_enabled: boolean;
+  model_name: string;
+  model_loaded: boolean;
+}
+
 export interface TmuxStatus {
   bin: string | null;
   version: string | null;

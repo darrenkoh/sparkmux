@@ -7,6 +7,7 @@ mod menu;
 mod open_url;
 mod relaunch;
 mod state;
+mod telemetry;
 
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
@@ -50,6 +51,7 @@ pub fn run() {
             helper::enable_command_helper,
             helper::disable_command_helper,
             helper::suggest_shell_command,
+            telemetry::app_telemetry,
             open_url::open_http_url,
             relaunch::relaunch_after_update,
         ])
