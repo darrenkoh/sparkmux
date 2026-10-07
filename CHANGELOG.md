@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.18
+
+### Improvements
+
+- Dropping a file or folder on a console pastes its path into the prompt. The prompt is not submitted.
+- The bottom panel shows the Command Helper model, and Sparkmux memory and CPU use. Sparkmux Help shows the same figures.
+
 ## 0.1.17
 
 ### Fixes
