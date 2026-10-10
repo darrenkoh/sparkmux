@@ -26,6 +26,7 @@ export default function ArtifactPanel({
   pid,
   onCollapse,
   onOpenAnalytics,
+  isDocked = false,
 }: {
   command: string;
   cwd: string;
@@ -33,6 +34,7 @@ export default function ArtifactPanel({
   pid: number;
   onCollapse: () => void;
   onOpenAnalytics?: () => void;
+  isDocked?: boolean;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
   const [clears, setClears] = useState<ClearMap>(() => loadClears());
@@ -126,7 +128,7 @@ export default function ArtifactPanel({
 
   return (
     <aside
-      className="artifact-panel"
+      className={`artifact-panel${isDocked ? " docked" : ""}`}
       aria-label="Agent output"
       onMouseDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}

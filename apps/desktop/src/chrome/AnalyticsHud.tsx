@@ -18,6 +18,7 @@ export interface AnalyticsHudProps {
   title: string;
   pid: number;
   onClose: () => void;
+  onDock?: () => void;
 }
 
 export { formatBytes, formatNum, formatMs };
@@ -31,6 +32,7 @@ export default function AnalyticsHud({
   title,
   pid,
   onClose,
+  onDock,
 }: AnalyticsHudProps) {
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
   const [clearing, setClearing] = useState(false);
@@ -264,6 +266,17 @@ export default function AnalyticsHud({
                 title="Wipe all captured telemetry from disk"
               >
                 PURGE DATA
+              </button>
+            )}
+
+            {onDock && (
+              <button
+                type="button"
+                className="scifi-btn"
+                onClick={onDock}
+                title="Dock area map to the bottom right panel"
+              >
+                ⇲ DOCK
               </button>
             )}
 

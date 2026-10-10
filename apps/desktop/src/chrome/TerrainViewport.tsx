@@ -7,6 +7,9 @@ interface TerrainViewportProps {
   sessionName?: string;
   tabName?: string;
   stats?: TabAnalyticsStats | null;
+  docked?: boolean;
+  onExpand?: () => void;
+  onClose?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +196,9 @@ export default function TerrainViewport({
   sessionName,
   tabName,
   stats,
+  docked = false,
+  onExpand,
+  onClose,
 }: TerrainViewportProps) {
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -206,11 +212,16 @@ export default function TerrainViewport({
   timelineRef.current = timeline;
 
   useEffect(() => {
-    autoRotateRef.current = autoRotate;
-  }, [autoRotate]);
+    if (docked) {
+      autoRotateRef.current = true;
+      setAutoRotate(true);
+    } else {
+      autoRotateRef.current = autoRotate;
+    }
+  }, [autoRotate, docked]);
 
   // Fingerprint data structure so routine polling doesn't restart WebGL or loop
-  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${realism}`;
+  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${realism}:${docked ? "1" : "0"}`;
 
   useEffect(() => {
     const glCanvas = glCanvasRef.current;
@@ -535,9 +546,17 @@ export default function TerrainViewport({
     const vaoBaseGrid = createLineVAO(baseGridVerts);
 
     // -------------------------------------------------------------------------
-    // 3. Trajectory Trail Across Peaks (Connecting Active Milestones)
+    // 3. Trajectory Trail Across Peaks & Slopes (Following the Curving Slope)
     // -------------------------------------------------------------------------
-    const trailLine: Array<{ pos: [number, number, number]; label: string; cat: string; hex: string }> = [];
+    const keyMilestones: Array<{
+      x: number;
+      z: number;
+      y: number;
+      label: string;
+      cat: string;
+      hex: string;
+    }> = [];
+
     dataPoints.forEach((pt, i) => {
       const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
       // Determine dominant category for this turn
@@ -548,14 +567,62 @@ export default function TerrainViewport({
       else if (pt.think === maxVal) catIdx = 1;
 
       const tz = zLanes[catIdx];
-      const ty = getAlt(tx, tz) + 0.05;
-      trailLine.push({
-        pos: [tx, ty, tz],
+      const ty = getAlt(tx, tz) + 0.06;
+      keyMilestones.push({
+        x: tx,
+        z: tz,
+        y: ty,
         label: `T+${i + 1}`,
         cat: CHANNELS[catIdx].label,
         hex: CHANNELS[catIdx].hex,
       });
     });
+
+    // Generate dense points following the curving slope of the terrain heightmap
+    const curvedSlopeTrail: Array<[number, number, number]> = [];
+    if (keyMilestones.length === 1) {
+      const p = keyMilestones[0];
+      curvedSlopeTrail.push([p.x, p.y, p.z]);
+    } else if (keyMilestones.length > 1) {
+      const n = keyMilestones.length;
+      for (let i = 0; i < n - 1; i++) {
+        const p0 = keyMilestones[Math.max(0, i - 1)];
+        const p1 = keyMilestones[i];
+        const p2 = keyMilestones[i + 1];
+        const p3 = keyMilestones[Math.min(n - 1, i + 2)];
+
+        const dist = Math.hypot(p2.x - p1.x, p2.z - p1.z);
+        // Dense sampling along the segment so it hugs every contour and slope
+        const steps = Math.max(16, Math.ceil(dist * 8));
+
+        for (let s = 0; s < steps; s++) {
+          const t = s / steps;
+          const t2 = t * t;
+          const t3 = t2 * t;
+
+          // Catmull-Rom spline in the X-Z plane for smooth horizontal curving
+          const cx = 0.5 * (
+            (2 * p1.x) +
+            (-p0.x + p2.x) * t +
+            (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+            (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+          );
+          const cz = 0.5 * (
+            (2 * p1.z) +
+            (-p0.z + p2.z) * t +
+            (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 +
+            (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3
+          );
+
+          // Crucial: Sample the exact terrain altitude at this coordinate so the
+          // yellow line follows the 3D curving slope instead of a straight line
+          const cy = getAlt(cx, cz) + 0.06;
+          curvedSlopeTrail.push([cx, cy, cz]);
+        }
+      }
+      const last = keyMilestones[n - 1];
+      curvedSlopeTrail.push([last.x, last.y, last.z]);
+    }
 
     // Landmark waypoint pins for each Channel Lane
     const channelWaypoints = CHANNELS.map((ch, idx) => {
@@ -693,35 +760,45 @@ export default function TerrainViewport({
 
       const project = (p: [number, number, number]) => projectPoint(matVP, p, rect.width, rect.height);
 
-      // (A) Glowing Neon Trail connecting Timeline turns
+      // (A) Glowing Yellow Neon Trail following the curving slope of the terrain
       hud.lineJoin = "round";
       hud.lineCap = "round";
 
-      // Soft glow
-      hud.strokeStyle = "rgba(255, 154, 60, 0.20)";
-      hud.lineWidth = 6;
+      // Soft glow (dialed down width: 2.8px instead of 6.0px)
+      hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
+      hud.lineWidth = 2.8;
       hud.beginPath();
       let first = true;
-      for (const pt of trailLine) {
-        const sc = project(pt.pos);
+      for (const pos of curvedSlopeTrail) {
+        const sc = project(pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
         else { hud.lineTo(sc[0], sc[1]); }
       }
       hud.stroke();
 
-      // Sharp neon core
-      hud.strokeStyle = "rgba(255, 154, 60, 0.95)";
-      hud.lineWidth = 1.6;
+      // Sharp neon core (dialed down width: 0.9px instead of 1.6px)
+      hud.strokeStyle = "rgba(255, 195, 55, 0.95)";
+      hud.lineWidth = 0.9;
       hud.beginPath();
       first = true;
-      for (const pt of trailLine) {
-        const sc = project(pt.pos);
+      for (const pos of curvedSlopeTrail) {
+        const sc = project(pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
         else { hud.lineTo(sc[0], sc[1]); }
       }
       hud.stroke();
+
+      // Milestone waypoint dots along the slope
+      for (const m of keyMilestones) {
+        const sc = project([m.x, m.y, m.z]);
+        if (!sc) continue;
+        hud.fillStyle = "rgba(255, 215, 75, 0.95)";
+        hud.beginPath();
+        hud.arc(sc[0], sc[1], 1.5, 0, Math.PI * 2);
+        hud.fill();
+      }
 
       // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
       hud.save();
@@ -873,8 +950,8 @@ export default function TerrainViewport({
       persistentCam.idleSince = performance.now() / 1000;
       glCanvas.setPointerCapture(e.pointerId);
 
-      // Stop auto-rotation immediately upon user interaction
-      if (autoRotateRef.current) {
+      // Stop auto-rotation upon user interaction only if not in docked auto-rotate mode
+      if (!docked && autoRotateRef.current) {
         autoRotateRef.current = false;
         setAutoRotate(false);
       }
@@ -897,6 +974,12 @@ export default function TerrainViewport({
       try {
         glCanvas.releasePointerCapture(e.pointerId);
       } catch {}
+
+      // Docked map continuously auto-rotates
+      if (docked) {
+        autoRotateRef.current = true;
+        setAutoRotate(true);
+      }
     };
 
     const handleWheel = (e: WheelEvent) => {
@@ -904,8 +987,7 @@ export default function TerrainViewport({
       persistentCam.radius = clamp(persistentCam.radius * Math.exp(e.deltaY * 0.001), 14, 90);
       persistentCam.idleSince = performance.now() / 1000;
 
-      // Stop auto-rotation immediately upon user interaction
-      if (autoRotateRef.current) {
+      if (!docked && autoRotateRef.current) {
         autoRotateRef.current = false;
         setAutoRotate(false);
       }
@@ -932,7 +1014,43 @@ export default function TerrainViewport({
       glCanvas.removeEventListener("wheel", handleWheel);
       glCanvas.removeEventListener("dblclick", handleDblClick);
     };
-  }, [dataSignature]);
+  }, [dataSignature, docked]);
+
+  if (docked) {
+    return (
+      <section className="scifi-panel viewport docked" aria-label="Auto-rotating area map">
+        <canvas ref={glCanvasRef} id="terrain" className="scifi-terrain-canvas" />
+        <canvas ref={hudCanvasRef} id="terrain-hud" className="scifi-hud-canvas" />
+        <div className="docked-terrain-badge">
+          ◈ AREA MAP
+        </div>
+        <div className="docked-terrain-controls">
+          {onExpand && (
+            <button
+              type="button"
+              className="docked-terrain-btn"
+              onClick={onExpand}
+              title="Expand to Fullscreen Telemetry HUD"
+              aria-label="Expand to Fullscreen Telemetry HUD"
+            >
+              ⤢
+            </button>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              className="docked-terrain-btn"
+              onClick={onClose}
+              title="Close Docked Area Map"
+              aria-label="Close Docked Area Map"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="scifi-panel viewport">

@@ -37,6 +37,13 @@ import {
 } from "./api";
 import ArtifactPanel from "./chrome/ArtifactPanel";
 import AnalyticsHud from "./chrome/AnalyticsHud";
+import DockedStatsPanel from "./chrome/DockedStatsPanel";
+import {
+  DockWidthSplitter,
+  DockHeightSplitter,
+  DOCK_MIN_WIDTH,
+  DOCK_DEFAULT_WIDTH,
+} from "./chrome/DockSplitters";
 import { outputPaneForTab } from "./chrome/artifactModel";
 import ErrorPanel from "./chrome/ErrorPanel";
 import Splitter, {
@@ -138,7 +145,21 @@ export default function App() {
   const [outputOpen, setOutputOpen] = useState(
     () => window.localStorage.getItem("sparkmux.artifactOpen") === "1",
   );
+  const [statsDocked, setStatsDocked] = useState(
+    () => window.localStorage.getItem("sparkmux.statsDocked") === "1",
+  );
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [dockWidth, setDockWidth] = useState(() => {
+    const raw = Number(window.localStorage.getItem("sparkmux.dockWidth"));
+    if (Number.isFinite(raw) && raw >= DOCK_MIN_WIDTH && raw <= 960) return raw;
+    return DOCK_DEFAULT_WIDTH;
+  });
+  const [dockSplitRatio, setDockSplitRatio] = useState(() => {
+    const raw = Number(window.localStorage.getItem("sparkmux.dockSplitRatio"));
+    if (Number.isFinite(raw) && raw >= 0.15 && raw <= 0.85) return raw;
+    return 0.5;
+  });
+  const dockContainerRef = useRef<HTMLDivElement>(null);
   const [fontSize, setFontSize] = useState(() => {
     const raw = Number(window.localStorage.getItem("sparkmux.fontSize"));
     if (Number.isFinite(raw) && raw >= FONT_MIN && raw <= FONT_MAX) return raw;
@@ -210,6 +231,15 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("sparkmux.artifactOpen", outputOpen ? "1" : "0");
   }, [outputOpen]);
+  useEffect(() => {
+    window.localStorage.setItem("sparkmux.statsDocked", statsDocked ? "1" : "0");
+  }, [statsDocked]);
+  useEffect(() => {
+    window.localStorage.setItem("sparkmux.dockWidth", String(Math.round(dockWidth)));
+  }, [dockWidth]);
+  useEffect(() => {
+    window.localStorage.setItem("sparkmux.dockSplitRatio", String(dockSplitRatio));
+  }, [dockSplitRatio]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -913,6 +943,7 @@ export default function App() {
   const shellReady = shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
   const offerAsk = helperOn;
   const showTiles = !error && !empty && layout && attachedSession;
+  const isDockOpen = Boolean(showTiles) && (outputOpen || statsDocked);
 
   return (
     <div className="app">
@@ -1037,35 +1068,145 @@ export default function App() {
                   void renameTab(windowId, name);
                 }}
               />
-              <div className="term-stage" ref={hostRef}>
-                <TiledWindow
-                  node={layout}
-                  focusedPane={focusedPane}
-                  dropTarget={dropPane}
-                  fontSize={fontSize}
-                  paneModes={paneInputModes(snap)}
-                  onFocus={focusTerminalPane}
-                  onCellSize={(paneId, w, h, cols, rows) => {
-                    if (w > 0 && h > 0) {
-                      cellRef.current = { w, h };
-                      if (cols >= 2 && rows >= 1) {
-                        paneFitRef.current.set(paneId, { cols, rows });
+              <div className="term-stage">
+                <div className="term-viewport" ref={hostRef}>
+                  <TiledWindow
+                    node={layout}
+                    focusedPane={focusedPane}
+                    dropTarget={dropPane}
+                    fontSize={fontSize}
+                    paneModes={paneInputModes(snap)}
+                    onFocus={focusTerminalPane}
+                    onCellSize={(paneId, w, h, cols, rows) => {
+                      if (w > 0 && h > 0) {
+                        cellRef.current = { w, h };
+                        if (cols >= 2 && rows >= 1) {
+                          paneFitRef.current.set(paneId, { cols, rows });
+                        }
+                        pushClientSize();
                       }
-                      pushClientSize();
-                    }
-                  }}
-                />
-                {outputOpen && (
-                  <ArtifactPanel
-                    key={outputPane?.id ?? "none"}
-                    command={outputPane?.command ?? ""}
-                    cwd={outputPane?.path ?? ""}
-                    title={outputPane?.title ?? ""}
-                    pid={outputPane?.pid ?? 0}
-                    onCollapse={() => setOutputOpen(false)}
-                    onOpenAnalytics={() => setAnalyticsOpen(true)}
+                    }}
                   />
+                </div>
+
+                {isDockOpen && (
+                  <>
+                    <DockWidthSplitter
+                      width={dockWidth}
+                      onWidth={setDockWidth}
+                    />
+                    <aside
+                      className="docked-panel-container"
+                      style={{ width: dockWidth }}
+                      ref={dockContainerRef}
+                    >
+                      {/* Both Output panel and Stat panel open: vertically split with adjustable height */}
+                      {outputOpen && statsDocked && (
+                        <>
+                          <div
+                            className="docked-panel-slot"
+                            style={{ height: `${dockSplitRatio * 100}%` }}
+                          >
+                            <ArtifactPanel
+                              key={outputPane?.id ?? "none"}
+                              command={outputPane?.command ?? ""}
+                              cwd={outputPane?.path ?? ""}
+                              title={outputPane?.title ?? ""}
+                              pid={outputPane?.pid ?? 0}
+                              onCollapse={() => setOutputOpen(false)}
+                              onOpenAnalytics={() => setAnalyticsOpen(true)}
+                              isDocked
+                            />
+                          </div>
+
+                          <DockHeightSplitter
+                            containerRef={dockContainerRef}
+                            ratio={dockSplitRatio}
+                            onRatio={setDockSplitRatio}
+                          />
+
+                          <div
+                            className="docked-panel-slot docked-stat-slot"
+                            style={{ height: `calc(${100 - dockSplitRatio * 100}% - 5px)` }}
+                          >
+                            <DockedStatsPanel
+                              sessionName={attachedSession ?? "sparkmux"}
+                              tabId={visibleWindowId ?? "main"}
+                              tabName={winName ?? "shell"}
+                              command={outputPane?.command ?? ""}
+                              cwd={outputPane?.path ?? ""}
+                              title={outputPane?.title ?? ""}
+                              pid={outputPane?.pid ?? 0}
+                              onExpand={() => setAnalyticsOpen(true)}
+                              onClose={() => setStatsDocked(false)}
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {/* Only Output panel open: takes full height of the dock */}
+                      {outputOpen && !statsDocked && (
+                        <div className="docked-panel-slot" style={{ height: "100%" }}>
+                          <ArtifactPanel
+                            key={outputPane?.id ?? "none"}
+                            command={outputPane?.command ?? ""}
+                            cwd={outputPane?.path ?? ""}
+                            title={outputPane?.title ?? ""}
+                            pid={outputPane?.pid ?? 0}
+                            onCollapse={() => setOutputOpen(false)}
+                            onOpenAnalytics={() => setAnalyticsOpen(true)}
+                            isDocked
+                          />
+                        </div>
+                      )}
+
+                      {/* Only Stat panel is docked: docked to bottom right panel with adjustable height */}
+                      {!outputOpen && statsDocked && (
+                        <>
+                          <div
+                            className="docked-collapsed-output"
+                            style={{ height: `${dockSplitRatio * 100}%` }}
+                          >
+                            <div className="docked-collapsed-inner">
+                              <span>OUTPUT PANEL COLLAPSED</span>
+                              <button
+                                type="button"
+                                className="docked-open-output-btn"
+                                onClick={() => setOutputOpen(true)}
+                              >
+                                + OPEN OUTPUT
+                              </button>
+                            </div>
+                          </div>
+
+                          <DockHeightSplitter
+                            containerRef={dockContainerRef}
+                            ratio={dockSplitRatio}
+                            onRatio={setDockSplitRatio}
+                          />
+
+                          <div
+                            className="docked-panel-slot docked-stat-slot"
+                            style={{ height: `calc(${100 - dockSplitRatio * 100}% - 5px)` }}
+                          >
+                            <DockedStatsPanel
+                              sessionName={attachedSession ?? "sparkmux"}
+                              tabId={visibleWindowId ?? "main"}
+                              tabName={winName ?? "shell"}
+                              command={outputPane?.command ?? ""}
+                              cwd={outputPane?.path ?? ""}
+                              title={outputPane?.title ?? ""}
+                              pid={outputPane?.pid ?? 0}
+                              onExpand={() => setAnalyticsOpen(true)}
+                              onClose={() => setStatsDocked(false)}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </aside>
+                  </>
                 )}
+
                 {analyticsOpen && (
                   <AnalyticsHud
                     sessionName={attachedSession ?? "sparkmux"}
@@ -1076,6 +1217,10 @@ export default function App() {
                     title={outputPane?.title ?? ""}
                     pid={outputPane?.pid ?? 0}
                     onClose={() => setAnalyticsOpen(false)}
+                    onDock={() => {
+                      setAnalyticsOpen(false);
+                      setStatsDocked(true);
+                    }}
                   />
                 )}
               </div>
@@ -1099,9 +1244,15 @@ export default function App() {
         windowName={winName}
         telemetry={telemetry}
         outputOpen={outputOpen && Boolean(showTiles)}
-        analyticsOpen={analyticsOpen}
+        analyticsOpen={analyticsOpen || statsDocked}
         onOutput={() => setOutputOpen((open) => !open)}
-        onAnalytics={() => setAnalyticsOpen((open) => !open)}
+        onAnalytics={() => {
+          if (analyticsOpen) {
+            setAnalyticsOpen(false);
+          } else {
+            setAnalyticsOpen(true);
+          }
+        }}
         onAsk={
           offerAsk
             ? () => {
