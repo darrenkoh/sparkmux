@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.19
+
+### Fixes
+
+- Scrolling up while Grok Build is running shows the earlier console output. The scrollbar and composer stay on the alternate screen.
+
 ## 0.1.18
 
 ### Improvements
