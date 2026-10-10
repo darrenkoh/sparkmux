@@ -819,36 +819,6 @@ export default function TerrainViewport({
       hud.textAlign = 'right';
       hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${stats?.total_events ?? timeline.length}   ${fps} FPS`, rect.width - 20, rect.height - 18);
 
-      // (G) Top Floating 3D Perspective Title Banner
-      const b0 = project([-8, 3.2, -6]);
-      const b1 = project([8, 3.2, -6]);
-      const b2 = project([8, 1.6, -6]);
-      const b3 = project([-8, 1.6, -6]);
-
-      if (b0 && b1 && b2 && b3) {
-        hud.strokeStyle = "rgba(255, 255, 255, 0.75)";
-        hud.fillStyle = "rgba(4, 6, 12, 0.85)";
-        hud.lineWidth = 1;
-        hud.beginPath();
-        hud.moveTo(b0[0], b0[1]);
-        hud.lineTo(b1[0], b1[1]);
-        hud.lineTo(b2[0], b2[1]);
-        hud.lineTo(b3[0], b3[1]);
-        hud.closePath();
-        hud.fill();
-        hud.stroke();
-
-        hud.save();
-        const bannerW = 340, bannerH = 64;
-        hud.transform((b1[0] - b0[0]) / bannerW, (b1[1] - b0[1]) / bannerW, (b3[0] - b0[0]) / bannerH, (b3[1] - b0[1]) / bannerH, b0[0], b0[1]);
-        hud.fillStyle = "rgba(255, 255, 255, 0.95)";
-        hud.font = '20px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.fillText(`${sessionName || "SESSION"} // ${tabName || "OUTPUT"}`, 20, 26);
-        hud.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.fillStyle = "rgba(255, 154, 60, 0.90)";
-        hud.fillText(`3D TELEMETRY · TIME × LABEL × VALUE · ${activeModel || "AI ASSISTANT"}`, 20, 48);
-        hud.restore();
-      }
 
       animId = requestAnimationFrame(render);
     };
