@@ -1414,24 +1414,24 @@ code {
 }
 .scifi-brand b {
   display: block;
-  font-size: 14px;
-  letter-spacing: 0.22em;
+  font-size: 11px;
+  letter-spacing: 0.18em;
   font-weight: 600;
   color: #fff;
 }
 .scifi-brand small {
   display: block;
-  font-size: 8px;
-  letter-spacing: 0.18em;
+  font-size: 7.5px;
+  letter-spacing: 0.14em;
   color: rgba(255, 255, 255, 0.45);
 }
 
 .scifi-ticker {
   display: flex;
   align-items: center;
-  gap: 20px;
-  margin-left: 20px;
-  font-size: 9px;
+  gap: 16px;
+  margin-left: 16px;
+  font-size: 8px;
   color: rgba(255, 255, 255, 0.55);
 }
 .scifi-ticker strong {
@@ -1623,14 +1623,14 @@ code {
 .kpis small {
   display: block;
   font-size: 7.5px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   color: rgba(255, 255, 255, 0.45);
 }
 .kpis b {
   display: block;
-  font-size: 15px;
-  font-weight: 400;
-  letter-spacing: 0.05em;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
   color: #fff;
 }
 
@@ -1682,7 +1682,10 @@ code {
 .empty-row {
   text-align: center;
   color: rgba(255, 255, 255, 0.3);
-  /* 3D Topographical Viewport Panel */
+  padding: 16px 0;
+}
+
+/* 3D Topographical Viewport Panel */
 .scifi-panel.viewport {
   position: relative;
   overflow: hidden;
@@ -1711,9 +1714,9 @@ code {
   position: absolute;
   left: 12px;
   bottom: 10px;
-  color: rgba(255, 255, 255, 0.35);
-  font-size: 7.5px;
-  letter-spacing: 0.16em;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 8px;
+  letter-spacing: 0.14em;
   pointer-events: none;
   z-index: 5;
 }
@@ -1727,8 +1730,8 @@ code {
 .scifi-viewport-mode button {
   font: inherit;
   font-size: 8px;
-  letter-spacing: 0.16em;
-  color: rgba(255, 255, 255, 0.4);
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.45);
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.2);
   padding: 3px 8px;
@@ -1824,27 +1827,40 @@ code {
 /* Event Stream Log */
 .stream-panel {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 .stream-body {
+  flex: 1;
   overflow-y: auto;
-  padding: 4px 6px;
+  overflow-x: hidden;
+  padding: 6px 8px;
+  min-height: 0;
 }
 .scifi-log-list {
   list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   font-size: 8px;
+  line-height: 1.35;
 }
 .scifi-log-item {
   display: grid;
-  grid-template-columns: 48px 52px 1fr;
+  grid-template-columns: 46px 48px minmax(0, 1fr);
   gap: 6px;
   align-items: baseline;
-  padding: 2px 4px;
+  padding: 3px 6px;
   border-left: 2px solid transparent;
   background: rgba(255, 255, 255, 0.02);
-  white-space: nowrap;
+  border-radius: 1px;
+}
+.scifi-log-item:hover {
+  background: rgba(255, 255, 255, 0.04);
 }
 .scifi-log-item.user {
   border-left-color: #ff9a3c;
@@ -1864,11 +1880,17 @@ code {
 }
 
 .ev-time {
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 7.5px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 .ev-tag {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 7.5px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
 }
 .ev-tag.user {
   color: #ff9a3c;
@@ -1890,12 +1912,21 @@ code {
 .ev-content {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: rgba(255, 255, 255, 0.8);
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 8px;
+  min-width: 0;
+}
+.ev-content strong {
+  color: #5eead4;
+  font-weight: 600;
 }
 .empty-log {
   color: rgba(255, 255, 255, 0.3);
   text-align: center;
   padding: 40px 0;
+  font-size: 8px;
+  letter-spacing: 0.1em;
 }
 
 /* Footer Status Bar */

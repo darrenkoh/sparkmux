@@ -208,7 +208,7 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     const SPAN = 24; // spatial extent (-12 to +12)
 
     // Build elevation function based on activity spectrum
-    const peaks: Array<{ x: number; z: number; h: number; type: "user" | "think" | "reply" | "tool" }> = [];
+    const rawPeaks: Array<{ x: number; z: number; h: number; type: "user" | "think" | "reply" | "tool" }> = [];
     if (timeline && timeline.length > 0) {
       timeline.forEach((pt, i) => {
         const angle = (i / timeline.length) * Math.PI * 2;
@@ -216,10 +216,10 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
         const x = Math.cos(angle) * rad;
         const z = Math.sin(angle) * rad;
 
-        if (pt.user_count > 0) peaks.push({ x: x - 0.5, z: z - 0.5, h: pt.user_count * 0.9, type: "user" });
-        if (pt.think_count > 0) peaks.push({ x: x + 0.8, z: z - 0.4, h: pt.think_count * 0.8, type: "think" });
-        if (pt.reply_count > 0) peaks.push({ x: x - 0.6, z: z + 0.7, h: pt.reply_count * 1.1, type: "reply" });
-        if (pt.tool_count > 0) peaks.push({ x: x + 0.5, z: z + 0.5, h: pt.tool_count * 0.7, type: "tool" });
+        if (pt.user_count > 0) rawPeaks.push({ x: x - 0.5, z: z - 0.5, h: pt.user_count * 0.9, type: "user" });
+        if (pt.think_count > 0) rawPeaks.push({ x: x + 0.8, z: z - 0.4, h: pt.think_count * 0.8, type: "think" });
+        if (pt.reply_count > 0) rawPeaks.push({ x: x - 0.6, z: z + 0.7, h: pt.reply_count * 1.1, type: "reply" });
+        if (pt.tool_count > 0) rawPeaks.push({ x: x + 0.5, z: z + 0.5, h: pt.tool_count * 0.7, type: "tool" });
       });
     }
 
@@ -230,12 +230,20 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       h += 0.4 * Math.sin(x * 0.6) * Math.cos(z * 0.6); // ripples
 
       // Inject activity spikes
-      for (const pk of peaks) {
+      for (const pk of rawPeaks) {
         const dist = Math.hypot(x - pk.x, z - pk.z);
         h += pk.h * Math.exp(-Math.pow(dist / 1.8, 2));
       }
       return h;
     };
+
+    // Calculate actual 3D ground height at peak coordinates so waypoints sit exactly on the surface
+    const peaks = rawPeaks
+      .map((pk) => ({
+        ...pk,
+        surfaceY: getAlt(pk.x, pk.z),
+      }))
+      .sort((a, b) => b.h - a.h);
 
     // 1. Points Buffer
     const pointCount = 14000;
@@ -435,17 +443,36 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       hud.fillText(`BEARING ${bearing.toString().padStart(3, '0')}° // ELEV ${Math.round((cam.elevation * 180) / Math.PI)}°`, 14, 18);
       hud.fillText(`RANGE ${(cam.radius).toFixed(1)}k`, 14, 30);
 
-      // Draw Peak Waypoint Markers
-      for (const pk of peaks.slice(0, 8)) {
-        const pt = projectPoint(matVP, [pk.x, pk.h + 0.3, pk.z], rect.width, rect.height);
-        if (pt) {
-          hud.strokeStyle = pk.type === "user" ? "#ff9a3c" : pk.type === "think" ? "#c084fc" : "#2dd4bf";
+      // Draw Peak Waypoint Markers aligned exactly to 3D surface
+      for (const pk of peaks.slice(0, 5)) {
+        // Project ground surface point and elevated label point
+        const groundPt = projectPoint(matVP, [pk.x, pk.surfaceY, pk.z], rect.width, rect.height);
+        const pinPt = projectPoint(matVP, [pk.x, pk.surfaceY + 0.6, pk.z], rect.width, rect.height);
+        if (groundPt && pinPt) {
+          const color = pk.type === "user" ? "#ff9a3c" : pk.type === "think" ? "#c084fc" : pk.type === "reply" ? "#5b8def" : "#2dd4bf";
+          hud.strokeStyle = color;
+          hud.fillStyle = color;
+
+          // Vertical leader line from terrain surface to pin head
+          hud.lineWidth = 1;
           hud.beginPath();
-          hud.arc(pt[0], pt[1], 2.5, 0, Math.PI * 2);
+          hud.moveTo(groundPt[0], groundPt[1]);
+          hud.lineTo(pinPt[0], pinPt[1]);
           hud.stroke();
 
-          hud.fillStyle = hud.strokeStyle;
-          hud.fillText(`${pk.type.toUpperCase()}`, pt[0] + 6, pt[1]);
+          // Anchor base dot on the hill surface
+          hud.beginPath();
+          hud.arc(groundPt[0], groundPt[1], 1.5, 0, Math.PI * 2);
+          hud.fill();
+
+          // Pin marker head
+          hud.beginPath();
+          hud.arc(pinPt[0], pinPt[1], 2.5, 0, Math.PI * 2);
+          hud.stroke();
+
+          // Label text box
+          hud.font = '7.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+          hud.fillText(`[${pk.type.toUpperCase()}]`, pinPt[0] + 5, pinPt[1]);
         }
       }
 
