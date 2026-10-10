@@ -1137,6 +1137,7 @@ export default function App() {
                               cwd={outputPane?.path ?? ""}
                               title={outputPane?.title ?? ""}
                               pid={outputPane?.pid ?? 0}
+                              paused={analyticsOpen}
                               onExpand={() => setAnalyticsOpen(true)}
                               onClose={() => setStatsDocked(false)}
                             />
@@ -1197,6 +1198,7 @@ export default function App() {
                               cwd={outputPane?.path ?? ""}
                               title={outputPane?.title ?? ""}
                               pid={outputPane?.pid ?? 0}
+                              paused={analyticsOpen}
                               onExpand={() => setAnalyticsOpen(true)}
                               onClose={() => setStatsDocked(false)}
                             />

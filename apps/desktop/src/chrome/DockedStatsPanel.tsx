@@ -10,6 +10,7 @@ export interface DockedStatsPanelProps {
   cwd: string;
   title: string;
   pid: number;
+  paused?: boolean;
   onExpand: () => void;
   onClose: () => void;
 }
@@ -22,6 +23,7 @@ export default function DockedStatsPanel({
   cwd,
   title,
   pid,
+  paused = false,
   onExpand,
   onClose,
 }: DockedStatsPanelProps) {
@@ -34,10 +36,15 @@ export default function DockedStatsPanel({
   };
 
   useEffect(() => {
+    if (paused) return;
     fetchData();
     const interval = setInterval(fetchData, 1000);
     return () => clearInterval(interval);
-  }, [sessionName, tabId, command, cwd, title, pid]);
+  }, [sessionName, tabId, command, cwd, title, pid, paused]);
+
+  if (paused) {
+    return <div className="docked-stats-panel" aria-label="Docked area map" />;
+  }
 
   return (
     <div className="docked-stats-panel" aria-label="Docked area map">

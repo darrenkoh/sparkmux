@@ -173,21 +173,12 @@ const CHANNELS = [
   { key: "tool", label: "TOOL RUNTIME", color: [0.18, 0.84, 0.75], hex: "#2dd4bf", zIndex: 3 },
 ] as const;
 
-// Persistent camera and monotonic animation clock across re-renders and polling ticks
+// Persistent camera viewing angle across re-renders and view switches
 const persistentCam = {
   azimuth: 0.38,
   elevation: 0.48,
   radius: 46,
   target: [0, 1.2, 0] as [number, number, number],
-  isDragging: false,
-  lastX: 0,
-  lastY: 0,
-  idleSince: 0,
-};
-
-const persistentClock = {
-  startTime: performance.now(),
-  lastRenderTime: performance.now(),
 };
 
 export default function TerrainViewport({
@@ -205,6 +196,15 @@ export default function TerrainViewport({
   const [realism, setRealism] = useState<"mono" | "color">("color");
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
+
+  // Per-instance clock and pointer tracking to prevent clock starvation
+  const clockRef = useRef({
+    startTime: performance.now(),
+    lastRenderTime: performance.now(),
+  });
+  const isDraggingRef = useRef<boolean>(false);
+  const lastXRef = useRef<number>(0);
+  const lastYRef = useRef<number>(0);
 
   const statsRef = useRef(stats);
   statsRef.current = stats;
@@ -661,16 +661,16 @@ export default function TerrainViewport({
 
       const now = performance.now();
       const interval = 1000 / 60; // 60 FPS cap
-      const delta = now - persistentClock.lastRenderTime;
+      const delta = now - clockRef.current.lastRenderTime;
 
       // Allow slight timing tolerance (2.0ms) for 60Hz display alignment
       if (delta < interval - 2.0) {
         return;
       }
-      persistentClock.lastRenderTime = now - (delta % interval);
+      clockRef.current.lastRenderTime = now - (delta % interval);
 
       const dt = delta / 1000;
-      const elapsed = (now - persistentClock.startTime) / 1000;
+      const elapsed = (now - clockRef.current.startTime) / 1000;
       const cam = persistentCam;
 
       frameCount++;
@@ -681,7 +681,7 @@ export default function TerrainViewport({
       }
 
       // Auto-rotate continuously when enabled and not actively dragging
-      if (autoRotateRef.current && !cam.isDragging) {
+      if (autoRotateRef.current && !isDraggingRef.current) {
         cam.azimuth += 0.08 * Math.min(dt, 0.1);
       }
 
@@ -944,60 +944,39 @@ export default function TerrainViewport({
     animId = requestAnimationFrame(render);
 
     const handleDown = (e: PointerEvent) => {
-      persistentCam.isDragging = true;
-      persistentCam.lastX = e.clientX;
-      persistentCam.lastY = e.clientY;
-      persistentCam.idleSince = performance.now() / 1000;
+      isDraggingRef.current = true;
+      lastXRef.current = e.clientX;
+      lastYRef.current = e.clientY;
       glCanvas.setPointerCapture(e.pointerId);
-
-      // Stop auto-rotation upon user interaction only if not in docked auto-rotate mode
-      if (!docked && autoRotateRef.current) {
-        autoRotateRef.current = false;
-        setAutoRotate(false);
-      }
     };
 
     const handleMove = (e: PointerEvent) => {
-      if (!persistentCam.isDragging) return;
-      const dx = e.clientX - persistentCam.lastX;
-      const dy = e.clientY - persistentCam.lastY;
-      persistentCam.lastX = e.clientX;
-      persistentCam.lastY = e.clientY;
+      if (!isDraggingRef.current) return;
+      const dx = e.clientX - lastXRef.current;
+      const dy = e.clientY - lastYRef.current;
+      lastXRef.current = e.clientX;
+      lastYRef.current = e.clientY;
 
       persistentCam.azimuth -= dx * 0.005;
       persistentCam.elevation = clamp(persistentCam.elevation + dy * 0.004, 0.06, 1.35);
-      persistentCam.idleSince = performance.now() / 1000;
     };
 
     const handleUp = (e: PointerEvent) => {
-      persistentCam.isDragging = false;
+      isDraggingRef.current = false;
       try {
         glCanvas.releasePointerCapture(e.pointerId);
       } catch {}
-
-      // Docked map continuously auto-rotates
-      if (docked) {
-        autoRotateRef.current = true;
-        setAutoRotate(true);
-      }
     };
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       persistentCam.radius = clamp(persistentCam.radius * Math.exp(e.deltaY * 0.001), 14, 90);
-      persistentCam.idleSince = performance.now() / 1000;
-
-      if (!docked && autoRotateRef.current) {
-        autoRotateRef.current = false;
-        setAutoRotate(false);
-      }
     };
 
     const handleDblClick = () => {
       persistentCam.azimuth = 0.38;
       persistentCam.elevation = 0.48;
       persistentCam.radius = 46;
-      persistentCam.idleSince = performance.now() / 1000;
     };
 
     glCanvas.addEventListener("pointerdown", handleDown);
