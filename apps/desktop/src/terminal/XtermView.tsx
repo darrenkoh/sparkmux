@@ -22,9 +22,12 @@ import { cursorCup } from "./cursorCup";
 import { isEmulatorReport } from "./emulatorReports";
 import { applyPaneSeed } from "./paneSeed";
 import {
+  altScreenArrows,
   decideWheel,
   inputFollowsPrompt,
   viewportAtBottom,
+  wheelReport,
+  type PaneInputMode,
   type WheelContext,
 } from "./promptScroll";
 
@@ -36,18 +39,22 @@ export function getTerm(paneId: string): Terminal | undefined {
   return terms.get(paneId);
 }
 
+const idleMode: PaneInputMode = { alternate: false, mouse: false, mouseSgr: false };
+
 export default function XtermView({
   paneId,
   focused,
   onFocus,
   onCellSize,
   fontSize,
+  inputMode,
 }: {
   paneId: string;
   focused: boolean;
   onFocus: (paneId: string) => void;
   onCellSize?: (w: number, h: number, cols: number, rows: number) => void;
   fontSize: number;
+  inputMode?: PaneInputMode;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -55,12 +62,14 @@ export default function XtermView({
   const onFocusRef = useRef(onFocus);
   const onCellSizeRef = useRef(onCellSize);
   const fontSizeRef = useRef(fontSize);
+  const inputModeRef = useRef(inputMode ?? idleMode);
   const doFitRef = useRef<() => void>(() => {});
   const redrawCaretRef = useRef<() => void>(() => {});
   const syncTmuxCursorRef = useRef<() => void>(() => {});
   onFocusRef.current = onFocus;
   onCellSizeRef.current = onCellSize;
   fontSizeRef.current = fontSize;
+  inputModeRef.current = inputMode ?? idleMode;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -230,10 +239,25 @@ export default function XtermView({
     let pageLines = 0;
     let lastPageAt = 0;
     term.attachCustomWheelEventHandler((ev) => {
-      const decision = decideWheel(wheelContext(term, ev));
+      const decision = decideWheel(wheelContext(term, ev, inputModeRef.current));
       if (decision.kind === "passthrough") return true;
       if (decision.kind === "scroll") {
         term.scrollLines(decision.lines);
+      } else if (decision.kind === "report") {
+        const pos = cellFromWheel(term, ev);
+        const bytes = wheelReport(decision.up, pos.col, pos.row, inputModeRef.current.mouseSgr);
+        void paneWrite(paneId, bytes);
+        // The seeded buffer is not Grok's transcript. Keep it pinned so a
+        // wheel the webview will not cancel cannot park on a blank row.
+        term.scrollToBottom();
+      } else if (decision.kind === "arrows") {
+        const bytes = altScreenArrows(
+          decision.lines < 0,
+          Math.abs(decision.lines),
+          Boolean(term.modes?.applicationCursorKeysMode),
+        );
+        void paneWrite(paneId, bytes);
+        term.scrollToBottom();
       } else {
         pageLines += decision.lines;
         const now = performance.now();
@@ -377,13 +401,15 @@ export default function XtermView({
   return <div ref={hostRef} className="xterm-host" />;
 }
 
-function wheelContext(term: Terminal, ev: WheelEvent): WheelContext {
+function wheelContext(term: Terminal, ev: WheelEvent, input: PaneInputMode): WheelContext {
   const buf = term.buffer.active;
   const cursorLine = buf.getLine(buf.baseY + buf.cursorY)?.translateToString(true) ?? "";
   const mode = term.modes?.mouseTrackingMode;
   return {
     alt: buf.type === "alternate",
     mouseWheel: mode === "vt200" || mode === "drag" || mode === "any",
+    paneAlt: input.alternate,
+    mouseReport: input.mouse,
     baseY: buf.baseY,
     rows: term.rows,
     cursorY: buf.cursorY,
@@ -396,14 +422,34 @@ function wheelContext(term: Terminal, ev: WheelEvent): WheelContext {
   };
 }
 
+function cellFromWheel(term: Terminal, ev: WheelEvent): { col: number; row: number } {
+  const host = term.element;
+  const size = cellSize(term);
+  if (!host || size.width <= 0 || size.height <= 0) return { col: 1, row: 1 };
+  const rect = host.getBoundingClientRect();
+  const col = Math.floor((ev.clientX - rect.left) / size.width) + 1;
+  const row = Math.floor((ev.clientY - rect.top) / size.height) + 1;
+  return {
+    col: Math.min(term.cols, Math.max(1, col)),
+    row: Math.min(term.rows, Math.max(1, row)),
+  };
+}
+
 function cellHeight(term: Terminal): number {
+  return cellSize(term).height;
+}
+
+function cellSize(term: Terminal): { width: number; height: number } {
   const core = term as unknown as {
     _core?: {
-      _renderService?: { dimensions?: { css?: { cell?: { height: number } } } };
+      _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } };
     };
   };
-  const height = core._core?._renderService?.dimensions?.css?.cell?.height;
-  return height && height > 0 ? height : 16;
+  const cell = core._core?._renderService?.dimensions?.css?.cell;
+  return {
+    width: cell && cell.width > 0 ? cell.width : 8,
+    height: cell && cell.height > 0 ? cell.height : 16,
+  };
 }
 
 function openTerminalLink(uri: string) {

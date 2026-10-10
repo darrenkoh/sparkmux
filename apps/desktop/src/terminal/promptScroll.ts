@@ -4,7 +4,13 @@
 // and similar TUIs treat Up as transcript scroll only while the draft is
 // empty; with characters in the prompt, Up edits that draft and the view
 // jumps back to it. Page Up / Page Down scroll the transcript and leave the
-// draft alone.
+// draft alone. When the program asked for mouse reports, the wheel is one
+// SGR or legacy report instead. Grok Build scrolls its transcript from that.
+//
+// A seeded xterm often stays on the normal buffer after tmux has already
+// entered the alternate screen: the seed is a text dump, not the mode
+// sequences. Scrolling that viewport shows nothing. The wheel has to be
+// handed to the program.
 //
 // On the normal buffer the wheel is the terminal's own scrollback. Snapping
 // back to the cursor (scroll-on-input, caret resync) cancels a selection.
@@ -13,8 +19,12 @@ const ESC = "\x1b";
 
 export interface WheelContext {
   alt: boolean;
-  /** Application asked for wheel reports (VT200 / drag / any). */
+  /** xterm.js itself is sending wheel reports (VT200 / drag / any). */
   mouseWheel: boolean;
+  /** tmux says this pane is on the alternate screen. */
+  paneAlt: boolean;
+  /** The program asked tmux for mouse-wheel reports. */
+  mouseReport: boolean;
   /** Scrollback lines above the live screen. */
   baseY: number;
   rows: number;
@@ -33,7 +43,15 @@ export interface WheelContext {
 export type WheelDecision =
   | { kind: "scroll"; lines: number }
   | { kind: "page"; lines: number }
+  | { kind: "report"; up: boolean }
+  | { kind: "arrows"; lines: number }
   | { kind: "passthrough" };
+
+export interface PaneInputMode {
+  alternate: boolean;
+  mouse: boolean;
+  mouseSgr: boolean;
+}
 
 export function viewportAtBottom(viewportY: number, baseY: number): boolean {
   return viewportY >= baseY;
@@ -85,9 +103,19 @@ export function decideWheel(ctx: WheelContext): WheelDecision {
   const lines = wheelLineCount(ctx.deltaY, ctx.deltaMode, ctx.rowHeight, ctx.rows);
   if (lines === 0) return { kind: "passthrough" };
 
+  // tmux is on the alternate screen, but this xterm was seeded onto the
+  // normal buffer and will not turn the wheel into reports or arrow keys.
+  if (ctx.paneAlt && !ctx.alt && !ctx.mouseWheel) {
+    if (ctx.mouseReport) return { kind: "report", up: lines < 0 };
+    if (promptHasDraft(ctx.rows, ctx.cursorY, ctx.cursorX, ctx.cursorLine)) {
+      return { kind: "page", lines };
+    }
+    return { kind: "arrows", lines };
+  }
+
   // Inline sessions (Grok under tmux, a shell) keep the transcript in scrollback.
   // Giving the wheel to the app types into the draft and yanks the viewport down.
-  if (!ctx.alt && ctx.baseY > 0 && ctx.mouseWheel) {
+  if (!ctx.alt && !ctx.paneAlt && ctx.baseY > 0 && ctx.mouseWheel) {
     return { kind: "scroll", lines };
   }
 
@@ -101,4 +129,30 @@ export function decideWheel(ctx: WheelContext): WheelDecision {
   }
 
   return { kind: "passthrough" };
+}
+
+/** One mouse-wheel report. Columns and rows are 1-based, matching SGR and X10. */
+export function wheelReport(up: boolean, col: number, row: number, sgr: boolean): number[] {
+  const limit = sgr ? 9999 : 223;
+  const column = Math.max(1, Math.min(limit, col));
+  const line = Math.max(1, Math.min(limit, row));
+  if (sgr) {
+    const button = up ? 64 : 65;
+    return Array.from(new TextEncoder().encode(`\x1b[<${button};${column};${line}M`));
+  }
+  return [0x1b, 0x5b, 0x4d, (up ? 64 : 65) + 32, column + 32, line + 32];
+}
+
+/** Arrow keys for an alternate-screen program that does not take mouse reports. */
+export function altScreenArrows(
+  up: boolean,
+  count: number,
+  applicationCursor: boolean,
+): number[] {
+  const n = Math.min(8, Math.max(1, count));
+  const seq = applicationCursor ? (up ? "\x1bOA" : "\x1bOB") : up ? "\x1b[A" : "\x1b[B";
+  const one = Array.from(new TextEncoder().encode(seq));
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(...one);
+  return out;
 }

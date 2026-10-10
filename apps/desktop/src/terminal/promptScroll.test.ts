@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  altScreenArrows,
   decideWheel,
   inputFollowsPrompt,
   promptHasDraft,
   viewportAtBottom,
   wheelLineCount,
+  wheelReport,
   type WheelContext,
 } from "./promptScroll.ts";
 
@@ -16,6 +18,8 @@ function wheel(over: Partial<WheelContext> = {}): WheelContext {
   return {
     alt: false,
     mouseWheel: false,
+    paneAlt: false,
+    mouseReport: false,
     baseY: 20,
     rows: 40,
     cursorY: 39,
@@ -102,4 +106,60 @@ test("alternate screen mouse tracking keeps the app's wheel reports", () => {
     wheel({ alt: true, mouseWheel: true, baseY: 0, cursorLine: "> hello", cursorX: 7 }),
   );
   assert.equal(decision.kind, "passthrough");
+});
+
+test("tmux alternate screen with mouse reports is not local scrollback", () => {
+  const decision = decideWheel(
+    wheel({
+      paneAlt: true,
+      mouseReport: true,
+      alt: false,
+      mouseWheel: false,
+      baseY: 4,
+      cursorLine: "> hello",
+      cursorX: 7,
+    }),
+  );
+  assert.deepEqual(decision, { kind: "report", up: true });
+});
+
+test("tmux alternate screen without mouse sends arrows, not a viewport scroll", () => {
+  const decision = decideWheel(
+    wheel({ paneAlt: true, alt: false, mouseWheel: false, baseY: 4, cursorLine: "> ", cursorX: 2 }),
+  );
+  assert.deepEqual(decision, { kind: "arrows", lines: -6 });
+});
+
+test("tmux alternate screen with a draft and no mouse still pages", () => {
+  const decision = decideWheel(
+    wheel({
+      paneAlt: true,
+      alt: false,
+      baseY: 0,
+      cursorLine: "> hello",
+      cursorX: 7,
+      deltaY: -48,
+    }),
+  );
+  assert.deepEqual(decision, { kind: "page", lines: -2 });
+});
+
+test("wheel reports are one SGR or X10 sequence", () => {
+  assert.deepEqual(
+    wheelReport(true, 12, 4, true),
+    Array.from(new TextEncoder().encode("\x1b[<64;12;4M")),
+  );
+  assert.deepEqual(
+    wheelReport(false, 3, 9, true),
+    Array.from(new TextEncoder().encode("\x1b[<65;3;9M")),
+  );
+  assert.deepEqual(wheelReport(true, 2, 5, false), [0x1b, 0x5b, 0x4d, 96, 34, 37]);
+  assert.deepEqual(wheelReport(false, 0, 400, false), [0x1b, 0x5b, 0x4d, 97, 33, 255]);
+});
+
+test("alternate-screen arrows repeat and stay within a short burst", () => {
+  const up = altScreenArrows(true, 2, false);
+  assert.equal(new TextDecoder().decode(new Uint8Array(up)), "\x1b[A\x1b[A");
+  assert.equal(altScreenArrows(false, 1, true).length, 3);
+  assert.equal(altScreenArrows(true, 40, false).length, 8 * 3);
 });

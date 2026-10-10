@@ -33,7 +33,9 @@ pub const PANE_FMT: &str = concat!(
     "#{s/@@@/_/:pane_current_path}@@@",
     "#{pane_pid}@@@#{pane_active}@@@#{pane_width}@@@#{pane_height}@@@",
     "#{s/@@@/_/:pane_title}@@@",
-    "#{alternate_on}",
+    "#{alternate_on}@@@",
+    "#{mouse_standard_flag}@@@#{mouse_button_flag}@@@",
+    "#{mouse_all_flag}@@@#{mouse_sgr_flag}",
 );
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,6 +90,10 @@ pub struct Pane {
     pub title: String,
     /// True while the pane is on the alternate screen (vim, less, agent TUIs).
     pub alternate: bool,
+    /// The program asked for mouse-wheel reports (DECSET 1000, 1002, or 1003).
+    pub mouse: bool,
+    /// Those reports use SGR encoding (DECSET 1006).
+    pub mouse_sgr: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,6 +294,10 @@ fn parse_panes(blob: &str) -> Result<Vec<RawPane>> {
                 height: parse_u16(field(&f, 9)),
                 title: field(&f, 10).to_string(),
                 alternate: parse_flag(field(&f, 11)),
+                mouse: parse_flag(field(&f, 12))
+                    || parse_flag(field(&f, 13))
+                    || parse_flag(field(&f, 14)),
+                mouse_sgr: parse_flag(field(&f, 15)),
             },
         });
     }
@@ -626,6 +636,8 @@ mod tests {
             height: 0,
             title: String::new(),
             alternate: false,
+            mouse: false,
+            mouse_sgr: false,
         }
     }
 
@@ -642,6 +654,23 @@ mod tests {
         let panes = &snap.sessions[0].windows[0].panes;
         assert!(panes[0].alternate);
         assert!(!panes[1].alternate);
+        assert!(!panes[0].mouse);
+        assert!(!panes[0].mouse_sgr);
+    }
+
+    #[test]
+    fn pane_mouse_flags_mean_wheel_reports() {
+        let line = "$0@@@$0@@@%0@@@0@@@grok@@@/tmp@@@1@@@1@@@80@@@24@@@title@@@1@@@0@@@0@@@1@@@1\n";
+        let snap = parse_snapshot(
+            "$0@@@s@@@0@@@1@@@1@@@1@@@/\n",
+            "$0@@@$0@@@0@@@w@@@1@@@1@@@l@@@0@@@0\n",
+            line,
+        )
+        .unwrap();
+        let pane = &snap.sessions[0].windows[0].panes[0];
+        assert!(pane.alternate);
+        assert!(pane.mouse);
+        assert!(pane.mouse_sgr);
     }
 
     #[test]

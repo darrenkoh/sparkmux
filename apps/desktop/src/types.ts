@@ -24,6 +24,10 @@ export interface Pane {
   height: number;
   title: string;
   alternate: boolean;
+  /** Program asked for mouse-wheel reports. */
+  mouse: boolean;
+  /** Wheel reports use SGR encoding. */
+  mouse_sgr: boolean;
 }
 
 export interface Window {

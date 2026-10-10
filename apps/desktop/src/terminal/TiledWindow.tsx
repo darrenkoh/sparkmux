@@ -1,5 +1,22 @@
-import type { LayoutNode } from "../types";
+import type { LayoutNode, Snapshot } from "../types";
+import type { PaneInputMode } from "./promptScroll";
 import XtermView from "./XtermView";
+
+export function paneInputModes(snap: Snapshot): Map<string, PaneInputMode> {
+  const modes = new Map<string, PaneInputMode>();
+  for (const session of snap.sessions) {
+    for (const win of session.windows) {
+      for (const pane of win.panes) {
+        modes.set(pane.id, {
+          alternate: pane.alternate,
+          mouse: pane.mouse,
+          mouseSgr: pane.mouse_sgr,
+        });
+      }
+    }
+  }
+  return modes;
+}
 
 export default function TiledWindow({
   node,
@@ -8,6 +25,7 @@ export default function TiledWindow({
   onFocus,
   onCellSize,
   fontSize,
+  paneModes,
 }: {
   node: LayoutNode;
   focusedPane: string | null;
@@ -21,6 +39,7 @@ export default function TiledWindow({
     rows: number,
   ) => void;
   fontSize: number;
+  paneModes?: ReadonlyMap<string, PaneInputMode>;
 }) {
   if ("Pane" in node) {
     const paneId = `%${node.Pane.pane_id}`;
@@ -43,6 +62,7 @@ export default function TiledWindow({
               : undefined
           }
           fontSize={fontSize}
+          inputMode={paneModes?.get(paneId)}
         />
       </div>
     );
@@ -68,6 +88,7 @@ export default function TiledWindow({
               onFocus={onFocus}
               onCellSize={onCellSize}
               fontSize={fontSize}
+              paneModes={paneModes}
             />
           </div>
         );

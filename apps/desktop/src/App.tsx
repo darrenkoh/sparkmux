@@ -59,6 +59,7 @@ import {
 import TiledWindow, {
   clientSizeFromFits,
   fallbackLayout,
+  paneInputModes,
 } from "./terminal/TiledWindow";
 import { getTerm } from "./terminal/XtermView";
 import {
@@ -1040,6 +1041,7 @@ export default function App() {
                   focusedPane={focusedPane}
                   dropTarget={dropPane}
                   fontSize={fontSize}
+                  paneModes={paneInputModes(snap)}
                   onFocus={focusTerminalPane}
                   onCellSize={(paneId, w, h, cols, rows) => {
                     if (w > 0 && h > 0) {
