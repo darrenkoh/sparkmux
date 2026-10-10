@@ -170,6 +170,23 @@ const CHANNELS = [
   { key: "tool", label: "TOOL RUNTIME", color: [0.18, 0.84, 0.75], hex: "#2dd4bf", zIndex: 3 },
 ] as const;
 
+// Persistent camera and monotonic animation clock across re-renders and polling ticks
+const persistentCam = {
+  azimuth: 0.38,
+  elevation: 0.48,
+  radius: 46,
+  target: [0, 1.2, 0] as [number, number, number],
+  isDragging: false,
+  lastX: 0,
+  lastY: 0,
+  idleSince: 0,
+};
+
+const persistentClock = {
+  startTime: performance.now(),
+  lastRenderTime: performance.now(),
+};
+
 export default function TerrainViewport({
   timeline,
   activeModel,
@@ -183,20 +200,17 @@ export default function TerrainViewport({
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
 
+  const statsRef = useRef(stats);
+  statsRef.current = stats;
+  const timelineRef = useRef(timeline);
+  timelineRef.current = timeline;
+
   useEffect(() => {
     autoRotateRef.current = autoRotate;
   }, [autoRotate]);
 
-  const camRef = useRef({
-    azimuth: 0.38,
-    elevation: 0.48,
-    radius: 46,
-    target: [0, 1.2, 0] as [number, number, number],
-    isDragging: false,
-    lastX: 0,
-    lastY: 0,
-    idleSince: performance.now() / 1000,
-  });
+  // Fingerprint data structure so routine polling doesn't restart WebGL or loop
+  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${realism}`;
 
   useEffect(() => {
     const glCanvas = glCanvasRef.current;
@@ -288,6 +302,13 @@ export default function TerrainViewport({
     // Channel lane positions along Z
     const zLanes = [-6.75, -2.25, 2.25, 6.75]; // USER, THINK, REPLY, TOOL
 
+    // Scale mountain ridges so peaks naturally reach ~2.4 - 2.8 on the 3.0 altitude ruler
+    let maxMetric = 0.5;
+    for (const pt of dataPoints) {
+      maxMetric = Math.max(maxMetric, pt.user, pt.think, pt.reply, pt.tool);
+    }
+    const heightScale = 2.4 / Math.log1p(Math.max(1, maxMetric));
+
     // Calculate height Y at any 3D coordinate (x = Time, z = Label)
     const getAlt = (x: number, z: number): number => {
       // Base gentle shelf
@@ -314,7 +335,7 @@ export default function TerrainViewport({
           else if (c === 2) rawH = Math.log1p(pt.reply) * 1.05;
           else if (c === 3) rawH = Math.log1p(pt.tool) * 0.85;
 
-          const hContrib = rawH * Math.exp(-Math.pow(distX / 1.6, 2)) * zWeight;
+          const hContrib = rawH * heightScale * Math.exp(-Math.pow(distX / 1.6, 2)) * zWeight;
           val += hContrib;
         }
       }
@@ -567,25 +588,23 @@ export default function TerrainViewport({
     let fps = 60;
     let lastFpsTime = performance.now();
     let frameCount = 0;
-    const startTime = performance.now();
-    let lastRenderTime = performance.now();
 
     const render = () => {
       animId = requestAnimationFrame(render);
 
       const now = performance.now();
       const interval = 1000 / 60; // 60 FPS cap
-      const delta = now - lastRenderTime;
+      const delta = now - persistentClock.lastRenderTime;
 
       // Allow slight timing tolerance (2.0ms) for 60Hz display alignment
       if (delta < interval - 2.0) {
         return;
       }
-      lastRenderTime = now - (delta % interval);
+      persistentClock.lastRenderTime = now - (delta % interval);
 
       const dt = delta / 1000;
-      const elapsed = (now - startTime) / 1000;
-      const cam = camRef.current;
+      const elapsed = (now - persistentClock.startTime) / 1000;
+      const cam = persistentCam;
 
       frameCount++;
       if (now - lastFpsTime >= 500) {
@@ -594,7 +613,7 @@ export default function TerrainViewport({
         lastFpsTime = now;
       }
 
-      // Auto-rotate only when enabled and not actively dragging
+      // Auto-rotate continuously when enabled and not actively dragging
       if (autoRotateRef.current && !cam.isDragging) {
         cam.azimuth += 0.08 * Math.min(dt, 0.1);
       }
@@ -627,13 +646,13 @@ export default function TerrainViewport({
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
 
-      // Upward radar sweep starting strictly at Y=0, sweeping up to 3.6, looping smoothly
-      // Half-speed scan: ~9.0 seconds per cycle
+      // Upward radar sweep starting strictly at Y=0, sweeping up to 3.0, looping smoothly
+      // Half-speed scan: ~9.0 seconds per cycle (rotation is independent and never resets)
       const cycleDuration = 9.0;
       const scanPhase = (elapsed / cycleDuration) % 1.0; // 0.0 -> 1.0
-      const scanAltY = scanPhase * 3.6; // starts strictly at 0.0, climbs to 3.6
-      // Smooth fade out at the top 10% and fade in at bottom
-      const scanFade = smoothstep(1.0, 0.90, scanPhase) * smoothstep(0.0, 0.05, scanPhase);
+      const scanAltY = scanPhase * 3.0; // starts strictly at 0.0, climbs to 3.0 summit
+      // Smooth fade out at the top 8% and fade in at bottom
+      const scanFade = smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
 
       // Draw Grid Lines
       gl.useProgram(progContour);
@@ -781,7 +800,7 @@ export default function TerrainViewport({
       // (D) Left Y-Axis Altitude Ruler (VALUE AXIS)
       const rulerTop = 70;
       const rulerBottom = rect.height - 50;
-      const rY = (val: number) => rulerBottom - (val / 3.6) * (rulerBottom - rulerTop);
+      const rY = (val: number) => rulerBottom - (val / 3.0) * (rulerBottom - rulerTop);
 
       hud.strokeStyle = "rgba(255, 255, 255, 0.3)";
       hud.fillStyle = "rgba(255, 255, 255, 0.35)";
@@ -789,22 +808,22 @@ export default function TerrainViewport({
       hud.beginPath();
       hud.moveTo(14, rulerTop);
       hud.lineTo(14, rulerBottom);
-      for (let v = 0; v <= 3.6; v += 0.4) {
+      for (let v = 0; v <= 3.0; v += 0.5) {
         const y = rY(v);
         hud.moveTo(14, y);
-        hud.lineTo(v % 1.2 === 0 ? 24 : 18, y);
+        hud.lineTo(v % 1.0 === 0 ? 24 : 18, y);
       }
       hud.stroke();
 
       hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
       hud.textAlign = 'left';
       hud.fillText("VALUE ▲", 14, rulerTop - 8);
-      for (let v = 0; v <= 3.6; v += 0.8) {
+      for (let v = 0; v <= 3.0; v += 1.0) {
         hud.fillText(`${Math.round(v * 10)}`, 28, rY(v));
       }
 
-      // Active scan cursor on ruler (starts strictly at 0 at bottom)
-      const cursorY = rY(clamp(scanAltY, 0, 3.6));
+      // Active scan cursor on ruler (starts strictly at 0 at bottom, sweeps to top)
+      const cursorY = rY(clamp(scanAltY, 0, 3.0));
       hud.fillStyle = `rgba(255, 255, 255, ${0.40 + 0.60 * scanFade})`;
       hud.beginPath();
       hud.moveTo(14, cursorY);
@@ -817,7 +836,7 @@ export default function TerrainViewport({
       if (rect.width >= 700) {
         hud.textAlign = 'right';
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
-        const recentEvs = stats?.recent_events ?? [];
+        const recentEvs = statsRef.current?.recent_events ?? [];
         if (recentEvs.length > 0) {
           const sliceEvs = recentEvs.slice(0, 25);
           sliceEvs.forEach((ev, i) => {
@@ -840,7 +859,7 @@ export default function TerrainViewport({
         hud.textAlign = 'right';
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
         hud.fillStyle = 'rgba(255, 255, 255, 0.40)';
-        hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${stats?.total_events ?? timeline.length}   ${fps} FPS`, rect.width - 16, rect.height - 12);
+        hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 12);
       }
 
     };
@@ -848,10 +867,10 @@ export default function TerrainViewport({
     animId = requestAnimationFrame(render);
 
     const handleDown = (e: PointerEvent) => {
-      camRef.current.isDragging = true;
-      camRef.current.lastX = e.clientX;
-      camRef.current.lastY = e.clientY;
-      camRef.current.idleSince = performance.now() / 1000;
+      persistentCam.isDragging = true;
+      persistentCam.lastX = e.clientX;
+      persistentCam.lastY = e.clientY;
+      persistentCam.idleSince = performance.now() / 1000;
       glCanvas.setPointerCapture(e.pointerId);
 
       // Stop auto-rotation immediately upon user interaction
@@ -862,20 +881,19 @@ export default function TerrainViewport({
     };
 
     const handleMove = (e: PointerEvent) => {
-      const cam = camRef.current;
-      if (!cam.isDragging) return;
-      const dx = e.clientX - cam.lastX;
-      const dy = e.clientY - cam.lastY;
-      cam.lastX = e.clientX;
-      cam.lastY = e.clientY;
+      if (!persistentCam.isDragging) return;
+      const dx = e.clientX - persistentCam.lastX;
+      const dy = e.clientY - persistentCam.lastY;
+      persistentCam.lastX = e.clientX;
+      persistentCam.lastY = e.clientY;
 
-      cam.azimuth -= dx * 0.005;
-      cam.elevation = clamp(cam.elevation + dy * 0.004, 0.06, 1.35);
-      cam.idleSince = performance.now() / 1000;
+      persistentCam.azimuth -= dx * 0.005;
+      persistentCam.elevation = clamp(persistentCam.elevation + dy * 0.004, 0.06, 1.35);
+      persistentCam.idleSince = performance.now() / 1000;
     };
 
     const handleUp = (e: PointerEvent) => {
-      camRef.current.isDragging = false;
+      persistentCam.isDragging = false;
       try {
         glCanvas.releasePointerCapture(e.pointerId);
       } catch {}
@@ -883,8 +901,8 @@ export default function TerrainViewport({
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      camRef.current.radius = clamp(camRef.current.radius * Math.exp(e.deltaY * 0.001), 14, 90);
-      camRef.current.idleSince = performance.now() / 1000;
+      persistentCam.radius = clamp(persistentCam.radius * Math.exp(e.deltaY * 0.001), 14, 90);
+      persistentCam.idleSince = performance.now() / 1000;
 
       // Stop auto-rotation immediately upon user interaction
       if (autoRotateRef.current) {
@@ -894,10 +912,10 @@ export default function TerrainViewport({
     };
 
     const handleDblClick = () => {
-      camRef.current.azimuth = 0.38;
-      camRef.current.elevation = 0.48;
-      camRef.current.radius = 46;
-      camRef.current.idleSince = performance.now() / 1000;
+      persistentCam.azimuth = 0.38;
+      persistentCam.elevation = 0.48;
+      persistentCam.radius = 46;
+      persistentCam.idleSince = performance.now() / 1000;
     };
 
     glCanvas.addEventListener("pointerdown", handleDown);
@@ -914,7 +932,7 @@ export default function TerrainViewport({
       glCanvas.removeEventListener("wheel", handleWheel);
       glCanvas.removeEventListener("dblclick", handleDblClick);
     };
-  }, [timeline, realism, activeModel, sessionName, tabName, stats]);
+  }, [dataSignature]);
 
   return (
     <section className="scifi-panel viewport">
@@ -923,7 +941,7 @@ export default function TerrainViewport({
       <header>
         <span className="tag">01</span>
         <span>TOPOGRAPHICAL TELEMETRY SPECTRUM</span>
-        <small>{activeModel || "QUANTUM RELIEF"}</small>
+        <small>{activeModel || (sessionName ? `${sessionName} // ${tabName ?? "OUTPUT"}` : "QUANTUM RELIEF")}</small>
       </header>
 
       <div className="scifi-viewport-hint">
