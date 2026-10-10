@@ -148,10 +148,10 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
 
   // Camera Orbit & Pan State
   const camRef = useRef({
-    azimuth: 0.35,
-    elevation: 0.52,
-    radius: 36,
-    target: [0, 1.2, 0] as [number, number, number],
+    azimuth: 0.45,
+    elevation: 0.58,
+    radius: 42,
+    target: [0, 1.0, 0] as [number, number, number],
     isDragging: false,
     lastX: 0,
     lastY: 0,
@@ -207,32 +207,33 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     // We create a heightfield terrain grid based on activity bursts
     const SPAN = 24; // spatial extent (-12 to +12)
 
-    // Build elevation function based on activity spectrum
+    // Build elevation function based on activity spectrum with normalized scaling
     const rawPeaks: Array<{ x: number; z: number; h: number; type: "user" | "think" | "reply" | "tool" }> = [];
     if (timeline && timeline.length > 0) {
       timeline.forEach((pt, i) => {
         const angle = (i / timeline.length) * Math.PI * 2;
-        const rad = 2.5 + ((i % 5) * 1.6);
+        const rad = 2.0 + ((i % 5) * 1.4);
         const x = Math.cos(angle) * rad;
         const z = Math.sin(angle) * rad;
 
-        if (pt.user_count > 0) rawPeaks.push({ x: x - 0.5, z: z - 0.5, h: pt.user_count * 0.9, type: "user" });
-        if (pt.think_count > 0) rawPeaks.push({ x: x + 0.8, z: z - 0.4, h: pt.think_count * 0.8, type: "think" });
-        if (pt.reply_count > 0) rawPeaks.push({ x: x - 0.6, z: z + 0.7, h: pt.reply_count * 1.1, type: "reply" });
-        if (pt.tool_count > 0) rawPeaks.push({ x: x + 0.5, z: z + 0.5, h: pt.tool_count * 0.7, type: "tool" });
+        // Scale heights with soft saturation (Math.log1p) so high counts don't shoot out of the camera frustum
+        if (pt.user_count > 0) rawPeaks.push({ x: x - 0.4, z: z - 0.4, h: Math.log1p(pt.user_count) * 0.75, type: "user" });
+        if (pt.think_count > 0) rawPeaks.push({ x: x + 0.6, z: z - 0.3, h: Math.log1p(pt.think_count) * 0.65, type: "think" });
+        if (pt.reply_count > 0) rawPeaks.push({ x: x - 0.5, z: z + 0.5, h: Math.log1p(pt.reply_count) * 0.8, type: "reply" });
+        if (pt.tool_count > 0) rawPeaks.push({ x: x + 0.4, z: z + 0.4, h: Math.log1p(pt.tool_count) * 0.6, type: "tool" });
       });
     }
 
     // Baseline terrain height function
     const getAlt = (x: number, z: number): number => {
       const d = Math.hypot(x, z);
-      let h = Math.max(0, 3.2 * Math.exp(-Math.pow(d / 8.5, 2))); // central dome
-      h += 0.4 * Math.sin(x * 0.6) * Math.cos(z * 0.6); // ripples
+      let h = Math.max(0, 2.4 * Math.exp(-Math.pow(d / 8.5, 2))); // central dome
+      h += 0.3 * Math.sin(x * 0.6) * Math.cos(z * 0.6); // ripples
 
       // Inject activity spikes
       for (const pk of rawPeaks) {
         const dist = Math.hypot(x - pk.x, z - pk.z);
-        h += pk.h * Math.exp(-Math.pow(dist / 1.8, 2));
+        h += pk.h * Math.exp(-Math.pow(dist / 1.6, 2));
       }
       return h;
     };
@@ -517,9 +518,9 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     };
 
     const handleDblClick = () => {
-      camRef.current.azimuth = 0.35;
-      camRef.current.elevation = 0.52;
-      camRef.current.radius = 36;
+      camRef.current.azimuth = 0.45;
+      camRef.current.elevation = 0.58;
+      camRef.current.radius = 42;
       camRef.current.lastActive = performance.now();
     };
 

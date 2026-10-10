@@ -1644,45 +1644,49 @@ code {
 .scifi-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 8.5px;
+  font-size: 10px;
 }
 .scifi-table th {
   text-align: left;
-  color: rgba(255, 255, 255, 0.35);
-  font-weight: 400;
-  font-size: 7.5px;
+  color: rgba(255, 255, 255, 0.45);
+  font-weight: 500;
+  font-size: 8.5px;
   letter-spacing: 0.14em;
-  padding: 0 0 5px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0 0 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 .scifi-table td {
-  padding: 4px 0;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+  padding: 5px 0;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
   white-space: nowrap;
 }
 .scifi-table td.num,
 .scifi-table th.num {
   text-align: right;
-  padding-left: 8px;
+  padding-left: 10px;
   font-variant-numeric: tabular-nums;
 }
 .scifi-table td.tool-name {
-  max-width: 105px;
+  max-width: 110px;
   overflow: hidden;
   text-overflow: ellipsis;
   color: #5eead4;
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 10.5px;
 }
 .scifi-status.ok {
   color: #3dd68c;
+  font-weight: 600;
 }
 .scifi-status.error {
   color: #f07178;
+  font-weight: 600;
 }
 .empty-row {
   text-align: center;
   color: rgba(255, 255, 255, 0.3);
   padding: 16px 0;
+  font-size: 9px;
 }
 
 /* 3D Topographical Viewport Panel */
