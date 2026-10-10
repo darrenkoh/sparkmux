@@ -208,33 +208,37 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     // We create a heightfield terrain grid based on activity bursts
     const SPAN = 24; // spatial extent (-12 to +12)
 
-    // Build elevation function based on activity spectrum with normalized scaling
+    // Build elevation function based on activity spectrum with rich topographical relief
     const rawPeaks: Array<{ x: number; z: number; h: number; type: "user" | "think" | "reply" | "tool" }> = [];
     if (timeline && timeline.length > 0) {
       timeline.forEach((pt, i) => {
         const angle = (i / timeline.length) * Math.PI * 2;
-        const rad = 2.0 + ((i % 5) * 1.4);
+        const rad = 2.4 + ((i % 5) * 1.5);
         const x = Math.cos(angle) * rad;
         const z = Math.sin(angle) * rad;
 
-        // Scale heights with soft saturation (Math.log1p) so high counts don't shoot out of the camera frustum
-        if (pt.user_count > 0) rawPeaks.push({ x: x - 0.4, z: z - 0.4, h: Math.log1p(pt.user_count) * 0.75, type: "user" });
-        if (pt.think_count > 0) rawPeaks.push({ x: x + 0.6, z: z - 0.3, h: Math.log1p(pt.think_count) * 0.65, type: "think" });
-        if (pt.reply_count > 0) rawPeaks.push({ x: x - 0.5, z: z + 0.5, h: Math.log1p(pt.reply_count) * 0.8, type: "reply" });
-        if (pt.tool_count > 0) rawPeaks.push({ x: x + 0.4, z: z + 0.4, h: Math.log1p(pt.tool_count) * 0.6, type: "tool" });
+        // Rich textured peaks with defined elevation
+        if (pt.user_count > 0) rawPeaks.push({ x: x - 0.4, z: z - 0.4, h: Math.min(3.2, 0.8 + Math.log1p(pt.user_count) * 0.9), type: "user" });
+        if (pt.think_count > 0) rawPeaks.push({ x: x + 0.6, z: z - 0.3, h: Math.min(2.8, 0.6 + Math.log1p(pt.think_count) * 0.8), type: "think" });
+        if (pt.reply_count > 0) rawPeaks.push({ x: x - 0.5, z: z + 0.5, h: Math.min(3.0, 0.7 + Math.log1p(pt.reply_count) * 0.95), type: "reply" });
+        if (pt.tool_count > 0) rawPeaks.push({ x: x + 0.4, z: z + 0.4, h: Math.min(2.4, 0.5 + Math.log1p(pt.tool_count) * 0.7), type: "tool" });
       });
     }
 
-    // Baseline terrain height function
+    // Rich multi-frequency topographical height function (dome + ridges + fine harmonic ripples)
     const getAlt = (x: number, z: number): number => {
       const d = Math.hypot(x, z);
-      let h = Math.max(0, 2.4 * Math.exp(-Math.pow(d / 8.5, 2))); // central dome
-      h += 0.3 * Math.sin(x * 0.6) * Math.cos(z * 0.6); // ripples
+      // Primary mountain dome
+      let h = Math.max(0, 3.4 * Math.exp(-Math.pow(d / 8.2, 2)));
+      // Multi-octave natural ripples and ridges for surface texture
+      h += 0.45 * Math.sin(x * 0.75 + 0.3) * Math.cos(z * 0.75 + 0.2);
+      h += 0.22 * Math.sin(x * 1.6 - z * 0.8) * Math.cos(z * 1.4 + x * 0.5);
+      h += 0.10 * Math.sin(x * 3.2 + z * 2.8);
 
       // Inject activity spikes
       for (const pk of rawPeaks) {
         const dist = Math.hypot(x - pk.x, z - pk.z);
-        h += pk.h * Math.exp(-Math.pow(dist / 1.6, 2));
+        h += pk.h * Math.exp(-Math.pow(dist / 1.7, 2));
       }
       return h;
     };
@@ -247,8 +251,8 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       }))
       .sort((a, b) => b.h - a.h);
 
-    // 1. Points Buffer
-    const pointCount = 14000;
+    // 1. Points Buffer - dense 18,000 points with rich textured noise
+    const pointCount = 18000;
     const posData = new Float32Array(pointCount * 4); // xyz + brightness
     const colData = new Float32Array(pointCount * 3); // rgb
     const seedData = new Float32Array(pointCount);
@@ -261,25 +265,27 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
 
       // Density falloff outside dome
       const d = Math.hypot(rx, rz);
-      if (Math.random() > Math.exp(-Math.pow(d / 11, 2)) * 0.9 + 0.1) {
+      if (Math.random() > Math.exp(-Math.pow(d / 11, 2)) * 0.92 + 0.08) {
         continue;
       }
 
       posData[pIdx * 4] = rx;
-      posData[pIdx * 4 + 1] = alt + (Math.random() - 0.5) * 0.05;
+      posData[pIdx * 4 + 1] = alt + (Math.random() - 0.5) * 0.04;
       posData[pIdx * 4 + 2] = rz;
-      posData[pIdx * 4 + 3] = 0.45 + 0.55 * Math.random();
+      posData[pIdx * 4 + 3] = 0.5 + 0.5 * Math.random();
 
-      // Color coding: amber peak tops, cyan thinking ridges, blue slopes, dark base
+      // Rich spectral color coding: Amber crest, violet ridges, deep cobalt slopes, teal basin
       let r = 0.9, g = 0.95, b = 1.0;
-      if (alt > 3.0) {
-        r = 1.0; g = 0.65; b = 0.25; // Amber summit
-      } else if (alt > 1.8) {
-        r = 0.75; g = 0.52; b = 0.98; // Purple/thinking ridge
-      } else if (alt > 0.8) {
-        r = 0.35; g = 0.58; b = 0.95; // Blue slope
+      if (alt > 3.2) {
+        r = 1.0; g = 0.68; b = 0.22; // Amber summit
+      } else if (alt > 2.2) {
+        r = 0.82; g = 0.48; b = 0.98; // Purple/magenta high ridge
+      } else if (alt > 1.2) {
+        r = 0.32; g = 0.55; b = 0.96; // Cobalt slope
+      } else if (alt > 0.4) {
+        r = 0.18; g = 0.82; b = 0.78; // Teal mid-slope
       } else {
-        r = 0.2; g = 0.85; b = 0.75; // Teal base
+        r = 0.12; g = 0.62; b = 0.70; // Dark cyan basin
       }
 
       colData[pIdx * 3] = r;
