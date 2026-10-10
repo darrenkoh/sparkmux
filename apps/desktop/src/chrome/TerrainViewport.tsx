@@ -320,35 +320,80 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     gl.enableVertexAttribArray(locSeed);
     gl.vertexAttribPointer(locSeed, 1, gl.FLOAT, false, 0, 0);
 
-    // 2. Contour Lines & Circular Grid Lines Buffer
+    // 2. High-Density Marching Squares Topographical Contours (matching beastydesign.github.io/scifi)
+    // We evaluate the true 2D heightfield over a high-resolution grid and generate connected isolines
     const lineVerts: number[] = [];
+    const GRID_RES = 110; // 110x110 elevation grid
+    const gridStep = SPAN / (GRID_RES - 1);
+    const elevGrid = new Float32Array(GRID_RES * GRID_RES);
 
-    // Concentric elevation rings
-    const ringAlts = [0.2, 0.6, 1.2, 2.0, 3.0, 4.2];
-    for (const rAlt of ringAlts) {
-      const segs = 90;
-      for (let s = 0; s < segs; s++) {
-        const th1 = (s / segs) * Math.PI * 2;
-        const th2 = ((s + 1) / segs) * Math.PI * 2;
-        const r1 = Math.sqrt(Math.max(0, -Math.log(Math.max(0.01, rAlt / 4.5)) * 64));
-        const r2 = r1;
-        const x1 = Math.cos(th1) * r1;
-        const z1 = Math.sin(th1) * r1;
-        const x2 = Math.cos(th2) * r2;
-        const z2 = Math.sin(th2) * r2;
-        const y1 = getAlt(x1, z1);
-        const y2 = getAlt(x2, z2);
-
-        lineVerts.push(x1, y1, z1, 0.35);
-        lineVerts.push(x2, y2, z2, 0.35);
+    for (let gz = 0; gz < GRID_RES; gz++) {
+      const cz = -SPAN / 2 + gz * gridStep;
+      for (let gx = 0; gx < GRID_RES; gx++) {
+        const cx = -SPAN / 2 + gx * gridStep;
+        elevGrid[gz * GRID_RES + gx] = getAlt(cx, cz);
       }
     }
 
-    // Base boundary grid
-    for (let g = -10; g <= 10; g += 2) {
-      const alpha = g % 4 === 0 ? 0.2 : 0.08;
-      lineVerts.push(g, 0, -10, alpha, g, 0, 10, alpha);
-      lineVerts.push(-10, 0, g, alpha, 10, 0, g, alpha);
+    // Dense contour levels (every 0.15 altitude from 0.15 to 4.2)
+    const contourLevels: number[] = [];
+    for (let cAlt = 0.2; cAlt <= 4.0; cAlt += 0.16) {
+      contourLevels.push(cAlt);
+    }
+
+    const cornerOffsetsX = [0, 1, 1, 0];
+    const cornerOffsetsZ = [0, 0, 1, 1];
+    const K = [0, 0, 0, 0];
+
+    for (let gz = 0; gz < GRID_RES - 1; gz++) {
+      const z0 = -SPAN / 2 + gz * gridStep;
+      for (let gx = 0; gx < GRID_RES - 1; gx++) {
+        const x0 = -SPAN / 2 + gx * gridStep;
+        const pIdxCell = gz * GRID_RES + gx;
+
+        K[0] = elevGrid[pIdxCell];
+        K[1] = elevGrid[pIdxCell + 1];
+        K[2] = elevGrid[pIdxCell + GRID_RES + 1];
+        K[3] = elevGrid[pIdxCell + GRID_RES];
+
+        const minCell = Math.min(K[0], K[1], K[2], K[3]);
+        const maxCell = Math.max(K[0], K[1], K[2], K[3]);
+
+        for (let l = 0; l < contourLevels.length; l++) {
+          const level = contourLevels[l];
+          if (level < minCell || level >= maxCell) continue;
+
+          // Marching squares edge intersections
+          const pts: Array<[number, number, number]> = [];
+          for (let e = 0; e < 4; e++) {
+            const nextE = (e + 1) % 4;
+            if ((K[e] > level) === (K[nextE] > level)) continue;
+
+            const frac = (level - K[e]) / (K[nextE] - K[e]);
+            const px = x0 + (cornerOffsetsX[e] + (cornerOffsetsX[nextE] - cornerOffsetsX[e]) * frac) * gridStep;
+            const pz = z0 + (cornerOffsetsZ[e] + (cornerOffsetsZ[nextE] - cornerOffsetsZ[e]) * frac) * gridStep;
+            pts.push([px, level + 0.015, pz]);
+          }
+
+          // Line intensity: major contours (every 0.8) vs fine minor contours
+          const isMajor = Math.abs(level % 0.8) < 0.09;
+          const alpha = isMajor ? 0.48 : 0.18;
+
+          for (let p = 0; p + 1 < pts.length; p += 2) {
+            lineVerts.push(
+              pts[p][0], pts[p][1], pts[p][2], alpha,
+              pts[p + 1][0], pts[p + 1][1], pts[p + 1][2], alpha
+            );
+          }
+        }
+      }
+    }
+
+    // Outer framing coordinate grid (fine sci-fi boundary ticks)
+    for (let g = -12; g <= 12; g += 2) {
+      const alpha = g % 4 === 0 ? 0.22 : 0.08;
+      lineVerts.push(g, 0, -12, alpha, g, 0, 12, alpha);
+      lineVerts.push(-12, 0, g, alpha, 12, 0, g, alpha);
     }
 
     const lineData = new Float32Array(lineVerts);
