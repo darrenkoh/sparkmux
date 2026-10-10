@@ -954,6 +954,7 @@ mod tests {
         let panel = include_str!("../../src/chrome/ArtifactPanel.tsx");
         assert!(panel.contains("Clear"));
         assert!(panel.contains("Collapse"));
+        assert!(panel.contains("Auto scroll"));
         assert!(panel.contains("paneArtifacts"));
         let lib = include_str!("lib.rs");
         assert!(lib.contains("artifacts::pane_artifacts"));

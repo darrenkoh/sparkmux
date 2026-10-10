@@ -734,7 +734,9 @@ body.is-resizing * {
 .artifact-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+  row-gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--sidebar-head);
@@ -764,6 +766,8 @@ body.is-resizing * {
   display: flex;
   gap: 6px;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .artifact-actions button {
@@ -773,6 +777,15 @@ body.is-resizing * {
   border-radius: var(--radius);
   padding: 2px 8px;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.artifact-actions button[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.artifact-actions button[aria-pressed="false"] {
+  color: var(--muted);
 }
 
 .artifact-actions button:hover:not(:disabled) {
@@ -788,6 +801,7 @@ body.is-resizing * {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overflow-anchor: none;
   padding: 10px 12px 16px;
 }
 

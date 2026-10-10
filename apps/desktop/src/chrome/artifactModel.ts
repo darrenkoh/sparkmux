@@ -7,6 +7,44 @@ export type ClearMap = Record<string, number>;
 
 const CLEAR_KEY = "sparkmux.artifactClear";
 const CLEAR_LIMIT = 64;
+const AUTO_SCROLL_KEY = "sparkmux.artifactAutoScroll";
+
+/** Unset storage stays on. Only an explicit "0" turns auto scroll off. */
+export function parseAutoScroll(stored: string | null): boolean {
+  return stored !== "0";
+}
+
+export function loadAutoScroll(): boolean {
+  try {
+    return parseAutoScroll(window.localStorage.getItem(AUTO_SCROLL_KEY));
+  } catch {
+    return true;
+  }
+}
+
+export function saveAutoScroll(on: boolean) {
+  try {
+    window.localStorage.setItem(AUTO_SCROLL_KEY, on ? "1" : "0");
+  } catch {
+    // Storage can be blocked; the toggle still works for this view.
+  }
+}
+
+/** True when the viewport is within a few lines of the latest output. */
+export function nearOutputBottom(
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+): boolean {
+  return scrollHeight - scrollTop - clientHeight < 48;
+}
+
+/** Changes when a new entry arrives or the latest entry's text grows. */
+export function outputTailKey(entries: { id: string; body: string }[]): string {
+  const last = entries[entries.length - 1];
+  if (!last) return "0";
+  return `${entries.length}\n${last.id}\n${last.body.length}\n${last.body.slice(-32)}`;
+}
 
 export function markCleared(map: ClearMap, path: string, fileLen: number): ClearMap {
   if (!path) return map;

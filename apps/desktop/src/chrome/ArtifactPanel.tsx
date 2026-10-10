@@ -6,8 +6,12 @@ import {
   cliLabel,
   directoryLabel,
   emptyOutputText,
+  loadAutoScroll,
   loadClears,
   markCleared,
+  nearOutputBottom,
+  outputTailKey,
+  saveAutoScroll,
   saveClears,
   visibleEntries,
   type ArtifactEntry,
@@ -28,8 +32,14 @@ export default function ArtifactPanel({
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
   const [clears, setClears] = useState<ClearMap>(() => loadClears());
+  const [autoScroll, setAutoScroll] = useState(loadAutoScroll);
   const listRef = useRef<HTMLDivElement>(null);
-  const stickRef = useRef(true);
+  const autoScrollRef = useRef(autoScroll);
+  // Clicking Off while already at the bottom stays off until the user scrolls away.
+  const resumeAtBottom = useRef(autoScroll);
+  const ignoreScroll = useRef(false);
+  const pinGen = useRef(0);
+  autoScrollRef.current = autoScroll;
 
   useEffect(() => {
     let cancelled = false;
@@ -64,13 +74,40 @@ export default function ArtifactPanel({
   const through = clearedThrough(clears, path, feed?.file_len ?? 0);
   const visible = visibleEntries(feed?.entries ?? [], through);
   const empty = emptyOutputText(feed, visible.length, through);
-  const tail = visible[visible.length - 1]?.id ?? "";
+  const tailKey = `${feed?.file_len ?? 0}:${outputTailKey(visible)}`;
+
+  useEffect(() => {
+    saveAutoScroll(autoScroll);
+  }, [autoScroll]);
 
   useEffect(() => {
     const el = listRef.current;
-    if (!el || !stickRef.current) return;
+    if (!el || autoScrollRef.current) return;
+    ignoreScroll.current = true;
+    el.scrollTop = 0;
+    ignoreScroll.current = false;
+  }, [command, cwd, title]);
+
+  useEffect(() => {
+    if (!autoScroll) return;
+    const el = listRef.current;
+    if (!el) return;
+    const gen = ++pinGen.current;
+    // The pin itself emits a scroll event. Ignore that one so it cannot turn follow off.
+    ignoreScroll.current = true;
     el.scrollTop = el.scrollHeight;
-  }, [tail, visible.length]);
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => {
+        if (pinGen.current === gen) ignoreScroll.current = false;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      if (inner) window.cancelAnimationFrame(inner);
+      if (pinGen.current === gen) ignoreScroll.current = false;
+    };
+  }, [autoScroll, tailKey]);
 
   const where = directoryLabel(cwd);
   const who = cliLabel(feed?.cli ?? null);
@@ -96,6 +133,19 @@ export default function ArtifactPanel({
           {subtitle && <span className="artifact-sub">{subtitle}</span>}
         </div>
         <div className="artifact-actions">
+          <button
+            type="button"
+            aria-pressed={autoScroll}
+            onClick={() => {
+              setAutoScroll((on) => {
+                const next = !on;
+                resumeAtBottom.current = next;
+                return next;
+              });
+            }}
+          >
+            Auto scroll {autoScroll ? "On" : "Off"}
+          </button>
           <button type="button" onClick={clear} disabled={!path} aria-label="Clear output">
             Clear
           </button>
@@ -108,9 +158,16 @@ export default function ArtifactPanel({
         className="artifact-list"
         ref={listRef}
         onScroll={() => {
+          if (ignoreScroll.current) return;
           const el = listRef.current;
           if (!el) return;
-          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+          const near = nearOutputBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
+          if (!near) {
+            resumeAtBottom.current = true;
+            setAutoScroll(false);
+            return;
+          }
+          if (resumeAtBottom.current) setAutoScroll(true);
         }}
       >
         {empty ? (

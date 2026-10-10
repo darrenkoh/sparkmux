@@ -5,6 +5,9 @@ import {
   clearedThrough,
   emptyOutputText,
   markCleared,
+  nearOutputBottom,
+  outputTailKey,
+  parseAutoScroll,
   visibleEntries,
   type ArtifactFeed,
 } from "./artifactModel.ts";
@@ -37,6 +40,27 @@ test("clear does not move the mark backwards", () => {
   const once = markCleared({}, "/tmp/chat.jsonl", 80);
   const twice = markCleared(once, "/tmp/chat.jsonl", 10);
   assert.equal(twice["/tmp/chat.jsonl"], 80);
+});
+
+test("auto scroll defaults on and only an explicit off is off", () => {
+  assert.equal(parseAutoScroll(null), true);
+  assert.equal(parseAutoScroll("1"), true);
+  assert.equal(parseAutoScroll(""), true);
+  assert.equal(parseAutoScroll("0"), false);
+});
+
+test("near the bottom follows, and a scrolled-up list does not", () => {
+  assert.equal(nearOutputBottom(1000, 900, 80), true);
+  assert.equal(nearOutputBottom(200, 0, 200), true);
+  assert.equal(nearOutputBottom(1000, 100, 80), false);
+});
+
+test("a longer latest entry is new output even when its id stays", () => {
+  const short = [{ id: "40", body: "hel" }];
+  const grown = [{ id: "40", body: "hello" }];
+  assert.notEqual(outputTailKey(short), outputTailKey(grown));
+  assert.equal(outputTailKey(grown), outputTailKey([{ id: "40", body: "hello" }]));
+  assert.equal(outputTailKey([]), "0");
 });
 
 test("a shell pane and a missing transcript explain themselves", () => {
