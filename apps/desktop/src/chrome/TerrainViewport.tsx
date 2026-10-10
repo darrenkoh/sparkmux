@@ -209,7 +209,7 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     const SPAN = 24; // spatial extent (-12 to +12)
 
     // Build elevation function based on activity spectrum with rich topographical relief
-    const rawPeaks: Array<{ x: number; z: number; h: number; type: "user" | "think" | "reply" | "tool" }> = [];
+    const rawPeaks: Array<{ x: number; z: number; h: number; type: "user" | "think" | "reply" | "tool"; label?: string }> = [];
     if (timeline && timeline.length > 0) {
       timeline.forEach((pt, i) => {
         const angle = (i / timeline.length) * Math.PI * 2;
@@ -223,6 +223,14 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
         if (pt.reply_count > 0) rawPeaks.push({ x: x - 0.5, z: z + 0.5, h: Math.min(3.0, 0.7 + Math.log1p(pt.reply_count) * 0.95), type: "reply" });
         if (pt.tool_count > 0) rawPeaks.push({ x: x + 0.4, z: z + 0.4, h: Math.min(2.4, 0.5 + Math.log1p(pt.tool_count) * 0.7), type: "tool" });
       });
+    }
+
+    // If session has no activity bursts yet, seed primary landmark nodes across the relief
+    if (rawPeaks.length === 0) {
+      rawPeaks.push({ x: -1.8, z: -1.2, h: 2.2, type: "user", label: "USER PROMPT" });
+      rawPeaks.push({ x: 2.2, z: -1.6, h: 1.9, type: "think", label: "REASONING CORE" });
+      rawPeaks.push({ x: -2.0, z: 2.2, h: 2.4, type: "reply", label: "MODEL DISPATCH" });
+      rawPeaks.push({ x: 2.4, z: 1.8, h: 1.7, type: "tool", label: "TOOL RUNTIME" });
     }
 
     // Rich multi-frequency topographical height function (dome + ridges + fine harmonic ripples)
@@ -251,11 +259,16 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       }))
       .sort((a, b) => b.h - a.h);
 
-    // 1. Points Buffer - dense 18,000 points with rich textured noise
-    const pointCount = 18000;
+    // 1. Points Buffer - dense 32,000 particle field with micro-topographical noise and surface normal shading
+    const pointCount = 32000;
     const posData = new Float32Array(pointCount * 4); // xyz + brightness
     const colData = new Float32Array(pointCount * 3); // rgb
     const seedData = new Float32Array(pointCount);
+
+    // Directional light vector matching beastydesign.github.io/scifi: [-0.45, 0.8, 0.4]
+    const lightDir = [-0.45, 0.8, 0.4];
+    const lightLen = Math.hypot(lightDir[0], lightDir[1], lightDir[2]);
+    const lx = lightDir[0] / lightLen, ly = lightDir[1] / lightLen, lz = lightDir[2] / lightLen;
 
     let pIdx = 0;
     for (let i = 0; i < pointCount; i++) {
@@ -265,32 +278,44 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
 
       // Density falloff outside dome
       const d = Math.hypot(rx, rz);
-      if (Math.random() > Math.exp(-Math.pow(d / 11, 2)) * 0.92 + 0.08) {
+      if (Math.random() > Math.exp(-Math.pow(d / 11.5, 2)) * 0.94 + 0.06) {
         continue;
       }
 
+      // Compute analytical surface normal for realistic relief light & shadow
+      const delta = 0.08;
+      const dx = getAlt(rx - delta, rz) - getAlt(rx + delta, rz);
+      const dz = getAlt(rx, rz - delta) - getAlt(rx, rz + delta);
+      const dy = 2 * delta;
+      const normLen = Math.hypot(dx, dy, dz) || 1;
+      const nx = dx / normLen, ny = dy / normLen, nz = dz / normLen;
+
+      // Surface lambertian lighting term + rim factor
+      const ndotl = Math.max(0, nx * lx + ny * ly + nz * lz);
+      const shade = 0.35 + 0.65 * ndotl;
+
       posData[pIdx * 4] = rx;
-      posData[pIdx * 4 + 1] = alt + (Math.random() - 0.5) * 0.04;
+      posData[pIdx * 4 + 1] = alt + (Math.random() - 0.5) * 0.05;
       posData[pIdx * 4 + 2] = rz;
-      posData[pIdx * 4 + 3] = 0.5 + 0.5 * Math.random();
+      posData[pIdx * 4 + 3] = (0.5 + 0.5 * Math.random()) * shade;
 
       // Rich spectral color coding: Amber crest, violet ridges, deep cobalt slopes, teal basin
       let r = 0.9, g = 0.95, b = 1.0;
-      if (alt > 3.2) {
-        r = 1.0; g = 0.68; b = 0.22; // Amber summit
-      } else if (alt > 2.2) {
+      if (alt > 3.0) {
+        r = 1.0; g = 0.65; b = 0.22; // Amber summit
+      } else if (alt > 2.0) {
         r = 0.82; g = 0.48; b = 0.98; // Purple/magenta high ridge
-      } else if (alt > 1.2) {
-        r = 0.32; g = 0.55; b = 0.96; // Cobalt slope
-      } else if (alt > 0.4) {
+      } else if (alt > 1.0) {
+        r = 0.30; g = 0.55; b = 0.96; // Cobalt slope
+      } else if (alt > 0.35) {
         r = 0.18; g = 0.82; b = 0.78; // Teal mid-slope
       } else {
-        r = 0.12; g = 0.62; b = 0.70; // Dark cyan basin
+        r = 0.12; g = 0.58; b = 0.68; // Dark cyan basin
       }
 
-      colData[pIdx * 3] = r;
-      colData[pIdx * 3 + 1] = g;
-      colData[pIdx * 3 + 2] = b;
+      colData[pIdx * 3] = r * shade;
+      colData[pIdx * 3 + 1] = g * shade;
+      colData[pIdx * 3 + 2] = b * shade;
 
       seedData[pIdx] = Math.random();
       pIdx++;
@@ -498,36 +523,72 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       hud.fillText(`BEARING ${bearing.toString().padStart(3, '0')}° // ELEV ${Math.round((cam.elevation * 180) / Math.PI)}°`, 14, 18);
       hud.fillText(`RANGE ${(cam.radius).toFixed(1)}k`, 14, 30);
 
-      // Draw Peak Waypoint Markers aligned exactly to 3D surface
+      // Draw Peak Waypoint Markers with authentic leader pins matching beastydesign.github.io/scifi
       for (const pk of peaks.slice(0, 5)) {
-        // Project ground surface point and elevated label point
+        // Project ground surface point and elevated pin point
         const groundPt = projectPoint(matVP, [pk.x, pk.surfaceY, pk.z], rect.width, rect.height);
-        const pinPt = projectPoint(matVP, [pk.x, pk.surfaceY + 0.6, pk.z], rect.width, rect.height);
+        const pinPt = projectPoint(matVP, [pk.x, pk.surfaceY + 1.2, pk.z], rect.width, rect.height);
         if (groundPt && pinPt) {
           const color = pk.type === "user" ? "#ff9a3c" : pk.type === "think" ? "#c084fc" : pk.type === "reply" ? "#5b8def" : "#2dd4bf";
-          hud.strokeStyle = color;
-          hud.fillStyle = color;
+          const colorFaint = pk.type === "user" ? "rgba(255, 154, 60, 0.45)" : pk.type === "think" ? "rgba(192, 132, 252, 0.45)" : "rgba(45, 212, 191, 0.45)";
 
-          // Vertical leader line from terrain surface to pin head
+          // 1. Ground 3D Target Ring on terrain surface (projected 24-step circle)
+          hud.strokeStyle = colorFaint;
           hud.lineWidth = 1;
+          hud.beginPath();
+          const ringRad = 0.45;
+          for (let step = 0; step <= 20; step++) {
+            const th = (step / 20) * Math.PI * 2;
+            const rPt = projectPoint(matVP, [pk.x + Math.cos(th) * ringRad, pk.surfaceY, pk.z + Math.sin(th) * ringRad], rect.width, rect.height);
+            if (rPt) {
+              step === 0 ? hud.moveTo(rPt[0], rPt[1]) : hud.lineTo(rPt[0], rPt[1]);
+            }
+          }
+          hud.stroke();
+
+          // 2. Vertical Pin Leader Line (ground to elevated head)
+          hud.strokeStyle = color;
+          hud.lineWidth = 1.2;
           hud.beginPath();
           hud.moveTo(groundPt[0], groundPt[1]);
           hud.lineTo(pinPt[0], pinPt[1]);
           hud.stroke();
 
-          // Anchor base dot on the hill surface
+          // 3. Anchor dot on ground
+          hud.fillStyle = color;
           hud.beginPath();
-          hud.arc(groundPt[0], groundPt[1], 1.5, 0, Math.PI * 2);
+          hud.arc(groundPt[0], groundPt[1], 1.8, 0, Math.PI * 2);
           hud.fill();
 
-          // Pin marker head
+          // 4. Pin head ring + inner core
           hud.beginPath();
-          hud.arc(pinPt[0], pinPt[1], 2.5, 0, Math.PI * 2);
+          hud.arc(pinPt[0], pinPt[1], 4.5, 0, Math.PI * 2);
           hud.stroke();
 
-          // Label text box
-          hud.font = '7.5px ui-monospace, SFMono-Regular, Menlo, monospace';
-          hud.fillText(`[${pk.type.toUpperCase()}]`, pinPt[0] + 5, pinPt[1]);
+          hud.beginPath();
+          hud.arc(pinPt[0], pinPt[1], 2.0, 0, Math.PI * 2);
+          hud.fill();
+
+          // 5. Waypoint Callout Tag Box & Label Text
+          const tagText = `[${pk.type.toUpperCase()}]`;
+          hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
+          const textWidth = hud.measureText(tagText).width;
+
+          // Semi-transparent dark pill background behind label for crisp contrast
+          hud.fillStyle = 'rgba(4, 6, 10, 0.82)';
+          hud.strokeStyle = color;
+          hud.lineWidth = 1;
+          hud.fillRect(pinPt[0] + 8, pinPt[1] - 7, textWidth + 8, 14);
+          hud.strokeRect(pinPt[0] + 8, pinPt[1] - 7, textWidth + 8, 14);
+
+          // Connecting horizontal whisker
+          hud.beginPath();
+          hud.moveTo(pinPt[0] + 4.5, pinPt[1]);
+          hud.lineTo(pinPt[0] + 8, pinPt[1]);
+          hud.stroke();
+
+          hud.fillStyle = '#ffffff';
+          hud.fillText(tagText, pinPt[0] + 12, pinPt[1]);
         }
       }
 
