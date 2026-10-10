@@ -35,6 +35,8 @@ import {
   tmuxStatus,
   windowResize,
 } from "./api";
+import ArtifactPanel from "./chrome/ArtifactPanel";
+import { findPane } from "./chrome/artifactModel";
 import ErrorPanel from "./chrome/ErrorPanel";
 import Splitter, {
   SIDEBAR_DEFAULT,
@@ -131,6 +133,9 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => window.localStorage.getItem("sparkmux.sidebarCollapsed") === "1",
   );
+  const [outputOpen, setOutputOpen] = useState(
+    () => window.localStorage.getItem("sparkmux.artifactOpen") === "1",
+  );
   const [fontSize, setFontSize] = useState(() => {
     const raw = Number(window.localStorage.getItem("sparkmux.fontSize"));
     if (Number.isFinite(raw) && raw >= FONT_MIN && raw <= FONT_MAX) return raw;
@@ -199,6 +204,9 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("sparkmux.fontSize", String(fontSize));
   }, [fontSize]);
+  useEffect(() => {
+    window.localStorage.setItem("sparkmux.artifactOpen", outputOpen ? "1" : "0");
+  }, [outputOpen]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -898,6 +906,7 @@ export default function App() {
   const visibleWin = attached?.windows.find((w) => w.id === visibleWindowId);
   const winName = visibleWin?.name ?? null;
   const shellNow = focusedShell(snap, focusedPane);
+  const outputPane = findPane(snap, focusedPane);
   const shellReady = shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
   const offerAsk = helperOn;
   const showTiles = !error && !empty && layout && attachedSession;
@@ -1042,6 +1051,14 @@ export default function App() {
                     }
                   }}
                 />
+                {outputOpen && (
+                  <ArtifactPanel
+                    command={outputPane?.command ?? ""}
+                    cwd={outputPane?.path ?? ""}
+                    title={outputPane?.title ?? ""}
+                    onCollapse={() => setOutputOpen(false)}
+                  />
+                )}
               </div>
             </>
           ) : failMsg ? (
@@ -1062,6 +1079,8 @@ export default function App() {
         session={attachedSession}
         windowName={winName}
         telemetry={telemetry}
+        outputOpen={outputOpen && Boolean(showTiles)}
+        onOutput={() => setOutputOpen((open) => !open)}
         onAsk={
           offerAsk
             ? () => {
@@ -1238,6 +1257,8 @@ export default function App() {
             <dd>⌘C ⌘V / Ctrl+Shift+V</dd>
             <dt>Drop a file</dt>
             <dd>Pastes its path into the prompt</dd>
+            <dt>Output</dt>
+            <dd>Status bar. Grok and Claude replies, beside the terminal</dd>
             <dt>Split</dt>
             <dd>⌘D and ⇧⌘D (macOS)</dd>
             <dt>Text size</dt>

@@ -12,12 +12,16 @@ export default function StatusBar({
   session,
   windowName,
   telemetry,
+  outputOpen,
+  onOutput,
   onAsk,
 }: {
   status: TmuxStatus | null;
   session: string | null;
   windowName: string | null;
   telemetry: AppTelemetry | null;
+  outputOpen: boolean;
+  onOutput: () => void;
   onAsk?: () => void;
 }) {
   const tmux = status?.version ?? "tmux";
@@ -54,6 +58,16 @@ export default function StatusBar({
           {cpu}
         </span>
       </span>
+      <button
+        type="button"
+        className={`status-output${outputOpen ? " open" : ""}`}
+        aria-pressed={outputOpen}
+        aria-label="Agent output"
+        title="Show Grok and Claude output"
+        onClick={onOutput}
+      >
+        Output
+      </button>
       {onAsk && (
         <button type="button" className="status-ask" onClick={onAsk} aria-label="Ask">
           <svg viewBox="0 0 16 16" aria-hidden="true">

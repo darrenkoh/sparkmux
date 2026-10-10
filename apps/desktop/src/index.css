@@ -713,6 +713,152 @@ body.is-resizing * {
   background: var(--bg);
 }
 
+.artifact-panel {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: min(400px, 46%);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: rgba(18, 21, 27, 0.96);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar-head);
+}
+
+.artifact-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.artifact-title > span:first-child {
+  font-weight: 600;
+}
+
+.artifact-sub {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.artifact-actions button {
+  background: #1a1e26;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.artifact-actions button:hover:not(:disabled) {
+  background: var(--row-hover);
+}
+
+.artifact-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.artifact-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 16px;
+}
+
+.artifact-empty {
+  margin: 24px 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.artifact-item {
+  margin: 0 0 12px;
+}
+
+.artifact-item .artifact-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.artifact-item .artifact-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.artifact-item.user .artifact-body {
+  color: var(--fg);
+}
+
+.artifact-item.assistant {
+  padding-left: 8px;
+  border-left: 2px solid var(--accent);
+}
+
+.artifact-item.tool,
+.artifact-item.tool_result {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.artifact-item.tool .artifact-label,
+.artifact-item.tool_result .artifact-label {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--fg);
+}
+
+.artifact-item.tool .artifact-body,
+.artifact-item.tool_result .artifact-body {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artifact-item.reasoning {
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+
+.artifact-item.reasoning summary {
+  cursor: pointer;
+  font-size: 11px;
+}
+
 .tile-split {
   display: flex;
   width: 100%;
@@ -883,6 +1029,28 @@ body.is-resizing * {
   max-width: 28ch;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.status-output {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #1a1e26;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.status-output.open {
+  border-color: var(--accent);
+}
+
+.status-output:hover {
+  background: var(--row-hover);
 }
 
 .status-ask {

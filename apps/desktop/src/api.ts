@@ -114,6 +114,30 @@ export function openHttpUrl(url: string): Promise<void> {
   return invoke("open_http_url", { url });
 }
 
+export interface ArtifactEntry {
+  id: string;
+  offset: number;
+  kind: string;
+  label: string;
+  body: string;
+}
+
+export interface ArtifactFeed {
+  cli: string | null;
+  transcript_path: string | null;
+  file_len: number;
+  entries: ArtifactEntry[];
+  error: string | null;
+}
+
+export function paneArtifacts(
+  command: string,
+  cwd: string,
+  title: string,
+): Promise<ArtifactFeed> {
+  return invoke("pane_artifacts", { command, cwd, title });
+}
+
 export interface HelperStatus {
   enabled: boolean;
   weight_path: string | null;

@@ -1,3 +1,4 @@
+mod artifacts;
 mod commands;
 mod control;
 mod error;
@@ -52,6 +53,7 @@ pub fn run() {
             helper::disable_command_helper,
             helper::suggest_shell_command,
             telemetry::app_telemetry,
+            artifacts::pane_artifacts,
             open_url::open_http_url,
             relaunch::relaunch_after_update,
         ])
