@@ -180,12 +180,12 @@ export default function TerrainViewport({
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
   const [realism, setRealism] = useState<"mono" | "color">("color");
-  const [targetFps, setTargetFps] = useState<number>(24);
-  const targetFpsRef = useRef<number>(24);
+  const [autoRotate, setAutoRotate] = useState<boolean>(true);
+  const autoRotateRef = useRef<boolean>(true);
 
   useEffect(() => {
-    targetFpsRef.current = targetFps;
-  }, [targetFps]);
+    autoRotateRef.current = autoRotate;
+  }, [autoRotate]);
 
   const camRef = useRef({
     azimuth: 0.38,
@@ -561,10 +561,10 @@ export default function TerrainViewport({
     });
 
     // -------------------------------------------------------------------------
-    // 4. Render Loop with 3D Axis HUD, Pin Lines and Top Title Banner
+    // 4. Render Loop with 3D Axis HUD and Pin Lines
     // -------------------------------------------------------------------------
     let animId: number;
-    let fps = targetFpsRef.current;
+    let fps = 60;
     let lastFpsTime = performance.now();
     let frameCount = 0;
     const startTime = performance.now();
@@ -574,11 +574,11 @@ export default function TerrainViewport({
       animId = requestAnimationFrame(render);
 
       const now = performance.now();
-      const interval = 1000 / targetFpsRef.current;
+      const interval = 1000 / 60; // 60 FPS cap
       const delta = now - lastRenderTime;
 
-      // Allow slight timing tolerance (1.5ms) for RAF alignment
-      if (delta < interval - 1.5) {
+      // Allow slight timing tolerance (2.0ms) for 60Hz display alignment
+      if (delta < interval - 2.0) {
         return;
       }
       lastRenderTime = now - (delta % interval);
@@ -594,8 +594,9 @@ export default function TerrainViewport({
         lastFpsTime = now;
       }
 
-      if (!cam.isDragging && elapsed - cam.idleSince > 4) {
-        cam.azimuth += 0.12 * Math.min(dt, 0.1);
+      // Auto-rotate only when enabled and not actively dragging
+      if (autoRotateRef.current && !cam.isDragging) {
+        cam.azimuth += 0.08 * Math.min(dt, 0.1);
       }
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -626,9 +627,13 @@ export default function TerrainViewport({
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
 
-      // Smooth altitude scan wave
-      const scanPhase = (Math.sin(elapsed * 1.1) * 0.5 + 0.5);
-      const scanAltY = 0.1 + scanPhase * 3.4;
+      // Upward radar sweep starting strictly at Y=0, sweeping up to 3.6, looping smoothly
+      // Half-speed scan: ~9.0 seconds per cycle
+      const cycleDuration = 9.0;
+      const scanPhase = (elapsed / cycleDuration) % 1.0; // 0.0 -> 1.0
+      const scanAltY = scanPhase * 3.6; // starts strictly at 0.0, climbs to 3.6
+      // Smooth fade out at the top 10% and fade in at bottom
+      const scanFade = smoothstep(1.0, 0.90, scanPhase) * smoothstep(0.0, 0.05, scanPhase);
 
       // Draw Grid Lines
       gl.useProgram(progContour);
@@ -641,7 +646,7 @@ export default function TerrainViewport({
       gl.drawArrays(gl.LINES, 0, vaoBaseGrid.count);
 
       // Draw Marching Squares Contours
-      gl.uniform1f(uC.uScanAmount, 3.0);
+      gl.uniform1f(uC.uScanAmount, 3.0 * scanFade);
       gl.uniform3f(uC.uColor, realism === "mono" ? 1.0 : 0.78, realism === "mono" ? 1.0 : 1.0, realism === "mono" ? 1.0 : 0.94);
       gl.bindVertexArray(vaoContours.vao);
       gl.drawArrays(gl.LINES, 0, vaoContours.count);
@@ -798,9 +803,9 @@ export default function TerrainViewport({
         hud.fillText(`${Math.round(v * 10)}`, 28, rY(v));
       }
 
-      // Active scan cursor on ruler
+      // Active scan cursor on ruler (starts strictly at 0 at bottom)
       const cursorY = rY(clamp(scanAltY, 0, 3.6));
-      hud.fillStyle = "#ffffff";
+      hud.fillStyle = `rgba(255, 255, 255, ${0.40 + 0.60 * scanFade})`;
       hud.beginPath();
       hud.moveTo(14, cursorY);
       hud.lineTo(8, cursorY - 4);
@@ -830,13 +835,13 @@ export default function TerrainViewport({
         }
       }
 
-      // (F) Bottom Telemetry Line
-      hud.textAlign = 'left';
-      hud.fillStyle = 'rgba(255, 255, 255, 0.45)';
-      hud.fillText(`DRAG · ORBIT   WHEEL · ZOOM   DBL-CLICK · RESET`, 46, rect.height - 18);
-
-      hud.textAlign = 'right';
-      hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${stats?.total_events ?? timeline.length}   ${fps} FPS`, rect.width - 20, rect.height - 18);
+      // (F) Bottom Right Telemetry Readout (left instructions handled cleanly by DOM hint)
+      if (rect.width >= 550) {
+        hud.textAlign = 'right';
+        hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
+        hud.fillStyle = 'rgba(255, 255, 255, 0.40)';
+        hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${stats?.total_events ?? timeline.length}   ${fps} FPS`, rect.width - 16, rect.height - 12);
+      }
 
     };
 
@@ -848,6 +853,12 @@ export default function TerrainViewport({
       camRef.current.lastY = e.clientY;
       camRef.current.idleSince = performance.now() / 1000;
       glCanvas.setPointerCapture(e.pointerId);
+
+      // Stop auto-rotation immediately upon user interaction
+      if (autoRotateRef.current) {
+        autoRotateRef.current = false;
+        setAutoRotate(false);
+      }
     };
 
     const handleMove = (e: PointerEvent) => {
@@ -874,6 +885,12 @@ export default function TerrainViewport({
       e.preventDefault();
       camRef.current.radius = clamp(camRef.current.radius * Math.exp(e.deltaY * 0.001), 14, 90);
       camRef.current.idleSince = performance.now() / 1000;
+
+      // Stop auto-rotation immediately upon user interaction
+      if (autoRotateRef.current) {
+        autoRotateRef.current = false;
+        setAutoRotate(false);
+      }
     };
 
     const handleDblClick = () => {
@@ -931,19 +948,18 @@ export default function TerrainViewport({
           </button>
         </div>
 
-        <div className="scifi-viewport-fps">
-          <span className="scifi-fps-label">FPS</span>
-          {[15, 24, 30, 60].map((rate) => (
-            <button
-              key={rate}
-              type="button"
-              className={targetFps === rate ? "on" : ""}
-              onClick={() => setTargetFps(rate)}
-            >
-              {rate}
-            </button>
-          ))}
-        </div>
+        <button
+          type="button"
+          className={`scifi-btn-toggle ${autoRotate ? "on" : ""}`}
+          onClick={() => {
+            const next = !autoRotate;
+            setAutoRotate(next);
+            autoRotateRef.current = next;
+          }}
+          title={autoRotate ? "Click to pause auto-rotation" : "Click to enable auto-rotation"}
+        >
+          {autoRotate ? "AUTO-ROTATE: ON" : "AUTO-ROTATE: OFF"}
+        </button>
       </div>
     </section>
   );

@@ -1716,13 +1716,15 @@ code {
 }
 .scifi-viewport-hint {
   position: absolute;
-  left: 12px;
-  bottom: 10px;
-  color: rgba(255, 255, 255, 0.4);
+  left: 28px;
+  bottom: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 8px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   pointer-events: none;
   z-index: 5;
+  white-space: nowrap;
 }
 .scifi-viewport-toolbar {
   position: absolute;
@@ -1731,22 +1733,14 @@ code {
   z-index: 6;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
-.scifi-viewport-mode,
-.scifi-viewport-fps {
+.scifi-viewport-mode {
   display: flex;
   align-items: center;
 }
-.scifi-fps-label {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
-  letter-spacing: 0.14em;
-  color: rgba(255, 255, 255, 0.4);
-  margin-right: 5px;
-}
 .scifi-viewport-mode button,
-.scifi-viewport-fps button {
+.scifi-btn-toggle {
   font: inherit;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 8px;
@@ -1758,12 +1752,16 @@ code {
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.scifi-viewport-mode button + button,
-.scifi-viewport-fps button + button {
+.scifi-viewport-mode button + button {
   border-left: none;
 }
+.scifi-viewport-mode button:hover,
+.scifi-btn-toggle:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
 .scifi-viewport-mode button.on,
-.scifi-viewport-fps button.on {
+.scifi-btn-toggle.on {
   color: #fff;
   border-color: #ff9a3c;
   background: rgba(255, 154, 60, 0.15);
