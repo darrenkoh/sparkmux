@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.20
+
+### Improvements
+
+- Output, on the status bar, shows Grok and Claude replies beside the terminal. Collapse hides the panel. Clear hides what it has already shown. The terminal keeps running.
+
 ## 0.1.19
 
 ### Fixes
