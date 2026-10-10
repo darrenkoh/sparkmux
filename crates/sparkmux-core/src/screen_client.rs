@@ -294,6 +294,33 @@ mod tests {
             .unwrap_or_else(|| panic!("no pane in {session}"))
     }
 
+    fn send_keys(client: &TmuxClient, pane: &str, extra: &[&str]) {
+        let control = control_client_name(client);
+        let mut args = vec!["send-keys"];
+        if let Some(name) = control.as_deref() {
+            args.extend(["-c", name]);
+        }
+        args.extend(["-t", pane]);
+        args.extend(extra);
+        client
+            .run(&args)
+            .unwrap_or_else(|err| panic!("send probe: {err}"));
+    }
+
+    fn control_client_name(client: &TmuxClient) -> Option<String> {
+        let format = format!("#{{client_name}}{CLIENT_SEP}#{{client_flags}}");
+        let out = client.run(&["list-clients", "-F", &format]).ok()?;
+        for line in out.lines() {
+            let mut parts = line.split(CLIENT_SEP);
+            let name = parts.next()?.trim();
+            let flags = parts.next()?.trim();
+            if !name.is_empty() && flags.contains("control-mode") {
+                return Some(name.to_string());
+            }
+        }
+        None
+    }
+
     fn flags_from_pane(client: &TmuxClient, pane: &str, script: &std::path::Path) -> String {
         let out = std::env::temp_dir().join(format!(
             "smux-flags-{}-{}-{}.txt",
@@ -306,12 +333,10 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&out);
         let cmdline = format!("sh {} {}", script.display(), out.display());
-        client
-            .run(&["send-keys", "-t", pane, "-l", &cmdline])
-            .expect("send probe");
-        client
-            .run(&["send-keys", "-t", pane, "Enter"])
-            .expect("enter probe");
+        // tmux 3.7 rejects send-keys when the current client is read-only.
+        // Name the control client; the keys still go to the pane.
+        send_keys(client, pane, &["-l", &cmdline]);
+        send_keys(client, pane, &["Enter"]);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
             if let Ok(text) = std::fs::read_to_string(&out) {
