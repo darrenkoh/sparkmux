@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.21
+
+### Improvements
+
+- Output and Stats follow Google Antigravity the same way they follow Grok and Claude. The panel shows the prompt, thinking, the planner reply, and each tool call. Stats counts those steps, and token totals only when the transcript records them.
+- Output stays on the newest reply. Auto scroll can be turned off, and scrolling up pauses it. You, Thinking, Assistant, tools, and results each have their own color. Each tab keeps its own transcript.
+- Stats records the session and shows activity, tokens, tools, and a terrain map of the transcript.
+- The mouse wheel scrolls a program that is using the alternate screen.
+
 ## 0.1.20
 
 ### Improvements
