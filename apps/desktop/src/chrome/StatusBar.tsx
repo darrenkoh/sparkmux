@@ -67,7 +67,7 @@ export default function StatusBar({
         className={`status-output${outputOpen ? " open" : ""}`}
         aria-pressed={outputOpen}
         aria-label="Agent output"
-        title="Show Grok and Claude output"
+        title="Show Grok, Claude, and Antigravity output"
         onClick={onOutput}
       >
         Output

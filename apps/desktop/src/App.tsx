@@ -1279,7 +1279,7 @@ export default function App() {
             <dt>Drop a file</dt>
             <dd>Pastes its path into the prompt</dd>
             <dt>Output</dt>
-            <dd>Status bar. Follows the latest Grok or Claude reply. Auto scroll can be turned off</dd>
+            <dd>Status bar. Follows the latest Grok, Claude, or Antigravity reply. Auto scroll can be turned off</dd>
             <dt>Split</dt>
             <dd>⌘D and ⇧⌘D (macOS)</dd>
             <dt>Text size</dt>

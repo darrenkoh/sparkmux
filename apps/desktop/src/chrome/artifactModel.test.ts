@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   clearedThrough,
+  cliLabel,
   emptyOutputText,
   markCleared,
   nearOutputBottom,
@@ -94,8 +95,11 @@ test("the output pane is the focused pane of the selected tab", () => {
 test("a shell pane and a missing transcript explain themselves", () => {
   assert.equal(
     emptyOutputText({ ...feed, cli: null, transcript_path: null, entries: [] }, 0, 0),
-    "This pane is not running Grok or Claude.",
+    "This pane is not running Grok, Claude, or Antigravity.",
   );
+  assert.equal(cliLabel("antigravity"), "Antigravity");
+  assert.equal(cliLabel("agy"), "Antigravity");
+  assert.equal(cliLabel(null), "");
   assert.equal(
     emptyOutputText({ ...feed, transcript_path: null, entries: [] }, 0, 0),
     "No transcript for this pane yet.",

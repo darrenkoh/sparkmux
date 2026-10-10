@@ -1,16 +1,20 @@
-//! Read-only view of a Grok Build or Claude Code transcript.
+//! Read-only view of a Grok Build, Claude Code, or Antigravity CLI transcript.
 //!
-//! The pane keeps its own `%output` stream. This module never writes to tmux.
-//! It only opens `chat_history.jsonl` or a Claude session file under the
-//! user's home directory, and only when the focused pane is Grok or Claude.
-//! tmux reports the real executable name, so a `grok` symlink to
+//! The pane keeps its own `%output` stream. This module never writes to tmux
+//! or to a CLI's files. It only opens a transcript under the user's home
+//! directory, and only when the focused pane is Grok, Claude, or Antigravity
+//! (`agy`). tmux reports the real executable name, so a `grok` symlink to
 //! `grok-1.0.50` shows up as `grok-1.0.50`. Grok's pane title ends in ` - grok`.
 //!
 //! One project directory holds every console started there. The pane's process
 //! picks its own file: Grok lists `session_id`, `pid`, and `cwd` in
-//! `~/.grok/active_sessions.json`. A title match and an open transcript file
-//! are the fallbacks. Several transcripts are never merged into one feed.
+//! `~/.grok/active_sessions.json`. Antigravity's active conversation for a
+//! workspace is the id in `~/.gemini/antigravity-cli/cache/last_conversations.json`.
+//! A title match and an open transcript file are the fallbacks. Several
+//! transcripts are never merged into one feed. The editor store under
+//! `~/.gemini/antigravity` is not this CLI transcript.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
@@ -30,6 +34,7 @@ const ARG_CAP: usize = 160;
 pub(crate) enum CliKind {
     Grok,
     Claude,
+    Antigravity,
 }
 
 impl CliKind {
@@ -37,6 +42,7 @@ impl CliKind {
         match self {
             Self::Grok => "grok",
             Self::Claude => "claude",
+            Self::Antigravity => "antigravity",
         }
     }
 }
@@ -86,6 +92,8 @@ pub struct TranscriptRoots {
     pub claude_projects: PathBuf,
     /// `~/.grok/active_sessions.json`. One record per live Grok process.
     pub grok_active_sessions: PathBuf,
+    /// `~/.gemini/antigravity-cli`. Transcripts live under `brain/<id>/`.
+    pub agy_root: PathBuf,
 }
 
 pub(crate) fn default_roots() -> TranscriptRoots {
@@ -96,12 +104,14 @@ pub(crate) fn default_roots() -> TranscriptRoots {
                 grok_sessions: home.join(".grok").join("sessions"),
                 claude_projects: home.join(".claude").join("projects"),
                 grok_active_sessions: home.join(".grok").join("active_sessions.json"),
+                agy_root: home.join(".gemini").join("antigravity-cli"),
             }
         }
         None => TranscriptRoots {
             grok_sessions: PathBuf::new(),
             claude_projects: PathBuf::new(),
             grok_active_sessions: PathBuf::new(),
+            agy_root: PathBuf::new(),
         },
     }
 }
@@ -138,8 +148,8 @@ fn load_for_family(
 ) -> ArtifactFeed {
     // tmux reports the foreground executable's real file name (`grok-1.0.50`),
     // which differs from argv0 (`grok`). The pane title stays a status line
-    // ending in ` - grok` or `Claude Code` while the shell is still the
-    // process tmux names, and after the CLI has returned to the prompt.
+    // ending in ` - grok`, `Claude Code`, or Antigravity while the shell is
+    // still the process tmux names, and after the CLI has returned to the prompt.
     let Some(kind) = cli_kind(command).or_else(|| cli_kind(title)) else {
         return ArtifactFeed::none();
     };
@@ -179,6 +189,9 @@ fn named_cli(name: &str) -> Option<CliKind> {
     if name == "claude" || name.starts_with("claude ") || versioned_bin(name, "claude") {
         return Some(CliKind::Claude);
     }
+    if name == "agy" || name.starts_with("agy ") || versioned_bin(name, "agy") {
+        return Some(CliKind::Antigravity);
+    }
     None
 }
 
@@ -194,13 +207,21 @@ fn versioned_bin(name: &str, cli: &str) -> bool {
 }
 
 /// Grok sets the pane title to `<status> - grok`. Claude uses `Claude Code`.
+/// Antigravity titles name the product or the `agy` binary. A hyphenated
+/// command such as `agy-extra` is not a title match; versioned `agy-1.2`
+/// is handled by [`versioned_bin`].
 fn titled_cli(name: &str) -> Option<CliKind> {
     let last = name.rsplit(" - ").next().unwrap_or(name).trim();
     match last {
-        "grok" => Some(CliKind::Grok),
-        "claude" | "claude code" => Some(CliKind::Claude),
-        _ => None,
+        "grok" => return Some(CliKind::Grok),
+        "claude" | "claude code" => return Some(CliKind::Claude),
+        "agy" | "antigravity" => return Some(CliKind::Antigravity),
+        _ => {}
     }
+    if name.contains("antigravity") || name.split_whitespace().any(|part| part == "agy") {
+        return Some(CliKind::Antigravity);
+    }
+    None
 }
 
 fn normalize_cwd(cwd: &str) -> Option<PathBuf> {
@@ -308,6 +329,9 @@ pub(crate) fn select_transcript(
     family: &[(u32, u8)],
     roots: &TranscriptRoots,
 ) -> Option<PathBuf> {
+    if kind == CliKind::Antigravity {
+        return select_agy(cwd, family, roots);
+    }
     if let Some(path) = grok_active_transcript(kind, cwd, family, roots) {
         return Some(path);
     }
@@ -319,6 +343,151 @@ pub(crate) fn select_transcript(
         return found.into_iter().next();
     }
     open_transcript(kind, family, title, roots)
+}
+
+/// The workspace's active Antigravity conversation, jailed to the CLI store.
+///
+/// `last_conversations.json` maps a workspace path to one conversation id.
+/// An array value means several conversations share the project; the open
+/// transcript is the tie-break, and anything still ambiguous stays unread.
+/// A nearer directory wins over a parent, so another workspace cannot leak in.
+fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Option<PathBuf> {
+    let found = agy_for_cwd(cwd, roots);
+    if found.len() == 1 {
+        return found.into_iter().next();
+    }
+    if found.len() > 1 {
+        let open = opened_transcripts(CliKind::Antigravity, family, &roots.agy_root);
+        let mut hits: Vec<PathBuf> = open
+            .into_iter()
+            .filter(|path| found.contains(path))
+            .collect();
+        if hits.len() == 1 {
+            return hits.pop();
+        }
+    }
+    None
+}
+
+fn agy_for_cwd(cwd: &str, roots: &TranscriptRoots) -> Vec<PathBuf> {
+    let Some(mut dir) = normalize_cwd(cwd) else {
+        return Vec::new();
+    };
+    if roots.agy_root.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    let index =
+        read_last_conversations(&roots.agy_root.join("cache").join("last_conversations.json"));
+    for _ in 0..8 {
+        if let Some(ids) = index.get(&dir) {
+            let mut hits = Vec::new();
+            for id in ids {
+                if let Some(path) = agy_transcript(&roots.agy_root, id) {
+                    if !hits.contains(&path) {
+                        hits.push(path);
+                    }
+                }
+            }
+            return hits;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    Vec::new()
+}
+
+fn agy_transcript(root: &Path, id: &str) -> Option<PathBuf> {
+    if !safe_component(id) {
+        return None;
+    }
+    let path = root
+        .join("brain")
+        .join(id)
+        .join(".system_generated")
+        .join("logs")
+        .join("transcript.jsonl");
+    under_jail(root, &path)
+}
+
+fn read_last_conversations(path: &Path) -> HashMap<PathBuf, Vec<String>> {
+    let Ok(file) = File::open(path) else {
+        return HashMap::new();
+    };
+    let Ok(value) = serde_json::from_reader::<_, Value>(file.take(1024 * 1024)) else {
+        return HashMap::new();
+    };
+    let Some(obj) = value.as_object() else {
+        return HashMap::new();
+    };
+    let mut out = HashMap::new();
+    for (key, val) in obj {
+        let Some(workspace) = workspace_key(key) else {
+            continue;
+        };
+        let ids = conversation_ids(val);
+        if !ids.is_empty() {
+            out.insert(workspace, ids);
+        }
+    }
+    out
+}
+
+fn conversation_ids(value: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    match value {
+        Value::String(id) => {
+            if let Some(id) = clean_conversation_id(id) {
+                out.push(id);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                if let Some(id) = item.as_str().and_then(clean_conversation_id) {
+                    if !out.contains(&id) {
+                        out.push(id);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn clean_conversation_id(id: &str) -> Option<String> {
+    let id = id.trim();
+    if safe_component(id) {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+/// `last_conversations.json` uses absolute paths. Summaries use `file://` URIs.
+fn workspace_key(text: &str) -> Option<PathBuf> {
+    let text = text.trim();
+    let text = text.strip_prefix("file://").unwrap_or(text);
+    normalize_cwd(&percent_decode_path(text))
+}
+
+fn percent_decode_path(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn grok_active_transcript(
@@ -427,6 +596,7 @@ fn transcripts_for_cwd(kind: CliKind, cwd: &str, roots: &TranscriptRoots) -> Vec
     let jail = match kind {
         CliKind::Grok => &roots.grok_sessions,
         CliKind::Claude => &roots.claude_projects,
+        CliKind::Antigravity => return Vec::new(),
     };
     if jail.as_os_str().is_empty() {
         return Vec::new();
@@ -438,6 +608,7 @@ fn transcripts_for_cwd(kind: CliKind, cwd: &str, roots: &TranscriptRoots) -> Vec
                 Some(name) => name,
                 None => break,
             },
+            CliKind::Antigravity => break,
         };
         if safe_component(&name) {
             let found = transcripts_in(kind, &jail.join(&name), jail);
@@ -466,6 +637,7 @@ fn transcripts_in(kind: CliKind, dir: &Path, jail: &Path) -> Vec<PathBuf> {
         }
         let candidate = match kind {
             CliKind::Grok => entry.path().join("chat_history.jsonl"),
+            CliKind::Antigravity => continue,
             CliKind::Claude => {
                 let path = entry.path();
                 let is_jsonl = path
@@ -534,13 +706,22 @@ fn open_transcript(
     title: &str,
     roots: &TranscriptRoots,
 ) -> Option<PathBuf> {
-    if family.is_empty() {
-        return None;
-    }
     let jail = match kind {
         CliKind::Grok => &roots.grok_sessions,
         CliKind::Claude => &roots.claude_projects,
+        CliKind::Antigravity => &roots.agy_root,
     };
+    let hits = opened_transcripts(kind, family, jail);
+    if hits.len() == 1 {
+        return hits.into_iter().next();
+    }
+    match_title(kind, &hits, title)
+}
+
+fn opened_transcripts(kind: CliKind, family: &[(u32, u8)], jail: &Path) -> Vec<PathBuf> {
+    if family.is_empty() || jail.as_os_str().is_empty() {
+        return Vec::new();
+    }
     let mut hits = Vec::new();
     for (pid, _) in family {
         for path in open_paths(*pid) {
@@ -551,14 +732,11 @@ fn open_transcript(
                 hits.push(transcript);
             }
             if hits.len() >= 32 {
-                break;
+                return hits;
             }
         }
     }
-    if hits.len() == 1 {
-        return hits.into_iter().next();
-    }
-    match_title(kind, &hits, title)
+    hits
 }
 
 fn transcript_from_open(kind: CliKind, path: &Path, jail: &Path) -> Option<PathBuf> {
@@ -576,6 +754,13 @@ fn transcript_from_open(kind: CliKind, path: &Path, jail: &Path) -> Option<PathB
                 return None;
             }
             under_jail(jail, path)
+        }
+        CliKind::Antigravity => {
+            let name = path.file_name()?.to_str()?;
+            if name != "transcript.jsonl" && name != "transcript_full.jsonl" {
+                return None;
+            }
+            under_jail(jail, &path.parent()?.join("transcript.jsonl"))
         }
     }
 }
@@ -813,6 +998,9 @@ fn read_transcript(
     let mut buf = Vec::new();
     file.take(max_tail.saturating_add(8))
         .read_to_end(&mut buf)?;
+    let marker = b"truncated_fields";
+    let needs_full =
+        kind == CliKind::Antigravity && buf.windows(marker.len()).any(|word| word == marker);
 
     let mut offset = start;
     let mut lines = buf.split(|&byte| byte == b'\n');
@@ -821,6 +1009,12 @@ fn read_transcript(
             offset = offset.saturating_add(partial.len() as u64 + 1);
         }
     }
+
+    let full_steps = if needs_full {
+        load_full_steps(path)
+    } else {
+        HashMap::new()
+    };
 
     let mut entries = Vec::new();
     for line in lines {
@@ -836,6 +1030,15 @@ fn read_transcript(
         match kind {
             CliKind::Grok => push_grok(&mut entries, line_off, &value),
             CliKind::Claude => push_claude(&mut entries, line_off, &value),
+            CliKind::Antigravity => {
+                let step = step_index(&value);
+                push_agy(
+                    &mut entries,
+                    line_off,
+                    &value,
+                    step.and_then(|index| full_steps.get(&index)),
+                );
+            }
         }
     }
     if entries.len() > MAX_ENTRIES {
@@ -1012,6 +1215,182 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
     }
 }
 
+fn step_index(value: &Value) -> Option<i64> {
+    let index = value.get("step_index")?;
+    index
+        .as_i64()
+        .or_else(|| index.as_u64().and_then(|n| i64::try_from(n).ok()))
+}
+
+/// `transcript.jsonl` marks oversized fields and keeps the rest in the sibling log.
+fn load_full_steps(transcript: &Path) -> HashMap<i64, Value> {
+    let Some(path) = jailed_sibling(transcript, "transcript_full.jsonl") else {
+        return HashMap::new();
+    };
+    let Ok(file) = File::open(path) else {
+        return HashMap::new();
+    };
+    let mut buf = Vec::new();
+    if file.take(32 * 1024 * 1024).read_to_end(&mut buf).is_err() {
+        return HashMap::new();
+    }
+    let mut out = HashMap::new();
+    for line in buf.split(|&byte| byte == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+            continue;
+        };
+        if let Some(index) = step_index(&value) {
+            out.insert(index, value);
+        }
+    }
+    out
+}
+
+fn jailed_sibling(transcript: &Path, name: &str) -> Option<PathBuf> {
+    let parent = transcript.parent()?;
+    let parent = parent.canonicalize().ok()?;
+    let file = parent.join(name).canonicalize().ok()?;
+    file.starts_with(&parent).then_some(file)
+}
+
+fn resolve_truncated(value: &Value, full: Option<&Value>) -> Value {
+    let Some(obj) = value.as_object() else {
+        return value.clone();
+    };
+    let Some(fields) = obj.get("truncated_fields").and_then(Value::as_array) else {
+        return value.clone();
+    };
+    if fields.is_empty() {
+        return value.clone();
+    }
+    let Some(full_obj) = full.and_then(Value::as_object) else {
+        return value.clone();
+    };
+    let mut merged = obj.clone();
+    for field in fields {
+        let Some(name) = field.as_str() else {
+            continue;
+        };
+        if let Some(full_val) = full_obj.get(name) {
+            merged.insert(name.to_string(), full_val.clone());
+        }
+    }
+    Value::Object(merged)
+}
+
+/// Checkpoints, system notes, and conversation-history copies are not the reply.
+pub(crate) fn agy_bookkeeping(record_type: &str) -> bool {
+    match record_type {
+        "CHECKPOINT" | "SYSTEM_MESSAGE" | "ERROR_MESSAGE" | "CONVERSATION_HISTORY" => true,
+        other => {
+            let upper = other.to_ascii_uppercase();
+            upper.contains("HISTORY") || upper.contains("CHECKPOINT")
+        }
+    }
+}
+
+/// Tool-result step. Published transcripts name the tool (`SEARCH_WEB`,
+/// `RUN_COMMAND`, `VIEW_FILE`, `LIST_DIRECTORY`, `GREP_SEARCH`, `CODE_ACTION`).
+/// Some logs collapse that step to `GENERIC`. User, planner, and bookkeeping
+/// records are not results.
+pub(crate) fn agy_tool_result(record_type: &str) -> bool {
+    if record_type.is_empty() || agy_bookkeeping(record_type) {
+        return false;
+    }
+    let upper = record_type.to_ascii_uppercase();
+    !matches!(upper.as_str(), "USER_INPUT" | "PLANNER_RESPONSE")
+}
+
+fn history_blob(text: &str) -> bool {
+    let head = text.trim_start();
+    head.starts_with("# Resuming from a compaction")
+        || head.contains("<CONVERSATION_HISTORY>")
+        || head.starts_with("The following is a conversation history")
+}
+
+fn push_agy(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value, full: Option<&Value>) {
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    let record = obj.get("type").and_then(Value::as_str).unwrap_or("");
+    if agy_bookkeeping(record) {
+        return;
+    }
+    let resolved = resolve_truncated(value, full);
+    let Some(obj) = resolved.as_object() else {
+        return;
+    };
+    match record {
+        "USER_INPUT" => {
+            let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
+            push_text(
+                entries,
+                offset,
+                "user",
+                "You",
+                &extract_user_query(&raw),
+                USER_CAP,
+            );
+        }
+        "PLANNER_RESPONSE" => {
+            let thinking = obj.get("thinking").and_then(Value::as_str).unwrap_or("");
+            push_text(
+                entries,
+                offset,
+                "reasoning",
+                "Thinking",
+                thinking,
+                REASON_CAP,
+            );
+            let content = text_from_value(obj.get("content").unwrap_or(&Value::Null));
+            push_text(
+                entries,
+                offset,
+                "assistant",
+                "Assistant",
+                &content,
+                ASSISTANT_CAP,
+            );
+            if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
+                for call in calls {
+                    let name = call.get("name").and_then(Value::as_str).unwrap_or("tool");
+                    let summary = args_summary(tool_args(call));
+                    push_text(entries, offset, "tool", name, &summary, ARG_CAP);
+                }
+            }
+        }
+        _ if agy_tool_result(record) => {
+            let source = obj.get("source").and_then(Value::as_str).unwrap_or("");
+            if source.eq_ignore_ascii_case("SYSTEM") {
+                return;
+            }
+            let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
+            if history_blob(&raw) {
+                return;
+            }
+            push_text(
+                entries,
+                offset,
+                "tool_result",
+                "Result",
+                &first_line(&raw),
+                RESULT_CAP,
+            );
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn tool_args(call: &Value) -> &Value {
+    call.get("args")
+        .or_else(|| call.get("arguments"))
+        .or_else(|| call.get("input"))
+        .unwrap_or(&Value::Null)
+}
+
 pub(crate) fn reasoning_text(obj: &serde_json::Map<String, Value>) -> String {
     let Some(items) = obj.get("summary").and_then(Value::as_array) else {
         return String::new();
@@ -1053,7 +1432,14 @@ pub(crate) fn extract_user_query(text: &str) -> String {
     if let Some(query) = last_tag(text, "user_query") {
         return query;
     }
-    if text.contains("<user_info>") || text.contains("<system_reminder>") {
+    if let Some(query) = last_tag(text, "USER_REQUEST") {
+        return query;
+    }
+    if text.contains("<user_info>")
+        || text.contains("<system_reminder>")
+        || text.contains("<ADDITIONAL_METADATA>")
+        || text.contains("<USER_SETTINGS_CHANGE>")
+    {
         return String::new();
     }
     text.trim().to_string()
@@ -1095,10 +1481,15 @@ pub(crate) fn args_summary(args: &Value) -> String {
         "target_file",
         "file_path",
         "path",
+        "AbsolutePath",
+        "TargetFile",
         "pattern",
         "query",
         "url",
+        "Url",
         "command",
+        "CommandLine",
+        "Prompt",
     ] {
         if let Some(value) = map.get(key).and_then(Value::as_str) {
             let value = value.trim();
@@ -1177,6 +1568,7 @@ mod tests {
             grok_sessions: sessions,
             claude_projects: projects,
             grok_active_sessions: dir.join("active_sessions.json"),
+            agy_root: dir.join("no-agy"),
         }
     }
 
@@ -1503,5 +1895,213 @@ mod tests {
         assert!(css.contains(".artifact-item.assistant"));
         let lib = include_str!("lib.rs");
         assert!(lib.contains("artifacts::pane_artifacts"));
+    }
+
+    fn write_agy_conv(root: &Path, id: &str, body: &str, full: Option<&str>) {
+        let logs = root
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::write(logs.join("transcript.jsonl"), body).unwrap();
+        if let Some(full) = full {
+            fs::write(logs.join("transcript_full.jsonl"), full).unwrap();
+        }
+    }
+
+    #[test]
+    fn agy_load_selects_the_workspace_transcript_and_unwraps_steps() {
+        let dir = scratch("agy-load");
+        let root = dir.join("antigravity-cli");
+        let proj_a = dir.join("proj-a");
+        let proj_b = dir.join("proj-b");
+        fs::create_dir_all(proj_a.join("sub")).unwrap();
+        fs::create_dir_all(&proj_b).unwrap();
+        let id_a = "aaaaaaaa-1111-4111-8111-111111111111";
+        let id_b = "bbbbbbbb-2222-4222-8222-222222222222";
+        let short = concat!(
+            "{\"step_index\":1,\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:00Z\",\"content\":\"<USER_REQUEST>\\nfix the alignment\\n</USER_REQUEST>\\n<ADDITIONAL_METADATA>\\nlocal time\\n</ADDITIONAL_METADATA>\\n<USER_SETTINGS_CHANGE>\\nhide the model id\\n</USER_SETTINGS_CHANGE>\"}\n",
+            "{\"step_index\":2,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:05Z\",\"thinking\":\"check the cells\",\"content\":\"The grid is fixed.\",\"tool_calls\":[{\"name\":\"run_command\",\"args\":{\"CommandLine\":\"cargo test\",\"Cwd\":\"/tmp/proj-a\"}}]}\n",
+            "{\"step_index\":3,\"type\":\"RUN_COMMAND\",\"source\":\"MODEL\",\"status\":\"ERROR\",\"created_at\":\"2026-10-10T01:00:09Z\",\"error\":\"command failed\",\"content\":\"cut preview\\nrest\",\"truncated_fields\":[\"content\"]}\n",
+            "{\"step_index\":7,\"type\":\"SEARCH_WEB\",\"source\":\"MODEL\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:10Z\",\"content\":\"The search returned Cloud Run\\nrest\"}\n",
+            "{\"step_index\":8,\"type\":\"VIEW_FILE\",\"source\":\"MODEL\",\"status\":\"DONE\",\"content\":\"File Path: artifacts.rs\\nline\"}\n",
+            "{\"step_index\":9,\"type\":\"LIST_DIRECTORY\",\"source\":\"MODEL\",\"status\":\"DONE\",\"content\":\"Listed the workspace\\nmore\"}\n",
+            "{\"step_index\":10,\"type\":\"GREP_SEARCH\",\"source\":\"MODEL\",\"status\":\"DONE\",\"content\":\"Matched agy_tool_result\\nmore\"}\n",
+            "{\"step_index\":11,\"type\":\"CODE_ACTION\",\"source\":\"MODEL\",\"status\":\"ERROR\",\"error\":\"edit failed\",\"content\":\"Could not apply the edit\\nmore\"}\n",
+            "{\"step_index\":12,\"type\":\"GENERIC\",\"source\":\"SYSTEM\",\"content\":\"generic system record\"}\n",
+            "{\"step_index\":4,\"type\":\"CHECKPOINT\",\"status\":\"DONE\",\"content\":\"checkpoint secret\"}\n",
+            "{\"step_index\":5,\"type\":\"SYSTEM_MESSAGE\",\"source\":\"SYSTEM\",\"status\":\"DONE\",\"content\":\"system bookkeeping\"}\n",
+            "{\"step_index\":6,\"type\":\"CONVERSATION_HISTORY\",\"content\":\"old conversation history\"}\n",
+        );
+        let full = concat!(
+            "{\"step_index\":3,\"type\":\"RUN_COMMAND\",\"source\":\"MODEL\",\"status\":\"ERROR\",\"content\":\"untruncated tool line\\nrest of the command output\"}\n",
+        );
+        write_agy_conv(&root, id_a, short, Some(full));
+        write_agy_conv(
+            &root,
+            id_b,
+            "{\"step_index\":1,\"type\":\"PLANNER_RESPONSE\",\"content\":\"other workspace reply\"}\n",
+            None,
+        );
+        // Editor markdown is not the CLI transcript, even when it sits beside the store.
+        let editor = dir.join("antigravity").join("brain").join(id_a);
+        fs::create_dir_all(&editor).unwrap();
+        fs::write(editor.join("task.md"), "editor brain markdown").unwrap();
+        fs::create_dir_all(root.join("cache")).unwrap();
+        let cwd_a = proj_a.to_string_lossy();
+        let cwd_b = proj_b.to_string_lossy();
+        fs::write(
+            root.join("cache").join("last_conversations.json"),
+            format!(
+                "{{\"{cwd_a}\":\"{id_a}\",\"{cwd_b}\":\"{id_b}\",\"file://{cwd_a}\":\"{id_a}\"}}"
+            ),
+        )
+        .unwrap();
+        let mut roots = roots(&dir, dir.join("no-grok"), dir.join("no-claude"));
+        roots.agy_root = root;
+
+        let feed = load_artifacts("agy", &cwd_a, "", 0, &roots);
+        assert_eq!(feed.cli.as_deref(), Some("antigravity"));
+        let blob = feed
+            .entries
+            .iter()
+            .map(|entry| format!("{} {} {}", entry.kind, entry.label, entry.body))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(blob.contains("user You fix the alignment"), "{blob}");
+        assert!(!blob.contains("ADDITIONAL_METADATA"), "{blob}");
+        assert!(!blob.contains("USER_SETTINGS_CHANGE"), "{blob}");
+        assert!(
+            blob.contains("reasoning Thinking check the cells"),
+            "{blob}"
+        );
+        assert!(
+            blob.contains("assistant Assistant The grid is fixed."),
+            "{blob}"
+        );
+        assert!(blob.contains("tool run_command cargo test"), "{blob}");
+        assert!(
+            blob.contains("tool_result Result untruncated tool line"),
+            "{blob}"
+        );
+        assert!(
+            blob.contains("tool_result Result The search returned Cloud Run"),
+            "{blob}"
+        );
+        assert!(
+            blob.contains("tool_result Result File Path: artifacts.rs"),
+            "{blob}"
+        );
+        assert!(
+            blob.contains("tool_result Result Listed the workspace"),
+            "{blob}"
+        );
+        assert!(
+            blob.contains("tool_result Result Matched agy_tool_result"),
+            "{blob}"
+        );
+        assert!(
+            blob.contains("tool_result Result Could not apply the edit"),
+            "{blob}"
+        );
+        assert!(!blob.contains("cut preview"), "{blob}");
+        assert!(!blob.contains("generic system record"), "{blob}");
+        assert!(!blob.contains("checkpoint secret"), "{blob}");
+        assert!(!blob.contains("system bookkeeping"), "{blob}");
+        assert!(!blob.contains("old conversation history"), "{blob}");
+        assert!(!blob.contains("other workspace reply"), "{blob}");
+        assert!(!blob.contains("editor brain markdown"), "{blob}");
+
+        let nested = proj_a.join("sub");
+        let from_child = load_artifacts("agy", &nested.to_string_lossy(), "", 0, &roots);
+        assert!(
+            from_child
+                .entries
+                .iter()
+                .any(|entry| entry.body == "fix the alignment"),
+            "{from_child:?}"
+        );
+
+        let titled = load_artifacts("zsh", &cwd_a, "Sparkmux - Antigravity", 0, &roots);
+        assert_eq!(titled.cli.as_deref(), Some("antigravity"));
+        let titled_agy = load_artifacts("zsh", &cwd_a, "agent agy", 0, &roots);
+        assert_eq!(titled_agy.cli.as_deref(), Some("antigravity"));
+        assert!(titled.transcript_path.is_some(), "{titled:?}");
+        assert!(
+            titled
+                .entries
+                .iter()
+                .any(|entry| entry.body == "fix the alignment"),
+            "{titled:?}"
+        );
+
+        let other = load_artifacts("agy", &cwd_b, "Antigravity", 0, &roots);
+        assert!(
+            other
+                .entries
+                .iter()
+                .any(|entry| entry.body == "other workspace reply"),
+            "{other:?}"
+        );
+        assert!(other
+            .entries
+            .iter()
+            .all(|entry| entry.body != "fix the alignment"));
+
+        let versioned = load_artifacts("/usr/local/bin/agy-1.2.3", &cwd_a, "", 0, &roots);
+        assert_eq!(versioned.cli.as_deref(), Some("antigravity"));
+        let windows = load_artifacts("agy.exe", &cwd_a, "", 0, &roots);
+        assert_eq!(windows.cli.as_deref(), Some("antigravity"));
+
+        let empty = load_artifacts("agy", "/tmp/sparkmux-no-agy-workspace", "", 0, &roots);
+        assert_eq!(empty.cli.as_deref(), Some("antigravity"));
+        assert!(empty.transcript_path.is_none(), "{empty:?}");
+        assert!(empty.entries.is_empty());
+
+        let shell = load_artifacts("zsh", &cwd_a, "zsh", 0, &roots);
+        assert!(shell.cli.is_none(), "{shell:?}");
+        let bot = load_artifacts("agybot", &cwd_a, "notes", 0, &roots);
+        assert!(bot.cli.is_none(), "{bot:?}");
+        let extra = load_artifacts("agy-extra", &cwd_a, "", 0, &roots);
+        assert!(extra.cli.is_none(), "{extra:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_symlink_outside_the_store_is_ignored() {
+        let dir = scratch("agy-link");
+        let root = dir.join("antigravity-cli");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let outside = dir.join("outside.jsonl");
+        fs::write(
+            &outside,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"secret-outside\"}\n",
+        )
+        .unwrap();
+        let id = "cccccccc-3333-4333-8333-333333333333";
+        let logs = root
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        std::os::unix::fs::symlink(&outside, logs.join("transcript.jsonl")).unwrap();
+        fs::create_dir_all(root.join("cache")).unwrap();
+        let cwd = project.to_string_lossy();
+        fs::write(
+            root.join("cache").join("last_conversations.json"),
+            format!("{{\"{cwd}\":\"{id}\"}}"),
+        )
+        .unwrap();
+        let mut roots = roots(&dir, dir.join("no-grok"), dir.join("no-claude"));
+        roots.agy_root = root;
+        let feed = load_artifacts("agy", &cwd, "Antigravity", 0, &roots);
+        assert_eq!(feed.cli.as_deref(), Some("antigravity"));
+        assert!(feed.transcript_path.is_none(), "{feed:?}");
+        assert!(feed.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

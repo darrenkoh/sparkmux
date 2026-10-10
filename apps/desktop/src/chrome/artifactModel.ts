@@ -82,7 +82,7 @@ export function emptyOutputText(
 ): string | null {
   if (!feed) return "Reading the transcript…";
   if (feed.error) return feed.error;
-  if (!feed.cli) return "This pane is not running Grok or Claude.";
+  if (!feed.cli) return "This pane is not running Grok, Claude, or Antigravity.";
   if (!feed.transcript_path) return "No transcript for this pane yet.";
   if (visibleCount > 0) return null;
   if (through > 0) return "Cleared. New replies show up here.";
@@ -92,6 +92,7 @@ export function emptyOutputText(
 export function cliLabel(cli: string | null): string {
   if (cli === "grok") return "Grok";
   if (cli === "claude") return "Claude";
+  if (cli === "antigravity" || cli === "agy") return "Antigravity";
   return "";
 }
 

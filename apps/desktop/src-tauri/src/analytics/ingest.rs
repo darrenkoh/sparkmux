@@ -16,7 +16,8 @@ use serde_json::{Map, Value};
 
 use super::event::{self, parse_iso_ms, Event};
 use crate::artifacts::{
-    args_summary, extract_user_query, reasoning_text, text_from_value, truncate_chars, CliKind,
+    agy_bookkeeping, agy_tool_result, args_summary, extract_user_query, reasoning_text,
+    text_from_value, tool_args, truncate_chars, CliKind,
 };
 
 /// Bytes read from one file per tick. A large history imports over a few ticks.
@@ -62,6 +63,10 @@ pub struct Cursor {
     pub turn_ts: VecDeque<i64>,
     #[serde(default)]
     pub turn_start: i64,
+    /// Antigravity user turn opened and not yet emitted. Stats polls once a
+    /// second, so the user step and the later planner step are different reads.
+    #[serde(default)]
+    pub agy_turn_open: bool,
     /// Latest timestamp seen in this transcript.
     #[serde(default)]
     pub last_ts: i64,
@@ -95,6 +100,13 @@ pub fn source_id(kind: CliKind, path: &Path) -> String {
         CliKind::Claude => path
             .file_stem()
             .map(|name| name.to_string_lossy().into_owned()),
+        // `brain/<conversation-id>/.system_generated/logs/transcript.jsonl`
+        CliKind::Antigravity => path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned()),
     }
     .unwrap_or_default();
     raw.chars().take(8).collect()
@@ -105,6 +117,7 @@ pub fn ingest(kind: CliKind, path: &Path, cur: &mut Cursor, now: i64) -> Vec<Eve
     let mut out = match kind {
         CliKind::Grok => ingest_grok(path, cur, now),
         CliKind::Claude => ingest_claude(path, cur, now),
+        CliKind::Antigravity => ingest_agy(path, cur, now),
     };
     for event in &mut out {
         event.s.clone_from(&src);
@@ -611,6 +624,257 @@ fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut
     }
 }
 
+// ---------------------------------------------------------------- Antigravity
+
+fn ingest_agy(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let mut saw_after = false;
+    let Some((lines, next)) = read_new_lines(path, cur.offset, MAX_READ) else {
+        return out;
+    };
+    cur.offset = next;
+    for line in lines {
+        let Some(obj) = parse_obj(&line) else {
+            continue;
+        };
+        agy_step(&obj, cur, now, &mut saw_after, &mut out);
+    }
+    if saw_after {
+        close_agy_turn(cur, &mut out);
+    }
+    out
+}
+
+/// One turn per open user prompt. Cleared when emitted so a later poll does not
+/// emit it again.
+fn close_agy_turn(cur: &mut Cursor, out: &mut Vec<Event>) {
+    if !cur.agy_turn_open || cur.turn_start <= 0 || cur.last_ts < cur.turn_start {
+        cur.agy_turn_open = false;
+        return;
+    }
+    let mut ev = Event::new(cur.last_ts, event::TURN);
+    ev.ms = cur.last_ts.saturating_sub(cur.turn_start) as u64;
+    out.push(ev);
+    cur.agy_turn_open = false;
+}
+
+fn agy_step(
+    obj: &Map<String, Value>,
+    cur: &mut Cursor,
+    now: i64,
+    saw_after: &mut bool,
+    out: &mut Vec<Event>,
+) {
+    let record = str_of(obj, "type");
+    if agy_bookkeeping(record) || history_blob_line(obj) {
+        return;
+    }
+    // Close the previous turn before this prompt's timestamp replaces `last_ts`.
+    if record == "USER_INPUT" && *saw_after {
+        close_agy_turn(cur, out);
+        *saw_after = false;
+    }
+    let ts = agy_timestamp(obj, cur, now);
+    match record {
+        "USER_INPUT" => {
+            cur.turn_start = ts;
+            cur.agy_turn_open = true;
+            let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
+            let query = extract_user_query(&raw);
+            if query.is_empty() || noise_prompt(&query) {
+                return;
+            }
+            let mut ev = Event::new(ts, event::USER);
+            (ev.b, ev.c) = body(&query, USER_CAP);
+            out.push(ev);
+        }
+        "PLANNER_RESPONSE" => {
+            if cur.agy_turn_open {
+                *saw_after = true;
+            }
+            let thinking = str_of(obj, "thinking");
+            if !thinking.trim().is_empty() {
+                let mut ev = Event::new(ts, event::THINK);
+                (ev.b, ev.c) = body(thinking, THINK_CAP);
+                out.push(ev);
+            }
+            let content = text_from_value(obj.get("content").unwrap_or(&Value::Null));
+            if !content.trim().is_empty() {
+                let mut ev = Event::new(ts, event::REPLY);
+                (ev.b, ev.c) = body(&content, REPLY_CAP);
+                let model = agy_model(obj);
+                if !model.is_empty() {
+                    ev.n.clone_from(&model);
+                    cur.model.clone_from(&model);
+                }
+                out.push(ev);
+            }
+            if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
+                for call in calls {
+                    let name = call
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("tool")
+                        .to_string();
+                    let mut ev = Event::new(ts, event::TOOL);
+                    ev.a = truncate_chars(&args_summary(tool_args(call)), ARG_CAP);
+                    ev.n.clone_from(&name);
+                    out.push(ev);
+                    remember_agy_tool(cur, ts, name);
+                }
+            }
+            agy_usage(obj, cur, ts, out);
+        }
+        _ if agy_tool_result(record) => {
+            if str_of(obj, "source").eq_ignore_ascii_case("SYSTEM") {
+                return;
+            }
+            if cur.agy_turn_open {
+                *saw_after = true;
+            }
+            let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
+            let failed = agy_failed(obj);
+            let mut ev = Event::new(ts, event::RESULT);
+            (ev.b, ev.c) = one_line(&raw, RESULT_CAP);
+            ev.err = failed;
+            out.push(ev);
+            if let Some((start, name)) = take_oldest_pending(cur) {
+                let mut done = Event::new(ts, event::DONE);
+                done.n = name;
+                done.ms = ts.saturating_sub(start) as u64;
+                done.err = failed;
+                out.push(done);
+            }
+            agy_usage(obj, cur, ts, out);
+        }
+        _ => {}
+    }
+}
+
+fn history_blob_line(obj: &Map<String, Value>) -> bool {
+    let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
+    let head = raw.trim_start();
+    head.starts_with("# Resuming from a compaction")
+        || head.contains("<CONVERSATION_HISTORY>")
+        || head.starts_with("The following is a conversation history")
+}
+
+fn agy_timestamp(obj: &Map<String, Value>, cur: &mut Cursor, now: i64) -> i64 {
+    let ts = parse_iso_ms(str_of(obj, "created_at")).unwrap_or(if cur.last_ts > 0 {
+        cur.last_ts
+    } else {
+        now
+    });
+    if ts > 0 {
+        cur.last_ts = cur.last_ts.max(ts);
+    }
+    ts
+}
+
+fn agy_model(obj: &Map<String, Value>) -> String {
+    for key in ["model", "model_id", "modelId", "primaryModelId"] {
+        if let Some(text) = obj.get(key).and_then(Value::as_str) {
+            let text = text.trim();
+            if !text.is_empty() && !text.starts_with('<') {
+                return text.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Explicit counters only. A missing field is zero, never a character-count guess.
+fn agy_usage(obj: &Map<String, Value>, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>) {
+    let input = explicit_num(obj, &["input_tokens", "inputTokens"]);
+    let output = explicit_num(obj, &["output_tokens", "outputTokens"]);
+    let cache = explicit_num(
+        obj,
+        &["cache_read_tokens", "cacheReadTokens", "cachedReadTokens"],
+    );
+    let write = explicit_num(
+        obj,
+        &[
+            "cache_write_tokens",
+            "cacheWriteTokens",
+            "cache_creation_input_tokens",
+        ],
+    );
+    let reasoning = explicit_num(obj, &["reasoning_tokens", "reasoningTokens"]);
+    let model = agy_model(obj);
+    if input.is_none()
+        && output.is_none()
+        && cache.is_none()
+        && write.is_none()
+        && reasoning.is_none()
+        && model.is_empty()
+    {
+        return;
+    }
+    if !model.is_empty() {
+        cur.model.clone_from(&model);
+    }
+    let mut ev = Event::new(ts, event::USAGE);
+    ev.ti = input.unwrap_or(0);
+    ev.to = output.unwrap_or(0);
+    ev.tc = cache.unwrap_or(0);
+    ev.tw = write.unwrap_or(0);
+    ev.tr = reasoning.unwrap_or(0);
+    ev.n = model;
+    ev.c = 1;
+    if ev.ti > 0 {
+        cur.ctx_used = ev.ti;
+    }
+    out.push(ev);
+}
+
+fn explicit_num(obj: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
+    for key in keys {
+        let Some(value) = obj.get(*key) else {
+            continue;
+        };
+        if let Some(number) = value.as_u64() {
+            return Some(number);
+        }
+        if let Some(number) = value.as_i64() {
+            if number >= 0 {
+                return Some(number as u64);
+            }
+        }
+    }
+    None
+}
+
+fn agy_failed(obj: &Map<String, Value>) -> bool {
+    let status = str_of(obj, "status");
+    if status.eq_ignore_ascii_case("ERROR") || status.eq_ignore_ascii_case("INVALID") {
+        return true;
+    }
+    match obj.get("error") {
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Bool(flag)) => *flag,
+        Some(Value::Object(_)) => true,
+        _ => false,
+    }
+}
+
+fn remember_agy_tool(cur: &mut Cursor, ts: i64, name: String) {
+    if cur.pending.len() >= PENDING_CAP {
+        take_oldest_pending(cur);
+    }
+    cur.tools_chat = cur.tools_chat.saturating_add(1);
+    cur.pending
+        .insert(format!("agy-{}", cur.tools_chat), (ts, name));
+}
+
+fn take_oldest_pending(cur: &mut Cursor) -> Option<(i64, String)> {
+    let oldest = cur
+        .pending
+        .iter()
+        .min_by_key(|(_, (ts, _))| *ts)
+        .map(|(id, _)| id.clone())?;
+    cur.pending.remove(&oldest)
+}
+
 fn claude_result(block: &Value, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>) {
     let raw = text_from_value(block.get("content").unwrap_or(&Value::Null));
     let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
@@ -828,5 +1092,156 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].b, "two");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_ingests_a_turn_once_and_sums_only_explicit_tokens() {
+        let scratch_dir = scratch("agy");
+        let dir = scratch_dir
+            .join("brain")
+            .join("dddddddd-4444-4444-8444-444444444444");
+        let logs = dir.join(".system_generated").join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let path = logs.join("transcript.jsonl");
+        let long_reply = "x".repeat(400);
+        // Stats polls once a second. The user step and the later planner step
+        // are separate ingest calls, and the turn is emitted on the second.
+        fs::write(
+            &path,
+            concat!(
+                "{\"step_index\":1,\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:00Z\",\"content\":\"<USER_REQUEST>\\nfix the alignment\\n</USER_REQUEST>\\n<ADDITIONAL_METADATA>\\nlocal time\\n</ADDITIONAL_METADATA>\"}\n",
+            ),
+        )
+        .unwrap();
+        let mut cur = Cursor::default();
+        let opened = ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        assert!(cur.agy_turn_open);
+        assert_eq!(kinds(&opened), vec!["user"]);
+        let opened_blob = serde_json::to_string(&opened).unwrap();
+        assert!(opened_blob.contains("fix the alignment"), "{opened_blob}");
+        assert!(
+            !opened_blob.contains("ADDITIONAL_METADATA"),
+            "{opened_blob}"
+        );
+        assert!(opened
+            .iter()
+            .all(|event| event.s == "dddddddd" && event.cli == "antigravity"));
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(
+            format!(
+                concat!(
+                    "{{\"step_index\":2,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:05Z\",\"thinking\":\"check the cells\",\"content\":\"The grid is fixed.\",\"model\":\"gemini-test\",\"input_tokens\":1200,\"output_tokens\":30,\"cache_read_tokens\":800,\"tool_calls\":[{{\"name\":\"run_command\",\"args\":{{\"CommandLine\":\"cargo test\"}}}}]}}\n",
+                    "{{\"step_index\":3,\"type\":\"RUN_COMMAND\",\"source\":\"MODEL\",\"status\":\"ERROR\",\"created_at\":\"2026-10-10T01:00:09Z\",\"error\":\"command failed\",\"content\":\"build failed\\nnext line\"}}\n",
+                    "{{\"step_index\":9,\"type\":\"SEARCH_WEB\",\"source\":\"MODEL\",\"status\":\"ERROR\",\"created_at\":\"2026-10-10T01:00:10Z\",\"error\":\"no summary\",\"content\":\"The search returned nothing\\nrest\"}}\n",
+                    "{{\"step_index\":10,\"type\":\"VIEW_FILE\",\"source\":\"MODEL\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:10Z\",\"content\":\"Opened artifacts.rs\\nline\"}}\n",
+                    "{{\"step_index\":11,\"type\":\"LIST_DIRECTORY\",\"source\":\"MODEL\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:10Z\",\"content\":\"Listed the workspace\\nmore\"}}\n",
+                    "{{\"step_index\":12,\"type\":\"GREP_SEARCH\",\"source\":\"MODEL\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:10Z\",\"content\":\"Matched the detector\\nmore\"}}\n",
+                    "{{\"step_index\":13,\"type\":\"CODE_ACTION\",\"source\":\"MODEL\",\"status\":\"ERROR\",\"created_at\":\"2026-10-10T01:00:11Z\",\"error\":\"edit failed\",\"content\":\"Could not apply the edit\\nmore\"}}\n",
+                    "{{\"step_index\":14,\"type\":\"GENERIC\",\"source\":\"SYSTEM\",\"created_at\":\"2026-10-10T01:00:11Z\",\"content\":\"generic system record\"}}\n",
+                    "{{\"step_index\":4,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:12Z\",\"content\":\"{long}\"}}\n",
+                    "{{\"step_index\":5,\"type\":\"CHECKPOINT\",\"created_at\":\"2026-10-10T01:00:13Z\",\"content\":\"checkpoint secret\"}}\n",
+                    "{{\"step_index\":6,\"type\":\"SYSTEM_MESSAGE\",\"created_at\":\"2026-10-10T01:00:14Z\",\"content\":\"system bookkeeping\"}}\n",
+                    "{{\"step_index\":7,\"type\":\"CONVERSATION_HISTORY\",\"created_at\":\"2026-10-10T01:00:15Z\",\"content\":\"old conversation history\"}}\n",
+                ),
+                long = long_reply,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        drop(file);
+        let events = ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        assert!(!cur.agy_turn_open);
+        let blob = serde_json::to_string(&events).unwrap();
+        assert!(!blob.contains("checkpoint secret"), "{blob}");
+        assert!(!blob.contains("system bookkeeping"), "{blob}");
+        assert!(!blob.contains("old conversation history"), "{blob}");
+        assert!(events.iter().all(|event| event.k != "user"));
+        assert!(events.iter().any(|event| event.k == "think"));
+        assert!(events.iter().any(|event| event.k == "reply"));
+        let tool = events.iter().find(|event| event.k == "tool").unwrap();
+        assert_eq!(tool.n, "run_command");
+        assert_eq!(tool.a, "cargo test");
+        let failed: Vec<_> = events
+            .iter()
+            .filter(|event| event.k == "result" && event.err)
+            .collect();
+        assert!(
+            failed
+                .iter()
+                .any(|event| event.b == "build failed next line"),
+            "{failed:?}"
+        );
+        assert!(
+            failed
+                .iter()
+                .any(|event| event.b == "The search returned nothing rest"),
+            "{failed:?}"
+        );
+        assert!(
+            failed
+                .iter()
+                .any(|event| event.b == "Could not apply the edit more"),
+            "{failed:?}"
+        );
+        let results: Vec<_> = events.iter().filter(|event| event.k == "result").collect();
+        for line in [
+            "Opened artifacts.rs line",
+            "Listed the workspace more",
+            "Matched the detector more",
+        ] {
+            assert!(
+                results.iter().any(|event| event.b == line),
+                "{line} missing in {results:?}"
+            );
+        }
+        assert!(!blob.contains("generic system record"), "{blob}");
+        let done = events.iter().find(|event| event.k == "done").unwrap();
+        assert!(done.err, "{done:?}");
+        assert_eq!(done.n, "run_command");
+        let turns: Vec<_> = events.iter().filter(|event| event.k == "turn").collect();
+        assert_eq!(turns.len(), 1, "{events:?}");
+        assert_eq!(turns[0].t, parse_iso_ms("2026-10-10T01:00:12Z").unwrap());
+        assert_eq!(turns[0].ms, 12_000);
+        let usage: Vec<_> = events.iter().filter(|event| event.k == "usage").collect();
+        assert_eq!(usage.len(), 1, "{events:?}");
+        assert_eq!((usage[0].ti, usage[0].to, usage[0].tc), (1200, 30, 800));
+        assert_eq!(usage[0].n, "gemini-test");
+        let token_sum: u64 = events
+            .iter()
+            .map(|event| event.ti + event.to + event.tc)
+            .sum();
+        assert_eq!(token_sum, 1200 + 30 + 800);
+        assert!(events.iter().all(|event| event.ti != 400));
+        assert!(events
+            .iter()
+            .all(|event| event.s == "dddddddd" && event.cli == "antigravity"));
+
+        assert!(ingest(CliKind::Antigravity, &path, &mut cur, 0).is_empty());
+
+        // A planner that arrives after the turn closed must not emit another turn.
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            file,
+            "{{\"step_index\":15,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:01:00Z\",\"content\":\"no new turn\"}}"
+        )
+        .unwrap();
+        drop(file);
+        let late = ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        assert_eq!(kinds(&late), vec!["reply"]);
+        assert_eq!(late[0].b, "no new turn");
+        assert!(!cur.agy_turn_open);
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            file,
+            "{{\"step_index\":8,\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:02:00Z\",\"content\":\"<USER_REQUEST>\\nonly the new step\\n</USER_REQUEST>\"}}"
+        )
+        .unwrap();
+        let appended = ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        assert_eq!(kinds(&appended), vec!["user"]);
+        assert_eq!(appended[0].b, "only the new step");
+        assert_eq!(appended[0].ti, 0);
+        let _ = fs::remove_dir_all(&scratch_dir);
     }
 }
