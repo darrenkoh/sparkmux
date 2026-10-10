@@ -8,6 +8,7 @@ mod error;
 mod layout;
 mod pane_seed;
 mod preview;
+mod screen_client;
 mod snapshot;
 mod target;
 mod version;
@@ -28,6 +29,7 @@ pub use pane_seed::{
     format_pane_seed, parse_pane_meta, split_pane_capture, visible_seed_body, PANE_SCROLLBACK_LINES,
 };
 pub use preview::cap_lines;
+pub use screen_client::ScreenClient;
 pub use snapshot::{
     first_cursor, parse_snapshot, restore_cursor, Cursor, Pane, Session, Snapshot, Window,
 };

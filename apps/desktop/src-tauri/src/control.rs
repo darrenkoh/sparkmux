@@ -37,6 +37,8 @@ pub async fn connect(
         if inner.attached_session.as_deref() == Some(session.as_str()) {
             drop(inner);
             let _ = ctl.refresh_size(cols.max(2), rows.max(1)).await;
+            let mut inner = state.inner.lock().await;
+            ensure_screen(&mut inner, &session).await;
             return Ok(());
         }
         drop(inner);
@@ -46,10 +48,12 @@ pub async fn connect(
             .is_ok()
         {
             let mut inner = state.inner.lock().await;
-            inner.attached_session = Some(session);
+            inner.attached_session = Some(session.clone());
             inner.stopped = false;
             drop(inner);
             let _ = ctl.refresh_size(cols.max(2), rows.max(1)).await;
+            let mut inner = state.inner.lock().await;
+            ensure_screen(&mut inner, &session).await;
             return Ok(());
         }
         inner = state.inner.lock().await;
@@ -71,10 +75,36 @@ pub async fn connect(
     let pump = spawn_pump(app.clone(), &ctl, channels);
     inner.control = Some(Arc::new(ctl));
     inner.pump = Some(pump);
-    inner.attached_session = Some(session);
+    inner.attached_session = Some(session.clone());
     inner.stopped = false;
+    ensure_screen(&mut inner, &session).await;
     tracing::info!(ms = started.elapsed().as_millis(), "control_connect_ms");
     Ok(())
+}
+
+/// Keep a read-only client on the same session as the control client so a
+/// program inside the pane does not see `control-mode` as the active client.
+async fn ensure_screen(inner: &mut crate::state::Inner, session: &str) {
+    let Some(client) = inner.client.clone() else {
+        return;
+    };
+    if let Some(screen) = inner.screen.as_mut() {
+        if screen.is_alive() {
+            if screen.session() == session {
+                return;
+            }
+            if screen.retarget(&client, session).is_ok() {
+                return;
+            }
+        }
+    }
+    inner.screen.take();
+    let session_owned = session.to_string();
+    match tokio::task::spawn_blocking(move || client.spawn_screen_client(&session_owned)).await {
+        Ok(Ok(screen)) => inner.screen = Some(screen),
+        Ok(Err(err)) => tracing::warn!(error = %err, "read-only client did not attach"),
+        Err(err) => tracing::warn!(error = %err, "read-only client did not attach"),
+    }
 }
 
 pub async fn disconnect(state: &State<'_, AppState>) -> Result<(), String> {
@@ -87,6 +117,9 @@ async fn shutdown_locked(inner: &mut crate::state::Inner) {
     if let Some(handle) = inner.pump.take() {
         handle.abort();
     }
+    // Detach the read-only client before the control client so quit does not
+    // leave an extra client on the server.
+    inner.screen.take();
     inner.channels.lock().await.clear();
     if let Some(ctl) = inner.control.take() {
         let _ = ctl.shutdown().await;

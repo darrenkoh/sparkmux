@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use sparkmux_core::{
-    gui_spawn_env, load_config, Config, ConfigOverrides, ControlClient, SessionSpawn, TmuxClient,
+    gui_spawn_env, load_config, Config, ConfigOverrides, ControlClient, ScreenClient, SessionSpawn,
+    TmuxClient,
 };
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::Mutex;
@@ -24,6 +25,9 @@ pub struct AppState {
 pub struct Inner {
     pub client: Option<TmuxClient>,
     pub control: Option<Arc<ControlClient>>,
+    /// Read-only client so programs inside a pane do not treat Sparkmux as
+    /// tmux control mode. See `sparkmux_core::ScreenClient`.
+    pub screen: Option<ScreenClient>,
     pub config: Config,
     pub spawn: SessionSpawn,
     pub attached_session: Option<String>,
@@ -42,6 +46,7 @@ impl AppState {
             inner: Mutex::new(Inner {
                 client: None,
                 control: None,
+                screen: None,
                 config,
                 spawn: gui_spawn_env(),
                 attached_session: None,

@@ -412,7 +412,7 @@ impl TmuxClient {
         cmd
     }
 
-    fn run(&self, args: &[&str]) -> Result<String> {
+    pub(crate) fn run(&self, args: &[&str]) -> Result<String> {
         let mut cmd = Command::new(&self.bin);
         self.apply_socket(&mut cmd);
         cmd.args(args).stdin(Stdio::null());
@@ -427,6 +427,13 @@ impl TmuxClient {
         } else {
             Err(Error::Command(err))
         }
+    }
+
+    /// Socket-selected tmux command. The caller adds the subcommand.
+    pub(crate) fn bare_command(&self) -> Command {
+        let mut cmd = Command::new(&self.bin);
+        self.apply_socket(&mut cmd);
+        cmd
     }
 
     fn apply_socket(&self, cmd: &mut Command) {
