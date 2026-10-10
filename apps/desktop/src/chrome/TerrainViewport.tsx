@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { ActivityPoint } from "../api";
-import scifiData from "./scifiData.json";
-import { REUNION_GRID_W, REUNION_GRID_H, REUNION_HEIGHTS_B64 } from "./reunionHeightsB64";
+import type { ActivityPoint, TabAnalyticsStats } from "../api";
 
 interface TerrainViewportProps {
   timeline: ActivityPoint[];
   activeModel?: string;
+  sessionName?: string;
+  tabName?: string;
+  stats?: TabAnalyticsStats | null;
 }
 
 // ---------------------------------------------------------------------------
-// Math & Vector Utilities
+// 3D Matrix & Math Helpers
 // ---------------------------------------------------------------------------
 function perspective(fovy: number, aspect: number, near: number, far: number): Float32Array {
   const f = 1 / Math.tan(fovy / 2);
@@ -73,12 +74,12 @@ function projectPoint(vp: Float32Array, p: [number, number, number], width: numb
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
-const smoothstep = (e0: number, e1: number, x: number) => {
-  const t = clamp((x - e0) / (e1 - e0), 0, 1);
-  return t * t * (3 - 2 * t);
-};
 
-// PRNG matching reference seed 2077
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 function makeRng(seed: number) {
   let s = seed >>> 0;
   return () => {
@@ -96,7 +97,7 @@ const VS_TERRAIN = `#version 300 es
 uniform mat4 uVP;
 uniform float uTime, uFocus, uAperture, uDpr, uGain, uScan, uReal;
 in vec4 aPos;      // xyz + brightness
-in vec3 aCol;      // natural land-cover color
+in vec3 aCol;      // label category color
 in float aSeed;
 out float vA;
 out float vRing;
@@ -104,14 +105,14 @@ out vec3 vCol;
 void main() {
   vec4 c = uVP * vec4(aPos.xyz, 1.0);
   gl_Position = c;
-  float coc = min(abs(c.w - uFocus) * uAperture, 30.0);
+  float coc = min(abs(c.w - uFocus) * uAperture, 28.0);
   float base = 1.0 + aSeed * 1.3;
   float size = base + coc;
   gl_PointSize = size * uDpr;
   float energy = (base * base) / (size * size);
-  float twinkle = 0.82 + 0.18 * sin(uTime * (0.7 + aSeed * 2.5) + aSeed * 61.0);
-  float scan = 1.0 + 2.2 * exp(-pow((aPos.y - uScan) * 5.0, 2.0)) * step(0.05, aPos.y);
-  float fog = exp(-max(c.w - 40.0, 0.0) * 0.03);
+  float twinkle = 0.84 + 0.16 * sin(uTime * (0.8 + aSeed * 2.2) + aSeed * 53.0);
+  float scan = 1.0 + 2.4 * exp(-pow((aPos.y - uScan) * 4.5, 2.0)) * step(0.04, aPos.y);
+  float fog = exp(-max(c.w - 38.0, 0.0) * 0.035);
   vA = aPos.w * energy * twinkle * scan * fog * uGain;
   vRing = smoothstep(5.0, 15.0, coc);
   vCol = mix(vec3(1.0), aCol, uReal);
@@ -161,27 +162,30 @@ void main() {
 }
 `;
 
-// Decode base64 elevation buffer
-function decodeHeights(): Int16Array {
-  const binary = atob(REUNION_HEIGHTS_B64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new Int16Array(bytes.buffer);
-}
+// Categories mapped along the Z-axis (Label Axis)
+const CHANNELS = [
+  { key: "user", label: "USER INPUT", color: [1.0, 0.62, 0.24], hex: "#ff9a3c", zIndex: 0 },
+  { key: "think", label: "REASONING", color: [0.75, 0.52, 0.98], hex: "#c084fc", zIndex: 1 },
+  { key: "reply", label: "ASSISTANT", color: [0.36, 0.58, 0.95], hex: "#5b8def", zIndex: 2 },
+  { key: "tool", label: "TOOL RUNTIME", color: [0.18, 0.84, 0.75], hex: "#2dd4bf", zIndex: 3 },
+] as const;
 
-export default function TerrainViewport({ timeline, activeModel }: TerrainViewportProps) {
+export default function TerrainViewport({
+  timeline,
+  activeModel,
+  sessionName,
+  tabName,
+  stats,
+}: TerrainViewportProps) {
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
   const [realism, setRealism] = useState<"mono" | "color">("color");
 
-  // Camera state matching reference defaults
   const camRef = useRef({
-    azimuth: 0.35,
-    elevation: 0.50,
-    radius: 50,
-    target: [0, 1.5, 0] as [number, number, number],
+    azimuth: 0.38,
+    elevation: 0.48,
+    radius: 46,
+    target: [0, 1.2, 0] as [number, number, number],
     isDragging: false,
     lastX: 0,
     lastY: 0,
@@ -218,7 +222,6 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     const progTerrain = link(VS_TERRAIN, FS_TERRAIN);
     const progContour = link(VS_CONTOUR, FS_CONTOUR);
 
-    // Uniform locations
     const uT = {
       uVP: gl.getUniformLocation(progTerrain, "uVP"),
       uTime: gl.getUniformLocation(progTerrain, "uTime"),
@@ -239,139 +242,142 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     };
 
     // -------------------------------------------------------------------------
-    // Load Authentic Elevation & Land-Cover Model
+    // 3D True Axes Construction:
+    // X-Axis = Time (Session start -> end)
+    // Z-Axis = Category Label (USER -> THINK -> REPLY -> TOOL)
+    // Y-Axis = Value (Event frequency, volume, token weight)
     // -------------------------------------------------------------------------
+    const TIME_SPAN = 28;  // X extent: -14 to +14
+    const LABEL_SPAN = 18; // Z extent: -9 to +9
     const rng = makeRng(2077);
-    const rawElev = decodeHeights();
 
-    const unitM = scifiData.display.unitM || 1700;
-    const vertScale = scifiData.display.vert || 3.5;
-    const altRef = scifiData.display.altRef || 3000;
-    const baseAlt = 0;
-    const gridW = scifiData.grid.widthM / 2 / unitM;
-    const gridD = scifiData.grid.depthM / 2 / unitM;
-
-    // Normalised elevation function N(meters) -> WebGL world Y
-    const toY = (alt: number) => Math.max(0, alt - baseAlt) * vertScale / unitM;
-
-    // Bilinear ground height interpolation
-    const getGround = (xM: number, zM: number): number => {
-      const u = (xM + scifiData.grid.widthM / 2) / (scifiData.grid.cell * 2) - 0.5;
-      const v = (zM + scifiData.grid.depthM / 2) / (scifiData.grid.cell * 2) - 0.5;
-      const cx = Math.floor(u);
-      const cz = Math.floor(v);
-      if (cx < 0 || cz < 0 || cx >= REUNION_GRID_W - 1 || cz >= REUNION_GRID_H - 1) {
-        return -50;
+    // Normalize timeline points or generate structured history
+    const dataPoints: Array<{ tNorm: number; user: number; think: number; reply: number; tool: number }> = [];
+    if (timeline && timeline.length > 0) {
+      timeline.forEach((pt, i) => {
+        dataPoints.push({
+          tNorm: (i / Math.max(1, timeline.length - 1)) * 2 - 1, // -1 to +1
+          user: pt.user_count,
+          think: pt.think_count,
+          reply: pt.reply_count,
+          tool: pt.tool_count,
+        });
+      });
+    } else {
+      // Seed default dynamic distribution based on stats totals
+      const count = 16;
+      for (let i = 0; i < count; i++) {
+        const t = (i / (count - 1)) * 2 - 1;
+        const wave = Math.sin(i * 0.8) * 0.5 + 0.5;
+        dataPoints.push({
+          tNorm: t,
+          user: (stats?.user_prompts ?? 1) * (0.3 + 0.7 * wave),
+          think: (stats?.thinking_blocks ?? 2) * (0.4 + 0.6 * (1 - wave)),
+          reply: (stats?.assistant_replies ?? 1) * (0.3 + 0.5 * wave),
+          tool: (stats?.tool_calls ?? 3) * (0.2 + 0.8 * wave),
+        });
       }
-      const fx = u - cx;
-      const fz = v - cz;
-      const idx = cz * REUNION_GRID_W + cx;
-      const h00 = rawElev[idx];
-      const h10 = rawElev[idx + 1];
-      const h01 = rawElev[idx + REUNION_GRID_W];
-      const h11 = rawElev[idx + REUNION_GRID_W + 1];
-      return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
+    }
+
+    // Channel lane positions along Z
+    const zLanes = [-6.75, -2.25, 2.25, 6.75]; // USER, THINK, REPLY, TOOL
+
+    // Calculate height Y at any 3D coordinate (x = Time, z = Label)
+    const getAlt = (x: number, z: number): number => {
+      // Base gentle shelf
+      let val = 0.08;
+
+      // Geological ripples and ridges across time and category for rich texture
+      val += 0.12 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
+      val += 0.06 * Math.sin(x * 1.8 - z * 1.2);
+
+      // Accumulate Gaussian mountain ridges per channel along the Time axis
+      for (let c = 0; c < 4; c++) {
+        const laneZ = zLanes[c];
+        const distZ = Math.abs(z - laneZ);
+        const zWeight = Math.exp(-Math.pow(distZ / 2.2, 2));
+
+        for (const pt of dataPoints) {
+          const ptX = pt.tNorm * (TIME_SPAN / 2 - 1.5);
+          const distX = Math.abs(x - ptX);
+          if (distX > 5.0) continue;
+
+          let rawH = 0;
+          if (c === 0) rawH = Math.log1p(pt.user) * 1.1;
+          else if (c === 1) rawH = Math.log1p(pt.think) * 0.95;
+          else if (c === 2) rawH = Math.log1p(pt.reply) * 1.05;
+          else if (c === 3) rawH = Math.log1p(pt.tool) * 0.85;
+
+          const hContrib = rawH * Math.exp(-Math.pow(distX / 1.6, 2)) * zWeight;
+          val += hContrib;
+        }
+      }
+
+      // Edge falloff at boundary margins
+      const marginFalloff = smoothstep(TIME_SPAN / 2, TIME_SPAN / 2 - 2, Math.abs(x)) *
+                            smoothstep(LABEL_SPAN / 2, LABEL_SPAN / 2 - 1.5, Math.abs(z));
+
+      return Math.max(0, val * marginFalloff);
     };
-
-    const sampleAlt = (normX: number, normZ: number) => getGround(normX * unitM, normZ * unitM);
-    const sampleY = (normX: number, normZ: number) => toY(sampleAlt(normX, normZ));
-
-    // Reference palette ht from main.js
-    const PALETTE = [
-      [1.0, 1.0, 1.0],         // 0: default
-      [0.16, 0.60, 0.44],      // 1: forest / deep vegetation
-      [0.45, 0.64, 0.36],      // 2: shrubs
-      [0.62, 0.76, 0.40],      // 3: grassland
-      [0.92, 0.74, 0.44],      // 4: agriculture
-      [1.00, 0.62, 0.28],      // 5: urban / amber
-      [0.74, 0.72, 0.68],      // 6: rock / summit
-      [0.84, 0.93, 1.00],      // 7: snow / mist
-      [0.32, 0.80, 0.86],      // 8: water / river
-      [0.42, 0.72, 0.64],      // 9: wetlands
-      [0.64, 0.68, 0.58],      // 10: lichens
-    ];
 
     // Reference directional light vector [-0.45, 0.8, 0.4]
     const lightDir = [-0.45, 0.8, 0.4];
 
-    // Build 65,000 particle points buffer matching reference
-    const totalPoints = 65000;
-    const posData = new Float32Array(totalPoints * 4);
-    const colData = new Float32Array(totalPoints * 3);
-    const seedData = new Float32Array(totalPoints);
+    // -------------------------------------------------------------------------
+    // 1. High-Density 50,000 Particle Field with Channel Shading
+    // -------------------------------------------------------------------------
+    const pointCount = 50000;
+    const posData = new Float32Array(pointCount * 4);
+    const colData = new Float32Array(pointCount * 3);
+    const seedData = new Float32Array(pointCount);
 
-    let pCount = 0;
-    while (pCount < 50000) {
-      const rx = (rng() * 2 - 1) * gridW;
-      const rz = (rng() * 2 - 1) * gridD;
-      const altM = sampleAlt(rx, rz);
-      if (altM < 1) continue;
+    let pIdx = 0;
+    for (let i = 0; i < pointCount; i++) {
+      const rx = (rng() * 2 - 1) * (TIME_SPAN / 2);
+      const rz = (rng() * 2 - 1) * (LABEL_SPAN / 2);
+      const alt = getAlt(rx, rz);
 
-      const yWorld = toY(altM);
-      const vStep = 0.08;
-      const dx = sampleY(rx - vStep, rz) - sampleY(rx + vStep, rz);
-      const dz = sampleY(rx, rz - vStep) - sampleY(rx, rz + vStep);
-      const dy = 2 * vStep;
+      // Light normal calculation
+      const delta = 0.08;
+      const dx = getAlt(rx - delta, rz) - getAlt(rx + delta, rz);
+      const dz = getAlt(rx, rz - delta) - getAlt(rx, rz + delta);
+      const dy = 2 * delta;
       const len = Math.hypot(dx, dy, dz) || 1;
-      const slopeShade = (0.22 + 0.78 * Math.max(0, (dx * lightDir[0] + dy * lightDir[1] + dz * lightDir[2]) / len));
-      const altFade = (0.5 + 0.5 * smoothstep(0, altRef, altM));
-      const brightness = slopeShade * altFade * (0.55 + 0.45 * rng());
+      const nx = dx / len, ny = dy / len, nz = dz / len;
+      const slopeShade = 0.32 + 0.68 * Math.max(0, nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2]);
 
-      // Determine land class color by altitude zone
-      let colIdx = 1;
-      if (altM > 2400) colIdx = 6;      // Summit rock
-      else if (altM > 1600) colIdx = 2; // Shrubs
-      else if (altM > 800) colIdx = 1;  // Rainforest
-      else if (altM > 200) colIdx = 3;  // Green valley
-      else colIdx = 4;                  // Coastal lowlands
-
-      const baseCol = PALETTE[colIdx];
-
-      posData[pCount * 4] = rx;
-      posData[pCount * 4 + 1] = yWorld + Math.abs(rng() - rng()) * 0.03;
-      posData[pCount * 4 + 2] = rz;
-      posData[pCount * 4 + 3] = brightness;
-
-      colData[pCount * 3] = baseCol[0];
-      colData[pCount * 3 + 1] = baseCol[1];
-      colData[pCount * 3 + 2] = baseCol[2];
-
-      seedData[pCount] = rng();
-      pCount++;
-    }
-
-    // High mountain haze & atmospheric particles
-    while (pCount < totalPoints) {
-      const rx = (rng() * 2 - 1) * gridW;
-      const rz = (rng() * 2 - 1) * gridD;
-      const altM = sampleAlt(rx, rz);
-      if (altM > 600) {
-        const yWorld = toY(altM) - Math.log(1 - rng()) * 0.4;
-        posData[pCount * 4] = rx;
-        posData[pCount * 4 + 1] = yWorld;
-        posData[pCount * 4 + 2] = rz;
-        posData[pCount * 4 + 3] = 0.18 * rng();
-
-        colData[pCount * 3] = 0.88;
-        colData[pCount * 3 + 1] = 0.94;
-        colData[pCount * 3 + 2] = 1.0;
-
-        seedData[pCount] = rng();
-        pCount++;
+      // Category color interpolation along Z
+      let r = 0.2, g = 0.8, b = 0.7;
+      if (rz < -4.5) {
+        // USER lane: Amber / Gold
+        r = 1.0; g = 0.62; b = 0.24;
+      } else if (rz < 0.0) {
+        // THINK lane: Purple / Magenta
+        r = 0.75; g = 0.52; b = 0.98;
+      } else if (rz < 4.5) {
+        // REPLY lane: Cobalt Blue
+        r = 0.36; g = 0.58; b = 0.95;
       } else {
-        // Sea plane particles
-        posData[pCount * 4] = rx;
-        posData[pCount * 4 + 1] = 0;
-        posData[pCount * 4 + 2] = rz;
-        posData[pCount * 4 + 3] = 0.05 + 0.1 * rng();
-
-        colData[pCount * 3] = 0.25;
-        colData[pCount * 3 + 1] = 0.50;
-        colData[pCount * 3 + 2] = 0.62;
-
-        seedData[pCount] = rng();
-        pCount++;
+        // TOOL lane: Teal / Mint
+        r = 0.18; g = 0.84; b = 0.75;
       }
+
+      // Summit amber elevation boost
+      if (alt > 2.8) {
+        r = 1.0; g = 0.85; b = 0.4;
+      }
+
+      posData[pIdx * 4] = rx;
+      posData[pIdx * 4 + 1] = alt + (rng() - 0.5) * 0.03;
+      posData[pIdx * 4 + 2] = rz;
+      posData[pIdx * 4 + 3] = (0.5 + 0.5 * rng()) * slopeShade;
+
+      colData[pIdx * 3] = r * slopeShade;
+      colData[pIdx * 3 + 1] = g * slopeShade;
+      colData[pIdx * 3 + 2] = b * slopeShade;
+
+      seedData[pIdx] = rng();
+      pIdx++;
     }
 
     const vaoTerrain = gl.createVertexArray()!;
@@ -379,117 +385,108 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
 
     const bPos = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, bPos);
-    gl.bufferData(gl.ARRAY_BUFFER, posData.subarray(0, pCount * 4), gl.STATIC_DRAW);
-    const locPos = gl.getAttribLocation(progTerrain, "aPos");
-    gl.enableVertexAttribArray(locPos);
-    gl.vertexAttribPointer(locPos, 4, gl.FLOAT, false, 0, 0);
+    gl.bufferData(gl.ARRAY_BUFFER, posData.subarray(0, pIdx * 4), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0);
 
     const bCol = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, bCol);
-    gl.bufferData(gl.ARRAY_BUFFER, colData.subarray(0, pCount * 3), gl.STATIC_DRAW);
-    const locCol = gl.getAttribLocation(progTerrain, "aCol");
-    gl.enableVertexAttribArray(locCol);
-    gl.vertexAttribPointer(locCol, 3, gl.FLOAT, false, 0, 0);
+    gl.bufferData(gl.ARRAY_BUFFER, colData.subarray(0, pIdx * 3), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
 
     const bSeed = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, bSeed);
-    gl.bufferData(gl.ARRAY_BUFFER, seedData.subarray(0, pCount), gl.STATIC_DRAW);
-    const locSeed = gl.getAttribLocation(progTerrain, "aSeed");
-    gl.enableVertexAttribArray(locSeed);
-    gl.vertexAttribPointer(locSeed, 1, gl.FLOAT, false, 0, 0);
+    gl.bufferData(gl.ARRAY_BUFFER, seedData.subarray(0, pIdx), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 0, 0);
 
     gl.bindVertexArray(null);
 
     // -------------------------------------------------------------------------
-    // Marching Squares Topographical Contours & River Networks
+    // 2. High-Density Marching Squares Contours across the 3D Grid
     // -------------------------------------------------------------------------
     const contourVerts: number[] = [];
-    const riverVerts: number[] = [];
     const baseGridVerts: number[] = [];
 
-    // Authentic contour levels every 50m (minor) and 250m (major)
-    const contourStep = 250;
-    const contourMinor = 50;
-    const levels: number[] = [];
-    for (let c = contourMinor; c <= 3000; c += contourMinor) {
-      levels.push(c);
+    const GRID_X = 120;
+    const GRID_Z = 80;
+    const stepX = TIME_SPAN / (GRID_X - 1);
+    const stepZ = LABEL_SPAN / (GRID_Z - 1);
+    const elevMap = new Float32Array(GRID_X * GRID_Z);
+
+    for (let gz = 0; gz < GRID_Z; gz++) {
+      const cz = -LABEL_SPAN / 2 + gz * stepZ;
+      for (let gx = 0; gx < GRID_X; gx++) {
+        const cx = -TIME_SPAN / 2 + gx * stepX;
+        elevMap[gz * GRID_X + gx] = getAlt(cx, cz);
+      }
     }
 
-    const cellW = scifiData.grid.widthM / (REUNION_GRID_W - 1) / unitM;
-    const cellD = scifiData.grid.depthM / (REUNION_GRID_H - 1) / unitM;
+    // Contour thresholds every 0.18 vertical units
+    const cLevels: number[] = [];
+    for (let l = 0.2; l <= 3.6; l += 0.18) {
+      cLevels.push(l);
+    }
 
-    for (let j = 0; j < REUNION_GRID_H - 1; j++) {
-      const z0 = -gridD + j * cellD;
-      for (let i = 0; i < REUNION_GRID_W - 1; i++) {
-        const x0 = -gridW + i * cellW;
-        const p0 = j * REUNION_GRID_W + i;
-        const c0 = rawElev[p0];
-        const c1 = rawElev[p0 + 1];
-        const c2 = rawElev[p0 + REUNION_GRID_W + 1];
-        const c3 = rawElev[p0 + REUNION_GRID_W];
+    for (let gz = 0; gz < GRID_Z - 1; gz++) {
+      const z0 = -LABEL_SPAN / 2 + gz * stepZ;
+      for (let gx = 0; gx < GRID_X - 1; gx++) {
+        const x0 = -TIME_SPAN / 2 + gx * stepX;
+        const idx = gz * GRID_X + gx;
+
+        const c0 = elevMap[idx];
+        const c1 = elevMap[idx + 1];
+        const c2 = elevMap[idx + GRID_X + 1];
+        const c3 = elevMap[idx + GRID_X];
 
         const minC = Math.min(c0, c1, c2, c3);
         const maxC = Math.max(c0, c1, c2, c3);
-        if (maxC < contourMinor || minC > 3000) continue;
+        if (maxC < 0.2 || minC > 3.6) continue;
 
-        for (const lvl of levels) {
+        for (const lvl of cLevels) {
           if (lvl < minC || lvl >= maxC) continue;
-          const yLvl = toY(lvl) + 0.02;
-          const segPts: Array<[number, number]> = [];
+          const yLvl = lvl + 0.015;
+          const segs: Array<[number, number]> = [];
 
-          // Edge 0 (bottom)
           if ((c0 > lvl) !== (c1 > lvl)) {
             const f = (lvl - c0) / (c1 - c0);
-            segPts.push([x0 + f * cellW, z0]);
+            segs.push([x0 + f * stepX, z0]);
           }
-          // Edge 1 (right)
           if ((c1 > lvl) !== (c2 > lvl)) {
             const f = (lvl - c1) / (c2 - c1);
-            segPts.push([x0 + cellW, z0 + f * cellD]);
+            segs.push([x0 + stepX, z0 + f * stepZ]);
           }
-          // Edge 2 (top)
           if ((c3 > lvl) !== (c2 > lvl)) {
             const f = (lvl - c3) / (c2 - c3);
-            segPts.push([x0 + f * cellW, z0 + cellD]);
+            segs.push([x0 + f * stepX, z0 + stepZ]);
           }
-          // Edge 3 (left)
           if ((c0 > lvl) !== (c3 > lvl)) {
             const f = (lvl - c0) / (c3 - c0);
-            segPts.push([x0, z0 + f * cellD]);
+            segs.push([x0, z0 + f * stepZ]);
           }
 
-          const isMajor = lvl % contourStep === 0;
-          const alpha = isMajor ? 0.42 : 0.16;
+          const isMajor = Math.abs(lvl % 0.72) < 0.09;
+          const alpha = isMajor ? 0.44 : 0.16;
 
-          for (let s = 0; s + 1 < segPts.length; s += 2) {
+          for (let s = 0; s + 1 < segs.length; s += 2) {
             contourVerts.push(
-              segPts[s][0], yLvl, segPts[s][1], alpha,
-              segPts[s + 1][0], yLvl, segPts[s + 1][1], alpha
+              segs[s][0], yLvl, segs[s][1], alpha,
+              segs[s + 1][0], yLvl, segs[s + 1][1], alpha
             );
           }
         }
       }
     }
 
-    // Rivers network from scifiData.json
-    for (const r of scifiData.rivers || []) {
-      const riverPts = r.slice(1);
-      for (let s = 0; s + 3 < riverPts.length; s += 2) {
-        const x1 = riverPts[s] / unitM;
-        const z1 = riverPts[s + 1] / unitM;
-        const x2 = riverPts[s + 2] / unitM;
-        const z2 = riverPts[s + 3] / unitM;
-        const y1 = sampleY(x1, z1) + 0.025;
-        const y2 = sampleY(x2, z2) + 0.025;
-        riverVerts.push(x1, y1, z1, 0.45, x2, y2, z2, 0.45);
-      }
+    // Coordinate Grid along Base Plane
+    for (let gx = -14; gx <= 14; gx += 2) {
+      const a = gx === 0 ? 0.35 : gx % 4 === 0 ? 0.18 : 0.07;
+      baseGridVerts.push(gx, 0, -9, a, gx, 0, 9, a);
     }
-
-    // Outer framing coordinate grid
-    for (let g = -34; g <= 34; g += 2) {
-      const a = g % 10 === 0 ? 0.18 : 0.07;
-      baseGridVerts.push(g, 0, -34, a, g, 0, 34, a);
-      baseGridVerts.push(-34, 0, g, a, 34, 0, g, a);
+    for (let gz = -9; gz <= 9; gz += 2) {
+      const a = gz === 0 ? 0.35 : gz % 4 === 0 ? 0.18 : 0.07;
+      baseGridVerts.push(-14, 0, gz, a, 14, 0, gz, a);
     }
 
     const createLineVAO = (verts: number[]) => {
@@ -508,42 +505,57 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     };
 
     const vaoContours = createLineVAO(contourVerts);
-    const vaoRivers = createLineVAO(riverVerts);
     const vaoBaseGrid = createLineVAO(baseGridVerts);
 
     // -------------------------------------------------------------------------
-    // Neon Orange Trace Trail & Authentic Checkpoints from Dataset
+    // 3. Trajectory Trail Across Peaks (Connecting Active Milestones)
     // -------------------------------------------------------------------------
-    const tracePoints = scifiData.trace.map((p) => {
-      const wx = p[1] / unitM;
-      const wz = p[2] / unitM;
-      const wy = toY(p[3]) + 0.03;
-      return { km: p[0], pos: [wx, wy, wz] as [number, number, number], lat: p[4], lon: p[5], alt: p[3] };
+    const trailLine: Array<{ pos: [number, number, number]; label: string; cat: string; hex: string }> = [];
+    dataPoints.forEach((pt, i) => {
+      const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
+      // Determine dominant category for this turn
+      const maxVal = Math.max(pt.user, pt.think, pt.reply, pt.tool, 0.1);
+      let catIdx = 0;
+      if (pt.tool === maxVal) catIdx = 3;
+      else if (pt.reply === maxVal) catIdx = 2;
+      else if (pt.think === maxVal) catIdx = 1;
+
+      const tz = zLanes[catIdx];
+      const ty = getAlt(tx, tz) + 0.05;
+      trailLine.push({
+        pos: [tx, ty, tz],
+        label: `T+${i + 1}`,
+        cat: CHANNELS[catIdx].label,
+        hex: CHANNELS[catIdx].hex,
+      });
     });
 
-    const checkpoints = scifiData.checkpoints.map((cp) => {
-      const wx = cp.x / unitM;
-      const wz = cp.z / unitM;
-      const wy = toY(cp.alt) + 0.03;
-      return { ...cp, pos: [wx, wy, wz] as [number, number, number] };
-    });
-
-    const peaks = scifiData.peaks.map((pk) => {
-      const wx = pk.x / unitM;
-      const wz = pk.z / unitM;
-      const wy = toY(pk.alt) + 0.03;
-      return { ...pk, pos: [wx, wy, wz] as [number, number, number] };
-    });
-
-    const areas = scifiData.areas.map((ar) => {
-      const wx = ar.x / unitM;
-      const wz = ar.z / unitM;
-      const wy = sampleY(wx, wz) + 0.03;
-      return { ...ar, pos: [wx, wy, wz] as [number, number, number] };
+    // Landmark waypoint pins for each Channel Lane
+    const channelWaypoints = CHANNELS.map((ch, idx) => {
+      const zPos = zLanes[idx];
+      // Find peak along this lane
+      let bestX = 0, bestY = 0;
+      for (let x = -12; x <= 12; x += 0.5) {
+        const y = getAlt(x, zPos);
+        if (y > bestY) {
+          bestY = y;
+          bestX = x;
+        }
+      }
+      return {
+        code: ch.key.toUpperCase(),
+        name: ch.label,
+        color: ch.hex,
+        pos: [bestX, bestY, zPos] as [number, number, number],
+        val: idx === 0 ? `${stats?.user_prompts ?? 1} PROMPTS`
+           : idx === 1 ? `${stats?.thinking_blocks ?? 2} TURNS`
+           : idx === 2 ? `${stats?.assistant_replies ?? 1} REPLIES`
+           : `${stats?.tool_calls ?? 3} CALLS`,
+      };
     });
 
     // -------------------------------------------------------------------------
-    // Render Loop with Authentic Sci-Fi Telemetry HUD
+    // 4. Render Loop with 3D Axis HUD, Pin Lines and Top Title Banner
     // -------------------------------------------------------------------------
     let animId: number;
     let fps = 60;
@@ -556,7 +568,6 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       const elapsed = (now - startTime) / 1000;
       const cam = camRef.current;
 
-      // FPS counter
       frameCount++;
       if (now - lastFpsTime >= 500) {
         fps = Math.round((frameCount * 1000) / (now - lastFpsTime));
@@ -564,12 +575,10 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
         lastFpsTime = now;
       }
 
-      // Auto-orbit slowly if idle for > 4s
       if (!cam.isDragging && elapsed - cam.idleSince > 4) {
         cam.azimuth += 0.002;
       }
 
-      // Canvas resizing with device pixel ratio
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const rect = glCanvas.getBoundingClientRect();
       const w = Math.max(1, Math.round(rect.width * dpr));
@@ -589,7 +598,7 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
 
-      // Camera view matrix
+      // Camera view projection
       const eyeX = cam.target[0] + cam.radius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
       const eyeY = cam.target[1] + cam.radius * Math.sin(cam.elevation);
       const eyeZ = cam.target[2] + cam.radius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
@@ -598,12 +607,11 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
 
-      // Scanning wave height matching reference: 0m to 3000m
-      const scanCycle = (elapsed % 11) / 11;
-      const scanAltM = Math.max(0, scanCycle * (altRef + 400) - 200);
-      const scanAltY = toY(scanAltM);
+      // Smooth altitude scan wave
+      const scanPhase = (Math.sin(elapsed * 1.1) * 0.5 + 0.5);
+      const scanAltY = 0.1 + scanPhase * 3.4;
 
-      // 1. Draw Base Grid Lines
+      // Draw Grid Lines
       gl.useProgram(progContour);
       gl.uniformMatrix4fv(uC.uVP, false, matVP);
       gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
@@ -613,51 +621,45 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       gl.bindVertexArray(vaoBaseGrid.vao);
       gl.drawArrays(gl.LINES, 0, vaoBaseGrid.count);
 
-      // 2. Draw Marching Squares Contours (Teal/Cyan)
+      // Draw Marching Squares Contours
       gl.uniform1f(uC.uScanAmount, 3.0);
       gl.uniform3f(uC.uColor, realism === "mono" ? 1.0 : 0.78, realism === "mono" ? 1.0 : 1.0, realism === "mono" ? 1.0 : 0.94);
       gl.bindVertexArray(vaoContours.vao);
       gl.drawArrays(gl.LINES, 0, vaoContours.count);
 
-      // 3. Draw Rivers (Cyan)
-      gl.uniform1f(uC.uScanAmount, 0);
-      gl.uniform3f(uC.uColor, 0.32, 0.80, 0.86);
-      gl.bindVertexArray(vaoRivers.vao);
-      gl.drawArrays(gl.LINES, 0, vaoRivers.count);
-
-      // 4. Draw Dense 65k Particle Cloud
+      // Draw 50k Particles
       gl.useProgram(progTerrain);
       gl.uniformMatrix4fv(uT.uVP, false, matVP);
       gl.uniform1f(uT.uTime, elapsed);
       gl.uniform1f(uT.uFocus, cam.radius * 0.9);
       gl.uniform1f(uT.uAperture, 0.5 * (h / 700));
       gl.uniform1f(uT.uDpr, dpr);
-      gl.uniform1f(uT.uGain, 0.42);
+      gl.uniform1f(uT.uGain, 0.44);
       gl.uniform1f(uT.uScan, scanAltY);
       gl.uniform1f(uT.uReal, realism === "mono" ? 0.0 : 1.0);
 
       gl.bindVertexArray(vaoTerrain);
-      gl.drawArrays(gl.POINTS, 0, pCount);
+      gl.drawArrays(gl.POINTS, 0, pIdx);
       gl.bindVertexArray(null);
 
       // -----------------------------------------------------------------------
-      // 5. Draw 2D Sci-Fi HUD Overlay Canvas matching screenshot
+      // 5. 2D HUD Canvas Overlay matching reference
       // -----------------------------------------------------------------------
       hud.setTransform(dpr, 0, 0, dpr, 0, 0);
       hud.clearRect(0, 0, rect.width, rect.height);
 
       const project = (p: [number, number, number]) => projectPoint(matVP, p, rect.width, rect.height);
 
-      // (A) Draw Glowing Orange Route Trail
+      // (A) Glowing Neon Trail connecting Timeline turns
       hud.lineJoin = "round";
       hud.lineCap = "round";
 
-      // Background soft orange glow
+      // Soft glow
       hud.strokeStyle = "rgba(255, 154, 60, 0.20)";
       hud.lineWidth = 6;
       hud.beginPath();
       let first = true;
-      for (const pt of tracePoints) {
+      for (const pt of trailLine) {
         const sc = project(pt.pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
@@ -665,12 +667,12 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       }
       hud.stroke();
 
-      // Sharp foreground neon orange core
+      // Sharp neon core
       hud.strokeStyle = "rgba(255, 154, 60, 0.95)";
       hud.lineWidth = 1.6;
       hud.beginPath();
       first = true;
-      for (const pt of tracePoints) {
+      for (const pt of trailLine) {
         const sc = project(pt.pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
@@ -678,114 +680,84 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       }
       hud.stroke();
 
-      // (B) Draw Area Cirque Labels
+      // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
       hud.save();
-      hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
-      hud.textAlign = 'center';
-      hud.fillStyle = 'rgba(255, 255, 255, 0.45)';
-      for (const ar of areas) {
-        const sc = project(ar.pos);
-        if (sc) {
-          hud.fillText(ar.name.split("").join(" "), sc[0], sc[1]);
-        }
+      hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+
+      // X-Axis: TIME
+      const tStart = project([-13, 0, -10.5]);
+      const tEnd = project([13, 0, -10.5]);
+      if (tStart && tEnd) {
+        hud.fillStyle = "rgba(255, 255, 255, 0.65)";
+        hud.textAlign = "left";
+        hud.fillText("◄ TIME AXIS (SESSION START)", tStart[0], tStart[1]);
+        hud.textAlign = "right";
+        hud.fillText("SESSION LATEST ►", tEnd[0], tEnd[1]);
       }
+
+      // Z-Axis: Channel Category Names along the front margin
+      CHANNELS.forEach((ch, idx) => {
+        const sc = project([-14.5, 0, zLanes[idx]]);
+        if (sc) {
+          hud.fillStyle = ch.hex;
+          hud.textAlign = "right";
+          hud.fillText(`[${ch.key.toUpperCase()}] ${ch.label}`, sc[0] - 6, sc[1]);
+        }
+      });
       hud.restore();
 
-      // (C) Draw Checkpoint Pins with authentic target rings and leader lines
-      for (const cp of checkpoints) {
-        const groundPt = project(cp.pos);
-        const pinPt = project([cp.pos[0], cp.pos[1] + 1.8, cp.pos[2]]);
+      // (C) Waypoint Target Pins with Leader Lines rising to labels
+      for (const node of channelWaypoints) {
+        const groundPt = project(node.pos);
+        const pinPt = project([node.pos[0], node.pos[1] + 1.8, node.pos[2]]);
         if (!groundPt || !pinPt) continue;
 
-        const isSpecial = cp.code === "DEP" || cp.code === "ARR" || cp.code === "BV1" || cp.code === "BV2" || cp.code === "CP6" || cp.code === "CP12";
-        const color = isSpecial ? "#ff9a3c" : "#ffffff";
-        const alpha = isSpecial ? 0.95 : 0.65;
-
-        // Ground target circle
-        hud.strokeStyle = isSpecial ? "rgba(255, 154, 60, 0.55)" : "rgba(255, 255, 255, 0.35)";
+        // Ground 3D target ring
+        hud.strokeStyle = node.color;
+        hud.globalAlpha = 0.50;
         hud.lineWidth = 1;
         hud.beginPath();
-        const rRad = 0.35;
+        const rRad = 0.40;
         for (let st = 0; st <= 20; st++) {
           const th = (st / 20) * Math.PI * 2;
-          const rP = project([cp.pos[0] + Math.cos(th) * rRad, cp.pos[1], cp.pos[2] + Math.sin(th) * rRad]);
+          const rP = project([node.pos[0] + Math.cos(th) * rRad, node.pos[1], node.pos[2] + Math.sin(th) * rRad]);
           if (rP) {
             st === 0 ? hud.moveTo(rP[0], rP[1]) : hud.lineTo(rP[0], rP[1]);
           }
         }
         hud.stroke();
 
-        // Vertical leader line
-        hud.strokeStyle = color;
+        // Vertical pin leader line
+        hud.globalAlpha = 0.95;
         hud.beginPath();
         hud.moveTo(groundPt[0], groundPt[1]);
-        hud.lineTo(pinPt[0], pinPt[1] + (isSpecial ? 6 : 4));
+        hud.lineTo(pinPt[0], pinPt[1] + 6);
         hud.stroke();
 
-        // Pin head ring + inner core
+        // Concentric pin head
         hud.beginPath();
-        hud.arc(pinPt[0], pinPt[1], isSpecial ? 6 : 4, 0, Math.PI * 2);
+        hud.arc(pinPt[0], pinPt[1], 6, 0, Math.PI * 2);
         hud.stroke();
 
-        hud.fillStyle = color;
+        hud.fillStyle = node.color;
         hud.beginPath();
-        hud.arc(pinPt[0], pinPt[1], 1.6, 0, Math.PI * 2);
+        hud.arc(pinPt[0], pinPt[1], 1.8, 0, Math.PI * 2);
         hud.fill();
 
-        // Callout text label
+        // Callout text label box
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.fillStyle = color;
-        hud.globalAlpha = alpha;
-        hud.fillText(`${cp.code} ${cp.name.toUpperCase()}`, pinPt[0] + 10, pinPt[1] - 4);
+        hud.fillStyle = node.color;
+        hud.fillText(`[${node.code}] ${node.name}`, pinPt[0] + 10, pinPt[1] - 4);
 
-        if (isSpecial) {
-          hud.globalAlpha = 0.45;
-          hud.fillText(`KM ${cp.km.toFixed(1)} · ${cp.alt} m`, pinPt[0] + 10, pinPt[1] + 6);
-        }
+        hud.globalAlpha = 0.60;
+        hud.fillText(`${node.val}`, pinPt[0] + 10, pinPt[1] + 6);
         hud.globalAlpha = 1.0;
       }
 
-      // (D) Draw Major Mountain Peak Pins (Piton des Neiges, Piton de la Fournaise)
-      for (const pk of peaks) {
-        const gPt = project(pk.pos);
-        const pPt = project([pk.pos[0], pk.pos[1] + 2.2, pk.pos[2]]);
-        if (!gPt || !pPt) continue;
-
-        hud.strokeStyle = "rgba(255, 255, 255, 0.8)";
-        hud.lineWidth = 1;
-        hud.beginPath();
-        hud.moveTo(gPt[0], gPt[1]);
-        hud.lineTo(pPt[0], pPt[1]);
-        hud.stroke();
-
-        hud.beginPath();
-        hud.arc(pPt[0], pPt[1], 5, 0, Math.PI * 2);
-        hud.stroke();
-
-        hud.fillStyle = "#ffffff";
-        hud.beginPath();
-        hud.arc(pPt[0], pPt[1], 1.8, 0, Math.PI * 2);
-        hud.fill();
-
-        // Triangle inverted chevron
-        hud.beginPath();
-        hud.moveTo(pPt[0] - 3, pPt[1] - 8);
-        hud.lineTo(pPt[0] + 3, pPt[1] - 8);
-        hud.lineTo(pPt[0], pPt[1] - 4);
-        hud.closePath();
-        hud.fill();
-
-        hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.fillText(pk.name, pPt[0] + 8, pPt[1] - 2);
-        hud.fillStyle = "rgba(255, 255, 255, 0.45)";
-        hud.fillText(`${pk.alt} m`, pPt[0] + 8, pPt[1] + 8);
-      }
-
-      // (E) Left Altitude Ruler (0 to 3000m)
-      const rulerMax = 3200;
+      // (D) Left Y-Axis Altitude Ruler (VALUE AXIS)
       const rulerTop = 70;
       const rulerBottom = rect.height - 50;
-      const rY = (alt: number) => rulerBottom - (alt / rulerMax) * (rulerBottom - rulerTop);
+      const rY = (val: number) => rulerBottom - (val / 3.6) * (rulerBottom - rulerTop);
 
       hud.strokeStyle = "rgba(255, 255, 255, 0.3)";
       hud.fillStyle = "rgba(255, 255, 255, 0.35)";
@@ -793,21 +765,22 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       hud.beginPath();
       hud.moveTo(14, rulerTop);
       hud.lineTo(14, rulerBottom);
-      for (let a = 0; a <= rulerMax; a += 100) {
-        const y = rY(a);
+      for (let v = 0; v <= 3.6; v += 0.4) {
+        const y = rY(v);
         hud.moveTo(14, y);
-        hud.lineTo(a % 500 === 0 ? 24 : 18, y);
+        hud.lineTo(v % 1.2 === 0 ? 24 : 18, y);
       }
       hud.stroke();
 
       hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
       hud.textAlign = 'left';
-      for (let a = 0; a <= 3000; a += 500) {
-        hud.fillText(String(a), 28, rY(a));
+      hud.fillText("VALUE ▲", 14, rulerTop - 8);
+      for (let v = 0; v <= 3.6; v += 0.8) {
+        hud.fillText(`${Math.round(v * 10)}`, 28, rY(v));
       }
 
       // Active scan cursor on ruler
-      const cursorY = rY(clamp(scanAltM, 0, rulerMax));
+      const cursorY = rY(clamp(scanAltY, 0, 3.6));
       hud.fillStyle = "#ffffff";
       hud.beginPath();
       hud.moveTo(14, cursorY);
@@ -816,43 +789,45 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       hud.closePath();
       hud.fill();
 
-      // (F) Right Matrix of Coordinates & Waypoints
+      // (E) Right Matrix of Recent Events
       if (rect.width >= 700) {
         hud.textAlign = 'right';
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
-        const centerIdx = Math.floor((elapsed * 12) % tracePoints.length);
-        for (let i = -12; i <= 12; i++) {
-          const ptIdx = clamp(centerIdx + i * 3, 0, tracePoints.length - 1);
-          const pt = tracePoints[ptIdx];
-          const lineY = rect.height / 2 + i * 15;
-          const isMid = i === 0;
-          hud.fillStyle = isMid ? "#ff9a3c" : `rgba(255, 255, 255, ${0.32 - Math.abs(i) * 0.02})`;
-          hud.fillText(
-            `${pt.lat.toFixed(5)}  ${pt.lon.toFixed(5)}  ${String(pt.alt).padStart(4, " ")}  ${pt.km.toFixed(2).padStart(6, "0")}`,
-            rect.width - 16,
-            lineY
-          );
+        const recentEvs = stats?.recent_events ?? [];
+        if (recentEvs.length > 0) {
+          const sliceEvs = recentEvs.slice(0, 25);
+          sliceEvs.forEach((ev, i) => {
+            const lineY = rect.height / 2 + (i - Math.floor(sliceEvs.length / 2)) * 15;
+            const isLatest = i === 0;
+            const tagCol = ev.k === "user" ? "#ff9a3c" : ev.k === "think" ? "#c084fc" : ev.k === "reply" ? "#5b8def" : "#2dd4bf";
+            hud.fillStyle = isLatest ? tagCol : `rgba(255, 255, 255, ${0.32 - i * 0.01})`;
+            const preview = ev.n || ev.a || ev.b || `${ev.k.toUpperCase()}`;
+            hud.fillText(
+              `${new Date(ev.t).toLocaleTimeString()}  [${ev.k.toUpperCase()}]  ${preview.slice(0, 18)}  ${ev.ms ? `${ev.ms}ms` : ""}`,
+              rect.width - 16,
+              lineY
+            );
+          });
         }
       }
 
-      // (G) Bottom Telemetry Line
+      // (F) Bottom Telemetry Line
       hud.textAlign = 'left';
       hud.fillStyle = 'rgba(255, 255, 255, 0.45)';
       hud.fillText(`DRAG · ORBIT   WHEEL · ZOOM   DBL-CLICK · RESET`, 46, rect.height - 18);
 
       hud.textAlign = 'right';
-      hud.fillText(`SCAN ALT ${Math.round(scanAltM)} m   PTS 314 430   ${fps} FPS`, rect.width - 20, rect.height - 18);
+      hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${stats?.total_events ?? timeline.length}   ${fps} FPS`, rect.width - 20, rect.height - 18);
 
-      // (H) Top Floating Perspective Title Banner
-      const startPt = checkpoints[0].pos;
-      const b0 = project([startPt[0] - 4, 3.2, startPt[2] + 3]);
-      const b1 = project([startPt[0] + 4, 3.2, startPt[2] + 3]);
-      const b2 = project([startPt[0] + 4, 1.6, startPt[2] + 3]);
-      const b3 = project([startPt[0] - 4, 1.6, startPt[2] + 3]);
+      // (G) Top Floating 3D Perspective Title Banner
+      const b0 = project([-8, 3.2, -6]);
+      const b1 = project([8, 3.2, -6]);
+      const b2 = project([8, 1.6, -6]);
+      const b3 = project([-8, 1.6, -6]);
 
       if (b0 && b1 && b2 && b3) {
         hud.strokeStyle = "rgba(255, 255, 255, 0.75)";
-        hud.fillStyle = "rgba(255, 255, 255, 0.035)";
+        hud.fillStyle = "rgba(4, 6, 12, 0.85)";
         hud.lineWidth = 1;
         hud.beginPath();
         hud.moveTo(b0[0], b0[1]);
@@ -866,12 +841,12 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
         hud.save();
         const bannerW = 340, bannerH = 64;
         hud.transform((b1[0] - b0[0]) / bannerW, (b1[1] - b0[1]) / bannerW, (b3[0] - b0[0]) / bannerH, (b3[1] - b0[1]) / bannerH, b0[0], b0[1]);
-        hud.fillStyle = "rgba(255, 255, 255, 0.92)";
-        hud.font = '22px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.fillText(activeModel || "DIAGONALE DES FOUS", 20, 26);
+        hud.fillStyle = "rgba(255, 255, 255, 0.95)";
+        hud.font = '20px ui-monospace, SFMono-Regular, Menlo, monospace';
+        hud.fillText(`${sessionName || "SESSION"} // ${tabName || "OUTPUT"}`, 20, 26);
         hud.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.fillStyle = "rgba(255, 154, 60, 0.85)";
-        hud.fillText(`SESSION TELEMETRY · 180.8 KM · 10180 D+`, 20, 48);
+        hud.fillStyle = "rgba(255, 154, 60, 0.90)";
+        hud.fillText(`3D TELEMETRY · TIME × LABEL × VALUE · ${activeModel || "AI ASSISTANT"}`, 20, 48);
         hud.restore();
       }
 
@@ -880,7 +855,6 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
 
     animId = requestAnimationFrame(render);
 
-    // Pointer Interactivity Listeners
     const handleDown = (e: PointerEvent) => {
       camRef.current.isDragging = true;
       camRef.current.lastX = e.clientX;
@@ -916,9 +890,9 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
     };
 
     const handleDblClick = () => {
-      camRef.current.azimuth = 0.35;
-      camRef.current.elevation = 0.50;
-      camRef.current.radius = 50;
+      camRef.current.azimuth = 0.38;
+      camRef.current.elevation = 0.48;
+      camRef.current.radius = 46;
       camRef.current.idleSince = performance.now() / 1000;
     };
 
@@ -936,7 +910,7 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       glCanvas.removeEventListener("wheel", handleWheel);
       glCanvas.removeEventListener("dblclick", handleDblClick);
     };
-  }, [timeline, realism, activeModel]);
+  }, [timeline, realism, activeModel, sessionName, tabName, stats]);
 
   return (
     <section className="scifi-panel viewport">

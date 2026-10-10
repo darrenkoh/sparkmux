@@ -366,12 +366,14 @@ export default function AnalyticsHud({
             </section>
           </aside>
 
-          {/* CENTER COLUMN: Interactive 3D Terrain & Token Distribution */}
           <main className="scifi-center">
-            {/* Interactive 3D Hill Terrain Viewport */}
+            {/* Interactive 3D Hill Terrain Viewport with Real Session Data */}
             <TerrainViewport
               timeline={st?.timeline ?? []}
               activeModel={st?.active_model}
+              sessionName={sessionName}
+              tabName={tabName}
+              stats={st}
             />
 
             {/* Sub-grid: Token Allocation & Context Window Gauge */}
