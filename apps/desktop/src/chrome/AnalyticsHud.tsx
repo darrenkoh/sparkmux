@@ -7,6 +7,7 @@ import {
 } from "../api";
 import { cliLabel } from "./artifactModel";
 import { formatBytes, formatNum, formatMs } from "./analyticsFormat";
+import TerrainViewport from "./TerrainViewport";
 
 export interface AnalyticsHudProps {
   sessionName: string;
@@ -36,7 +37,6 @@ export default function AnalyticsHud({
   const [confirmClear, setConfirmClear] = useState(false);
 
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
-  const timelineCanvasRef = useRef<HTMLCanvasElement>(null);
   const tokenCanvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
 
@@ -116,72 +116,6 @@ export default function AnalyticsHud({
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
   }, []);
-
-  // Draw Activity Timeline Histogram Canvas
-  useEffect(() => {
-    const canvas = timelineCanvasRef.current;
-    if (!canvas || !data?.stats?.timeline) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-
-    const timeline = data.stats.timeline;
-    if (timeline.length === 0) return;
-
-    // Max activity count
-    const maxVal = Math.max(
-      1,
-      ...timeline.map(
-        (p) => p.user_count + p.think_count + p.reply_count + p.tool_count
-      )
-    );
-
-    const barW = Math.max(2, (w - (timeline.length - 1) * 3) / timeline.length);
-
-    timeline.forEach((p, idx) => {
-      const x = idx * (barW + 3);
-      const total = p.user_count + p.think_count + p.reply_count + p.tool_count;
-      if (total === 0) {
-        // baseline tick
-        ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-        ctx.fillRect(x, h - 2, barW, 2);
-        return;
-      }
-
-      const totalH = (total / maxVal) * (h - 8);
-      let curY = h - totalH;
-
-      // Stacked colors: user (amber), think (purple/cyan), reply (blue), tool (teal)
-      const uH = (p.user_count / total) * totalH;
-      const tH = (p.think_count / total) * totalH;
-      const rH = (p.reply_count / total) * totalH;
-      const tlH = (p.tool_count / total) * totalH;
-
-      // Draw segments
-      if (uH > 0) {
-        ctx.fillStyle = "#ff9a3c";
-        ctx.fillRect(x, curY, barW, uH);
-        curY += uH;
-      }
-      if (tH > 0) {
-        ctx.fillStyle = "#c084fc";
-        ctx.fillRect(x, curY, barW, tH);
-        curY += tH;
-      }
-      if (rH > 0) {
-        ctx.fillStyle = "#5b8def";
-        ctx.fillRect(x, curY, barW, rH);
-        curY += rH;
-      }
-      if (tlH > 0) {
-        ctx.fillStyle = "#2dd4bf";
-        ctx.fillRect(x, curY, barW, tlH);
-      }
-    });
-  }, [data]);
 
   // Draw Token Distribution Arc Gauge Canvas
   useEffect(() => {
@@ -432,38 +366,13 @@ export default function AnalyticsHud({
             </section>
           </aside>
 
-          {/* CENTER COLUMN: Activity Timeline & Token Distribution */}
+          {/* CENTER COLUMN: Interactive 3D Terrain & Token Distribution */}
           <main className="scifi-center">
-            {/* Main Visualizer: Activity Timeline */}
-            <section className="scifi-panel timeline-panel">
-              <header>
-                <span className="tag">03</span>
-                <span>CHRONOLOGICAL ACTIVITY SPECTRUM</span>
-                <small>BINS · LAST 24 PHASES</small>
-              </header>
-              <div className="body timeline-body">
-                <canvas
-                  ref={timelineCanvasRef}
-                  width={560}
-                  height={150}
-                  className="scifi-timeline-canvas"
-                />
-                <div className="scifi-legend">
-                  <span>
-                    <i style={{ background: "#ff9a3c" }} /> USER
-                  </span>
-                  <span>
-                    <i style={{ background: "#c084fc" }} /> THINKING
-                  </span>
-                  <span>
-                    <i style={{ background: "#5b8def" }} /> ASSISTANT
-                  </span>
-                  <span>
-                    <i style={{ background: "#2dd4bf" }} /> TOOLS
-                  </span>
-                </div>
-              </div>
-            </section>
+            {/* Interactive 3D Hill Terrain Viewport */}
+            <TerrainViewport
+              timeline={st?.timeline ?? []}
+              activeModel={st?.active_model}
+            />
 
             {/* Sub-grid: Token Allocation & Context Window Gauge */}
             <div className="scifi-row">
