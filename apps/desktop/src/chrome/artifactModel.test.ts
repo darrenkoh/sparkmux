@@ -6,11 +6,13 @@ import {
   emptyOutputText,
   markCleared,
   nearOutputBottom,
+  outputPaneForTab,
   outputTailKey,
   parseAutoScroll,
   visibleEntries,
   type ArtifactFeed,
 } from "./artifactModel.ts";
+import type { Pane } from "../types.ts";
 
 const feed: ArtifactFeed = {
   cli: "grok",
@@ -63,6 +65,32 @@ test("a longer latest entry is new output even when its id stays", () => {
   assert.equal(outputTailKey([]), "0");
 });
 
+function pane(id: string, active: boolean): Pane {
+  return {
+    id,
+    index: 0,
+    command: "grok-1.0.50",
+    path: "/tmp/proj",
+    pid: id === "a" ? 11 : 22,
+    active,
+    width: 80,
+    height: 24,
+    title: "grok",
+    alternate: true,
+    mouse: false,
+    mouse_sgr: false,
+  };
+}
+
+test("the output pane is the focused pane of the selected tab", () => {
+  const tab = { panes: [pane("a", true), pane("b", false)] };
+  assert.equal(outputPaneForTab(tab, "b")?.id, "b");
+  assert.equal(outputPaneForTab(tab, "other")?.id, "a");
+  assert.equal(outputPaneForTab(tab, null)?.id, "a");
+  assert.equal(outputPaneForTab({ panes: [pane("b", false)] }, null)?.id, "b");
+  assert.equal(outputPaneForTab(null, "a"), null);
+});
+
 test("a shell pane and a missing transcript explain themselves", () => {
   assert.equal(
     emptyOutputText({ ...feed, cli: null, transcript_path: null, entries: [] }, 0, 0),
@@ -70,6 +98,6 @@ test("a shell pane and a missing transcript explain themselves", () => {
   );
   assert.equal(
     emptyOutputText({ ...feed, transcript_path: null, entries: [] }, 0, 0),
-    "No transcript for this directory yet.",
+    "No transcript for this pane yet.",
   );
 });

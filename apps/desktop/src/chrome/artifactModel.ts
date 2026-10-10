@@ -83,7 +83,7 @@ export function emptyOutputText(
   if (!feed) return "Reading the transcript…";
   if (feed.error) return feed.error;
   if (!feed.cli) return "This pane is not running Grok or Claude.";
-  if (!feed.transcript_path) return "No transcript for this directory yet.";
+  if (!feed.transcript_path) return "No transcript for this pane yet.";
   if (visibleCount > 0) return null;
   if (through > 0) return "Cleared. New replies show up here.";
   return "No reply in this transcript yet.";
@@ -93,6 +93,19 @@ export function cliLabel(cli: string | null): string {
   if (cli === "grok") return "Grok";
   if (cli === "claude") return "Claude";
   return "";
+}
+
+/** The selected tab's pane. A focused pane from another tab is not used. */
+export function outputPaneForTab(
+  win: { panes: Pane[] } | null | undefined,
+  focusedPaneId: string | null,
+): Pane | null {
+  if (!win || win.panes.length === 0) return null;
+  if (focusedPaneId) {
+    const focused = win.panes.find((pane) => pane.id === focusedPaneId);
+    if (focused) return focused;
+  }
+  return win.panes.find((pane) => pane.active) ?? win.panes[0];
 }
 
 export function findPane(snap: Snapshot, paneId: string | null): Pane | null {

@@ -5,11 +5,15 @@
 //! user's home directory, and only when the focused pane is Grok or Claude.
 //! tmux reports the real executable name, so a `grok` symlink to
 //! `grok-1.0.50` shows up as `grok-1.0.50`. Grok's pane title ends in ` - grok`.
+//!
+//! One project directory holds every console started there. The pane's process
+//! picks its own file: Grok lists `session_id`, `pid`, and `cwd` in
+//! `~/.grok/active_sessions.json`. A title match and an open transcript file
+//! are the fallbacks. Several transcripts are never merged into one feed.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -80,6 +84,8 @@ impl ArtifactFeed {
 pub struct TranscriptRoots {
     pub grok_sessions: PathBuf,
     pub claude_projects: PathBuf,
+    /// `~/.grok/active_sessions.json`. One record per live Grok process.
+    pub grok_active_sessions: PathBuf,
 }
 
 fn default_roots() -> TranscriptRoots {
@@ -89,11 +95,13 @@ fn default_roots() -> TranscriptRoots {
             TranscriptRoots {
                 grok_sessions: home.join(".grok").join("sessions"),
                 claude_projects: home.join(".claude").join("projects"),
+                grok_active_sessions: home.join(".grok").join("active_sessions.json"),
             }
         }
         None => TranscriptRoots {
             grok_sessions: PathBuf::new(),
             claude_projects: PathBuf::new(),
+            grok_active_sessions: PathBuf::new(),
         },
     }
 }
@@ -103,9 +111,10 @@ pub async fn pane_artifacts(
     command: String,
     cwd: String,
     title: String,
+    pid: u32,
 ) -> Result<ArtifactFeed, String> {
     let roots = default_roots();
-    tokio::task::spawn_blocking(move || load_artifacts(&command, &cwd, &title, &roots))
+    tokio::task::spawn_blocking(move || load_artifacts(&command, &cwd, &title, pid, &roots))
         .await
         .map_err(|err| err.to_string())
 }
@@ -114,6 +123,17 @@ pub fn load_artifacts(
     command: &str,
     cwd: &str,
     title: &str,
+    pid: u32,
+    roots: &TranscriptRoots,
+) -> ArtifactFeed {
+    load_for_family(command, cwd, title, &pane_family(pid), roots)
+}
+
+fn load_for_family(
+    command: &str,
+    cwd: &str,
+    title: &str,
+    family: &[(u32, u8)],
     roots: &TranscriptRoots,
 ) -> ArtifactFeed {
     // tmux reports the foreground executable's real file name (`grok-1.0.50`),
@@ -123,7 +143,7 @@ pub fn load_artifacts(
     let Some(kind) = cli_kind(command).or_else(|| cli_kind(title)) else {
         return ArtifactFeed::none();
     };
-    let Some(path) = find_transcript(kind, cwd, roots) else {
+    let Some(path) = select_transcript(kind, cwd, title, family, roots) else {
         return ArtifactFeed::unmatched(kind);
     };
     match read_transcript(kind, &path, MAX_TAIL) {
@@ -244,40 +264,206 @@ fn percent_encode(text: &str) -> String {
     out
 }
 
-fn find_transcript(kind: CliKind, cwd: &str, roots: &TranscriptRoots) -> Option<PathBuf> {
-    let mut path = normalize_cwd(cwd)?;
+struct ActiveSession {
+    session_id: String,
+    pid: u32,
+    cwd: String,
+    opened_at: String,
+}
+
+/// The pane pid, then its descendants, each with a depth from the pane.
+/// Depth 0 is the pane process itself. A shell's Grok child is depth 1.
+fn pane_family(root: u32) -> Vec<(u32, u8)> {
+    if root == 0 {
+        return Vec::new();
+    }
+    let mut out = vec![(root, 0u8)];
+    let mut frontier = vec![root];
+    for depth in 1..=6u8 {
+        if frontier.is_empty() || out.len() >= 64 {
+            break;
+        }
+        let mut next = Vec::new();
+        for pid in frontier {
+            for child in child_pids(pid) {
+                if out.len() >= 64 {
+                    break;
+                }
+                if out.iter().any(|(id, _)| *id == child) {
+                    continue;
+                }
+                out.push((child, depth));
+                next.push(child);
+            }
+        }
+        frontier = next;
+    }
+    out
+}
+
+fn select_transcript(
+    kind: CliKind,
+    cwd: &str,
+    title: &str,
+    family: &[(u32, u8)],
+    roots: &TranscriptRoots,
+) -> Option<PathBuf> {
+    if let Some(path) = grok_active_transcript(kind, cwd, family, roots) {
+        return Some(path);
+    }
+    let found = transcripts_for_cwd(kind, cwd, roots);
+    if let Some(path) = match_title(kind, &found, title) {
+        return Some(path);
+    }
+    if found.len() == 1 {
+        return found.into_iter().next();
+    }
+    open_transcript(kind, family, title, roots)
+}
+
+fn grok_active_transcript(
+    kind: CliKind,
+    pane_cwd: &str,
+    family: &[(u32, u8)],
+    roots: &TranscriptRoots,
+) -> Option<PathBuf> {
+    if kind != CliKind::Grok || family.is_empty() {
+        return None;
+    }
+    let sessions = read_active_sessions(&roots.grok_active_sessions);
+    let best = best_active(&sessions, family, pane_cwd)?;
+    if !safe_component(&best.session_id) {
+        return None;
+    }
+    let cwd = normalize_cwd(&best.cwd)?;
+    let path = roots
+        .grok_sessions
+        .join(encode_grok_path(&cwd))
+        .join(&best.session_id)
+        .join("chat_history.jsonl");
+    under_jail(&roots.grok_sessions, &path)
+}
+
+fn best_active<'a>(
+    sessions: &'a [ActiveSession],
+    family: &[(u32, u8)],
+    pane_cwd: &str,
+) -> Option<&'a ActiveSession> {
+    let pane_cwd = normalize_cwd(pane_cwd);
+    let mut best: Option<(u8, bool, &str, &ActiveSession)> = None;
+    for session in sessions {
+        let Some((_, depth)) = family.iter().find(|(pid, _)| *pid == session.pid) else {
+            continue;
+        };
+        let same_cwd = pane_cwd
+            .as_ref()
+            .is_some_and(|cwd| normalize_cwd(&session.cwd).as_ref() == Some(cwd));
+        let replace = match best {
+            None => true,
+            Some((prev_depth, prev_cwd, prev_opened, _)) => {
+                *depth < prev_depth
+                    || (*depth == prev_depth && same_cwd && !prev_cwd)
+                    || (*depth == prev_depth
+                        && same_cwd == prev_cwd
+                        && session.opened_at.as_str() > prev_opened)
+            }
+        };
+        if replace {
+            best = Some((*depth, same_cwd, session.opened_at.as_str(), session));
+        }
+    }
+    best.map(|(_, _, _, session)| session)
+}
+
+fn read_active_sessions(path: &Path) -> Vec<ActiveSession> {
+    let Ok(file) = File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_reader::<_, Value>(file.take(256 * 1024)) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let Some(id) = item.get("session_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !safe_component(id) {
+            continue;
+        }
+        let Some(pid) = item.get("pid").and_then(Value::as_u64) else {
+            continue;
+        };
+        if pid == 0 || pid > u64::from(u32::MAX) {
+            continue;
+        }
+        out.push(ActiveSession {
+            session_id: id.to_string(),
+            pid: pid as u32,
+            cwd: item
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            opened_at: item
+                .get("opened_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        });
+    }
+    out
+}
+
+/// Transcripts in the nearest project directory, walking up to eight parents.
+/// The first directory that has any session wins, so a parent project does not
+/// leak into a nested one.
+fn transcripts_for_cwd(kind: CliKind, cwd: &str, roots: &TranscriptRoots) -> Vec<PathBuf> {
+    let Some(mut path) = normalize_cwd(cwd) else {
+        return Vec::new();
+    };
     let jail = match kind {
         CliKind::Grok => &roots.grok_sessions,
         CliKind::Claude => &roots.claude_projects,
     };
     if jail.as_os_str().is_empty() {
-        return None;
+        return Vec::new();
     }
     for _ in 0..8 {
         let name = match kind {
             CliKind::Grok => encode_grok_path(&path),
-            CliKind::Claude => encode_claude_path(&path)?,
+            CliKind::Claude => match encode_claude_path(&path) {
+                Some(name) => name,
+                None => break,
+            },
         };
         if safe_component(&name) {
-            let dir = jail.join(&name);
-            if let Some(found) = newest_in(kind, &dir, jail) {
-                return Some(found);
+            let found = transcripts_in(kind, &jail.join(&name), jail);
+            if !found.is_empty() {
+                return found;
             }
         }
         if !path.pop() {
             break;
         }
     }
-    None
+    Vec::new()
 }
 
-fn newest_in(kind: CliKind, dir: &Path, jail: &Path) -> Option<PathBuf> {
+fn transcripts_in(kind: CliKind, dir: &Path, jail: &Path) -> Vec<PathBuf> {
     if !dir.is_dir() {
-        return None;
+        return Vec::new();
     }
-    let mut best: Option<(SystemTime, PathBuf)> = None;
-    let entries = std::fs::read_dir(dir).ok()?;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
     for entry in entries.flatten() {
+        if out.len() >= 128 {
+            break;
+        }
         let candidate = match kind {
             CliKind::Grok => entry.path().join("chat_history.jsonl"),
             CliKind::Claude => {
@@ -292,12 +478,106 @@ fn newest_in(kind: CliKind, dir: &Path, jail: &Path) -> Option<PathBuf> {
                 path
             }
         };
-        let Some(canon) = under_jail(jail, &candidate) else {
+        if let Some(canon) = under_jail(jail, &candidate) {
+            out.push(canon);
+        }
+    }
+    out
+}
+
+/// Longest `generated_title` that appears in the pane title. Short titles are
+/// skipped so a status word like "Thinking" does not bind the wrong session.
+fn match_title(kind: CliKind, paths: &[PathBuf], title: &str) -> Option<PathBuf> {
+    if kind != CliKind::Grok {
+        return None;
+    }
+    let hay = title.to_ascii_lowercase();
+    if hay.trim().is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, &Path)> = None;
+    for path in paths {
+        let Some(generated) = generated_title(path) else {
             continue;
         };
-        consider(&mut best, canon);
+        let needle = generated.trim().to_ascii_lowercase();
+        let len = needle.chars().count();
+        if len < 12 || !hay.contains(&needle) {
+            continue;
+        }
+        let replace = match best {
+            None => true,
+            Some((prev, _)) => len > prev,
+        };
+        if replace {
+            best = Some((len, path));
+        }
     }
-    best.map(|(_, path)| path)
+    best.map(|(_, path)| path.to_path_buf())
+}
+
+fn generated_title(transcript: &Path) -> Option<String> {
+    let summary = transcript.parent()?.join("summary.json");
+    let file = File::open(summary).ok()?;
+    let value: Value = serde_json::from_reader(file.take(64 * 1024)).ok()?;
+    let text = value.get("generated_title").and_then(Value::as_str)?.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn open_transcript(
+    kind: CliKind,
+    family: &[(u32, u8)],
+    title: &str,
+    roots: &TranscriptRoots,
+) -> Option<PathBuf> {
+    if family.is_empty() {
+        return None;
+    }
+    let jail = match kind {
+        CliKind::Grok => &roots.grok_sessions,
+        CliKind::Claude => &roots.claude_projects,
+    };
+    let mut hits = Vec::new();
+    for (pid, _) in family {
+        for path in open_paths(*pid) {
+            let Some(transcript) = transcript_from_open(kind, &path, jail) else {
+                continue;
+            };
+            if !hits.contains(&transcript) {
+                hits.push(transcript);
+            }
+            if hits.len() >= 32 {
+                break;
+            }
+        }
+    }
+    if hits.len() == 1 {
+        return hits.into_iter().next();
+    }
+    match_title(kind, &hits, title)
+}
+
+fn transcript_from_open(kind: CliKind, path: &Path, jail: &Path) -> Option<PathBuf> {
+    match kind {
+        CliKind::Grok => {
+            let name = path.file_name()?.to_str()?;
+            if name != "chat_history.jsonl" && name != "events.jsonl" {
+                return None;
+            }
+            under_jail(jail, &path.parent()?.join("chat_history.jsonl"))
+        }
+        CliKind::Claude => {
+            let ext = path.extension()?.to_str()?;
+            if ext != "jsonl" {
+                return None;
+            }
+            under_jail(jail, path)
+        }
+    }
 }
 
 fn under_jail(jail: &Path, file: &Path) -> Option<PathBuf> {
@@ -310,21 +590,207 @@ fn under_jail(jail: &Path, file: &Path) -> Option<PathBuf> {
     }
 }
 
-fn consider(best: &mut Option<(SystemTime, PathBuf)>, path: PathBuf) {
-    let Ok(meta) = std::fs::metadata(&path) else {
-        return;
-    };
-    if !meta.is_file() {
-        return;
+fn child_pids(ppid: u32) -> Vec<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_child_pids(ppid)
     }
-    let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-    let replace = match best {
-        None => true,
-        Some((when, previous)) => modified > *when || (modified == *when && path > *previous),
-    };
-    if replace {
-        *best = Some((modified, path));
+    #[cfg(target_os = "linux")]
+    {
+        linux_child_pids(ppid)
     }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = ppid;
+        Vec::new()
+    }
+}
+
+fn open_paths(pid: u32) -> Vec<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_open_paths(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_open_paths(pid)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        Vec::new()
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos_proc {
+    use std::path::PathBuf;
+
+    /// `vnode_fdinfowithpath` is 1200 bytes on the macOS 15.4 and 26.5 SDKs.
+    /// `proc_pidfdinfo` rejects any other size. The path is a C string at byte 176.
+    const VNODE_PATH_SIZE: i32 = 1200;
+    const VNODE_PATH_OFFSET: usize = 176;
+    const PROC_PIDLISTFDS: i32 = 1;
+    const PROC_PIDFDVNODEPATHINFO: i32 = 2;
+    const FDTYPE_VNODE: u32 = 1;
+
+    #[link(name = "proc")]
+    unsafe extern "C" {
+        fn proc_listchildpids(ppid: i32, buffer: *mut std::ffi::c_void, buffersize: i32) -> i32;
+        fn proc_pidinfo(
+            pid: i32,
+            flavor: i32,
+            arg: u64,
+            buffer: *mut std::ffi::c_void,
+            buffersize: i32,
+        ) -> i32;
+        fn proc_pidfdinfo(
+            pid: i32,
+            fd: i32,
+            flavor: i32,
+            buffer: *mut std::ffi::c_void,
+            buffersize: i32,
+        ) -> i32;
+    }
+
+    pub fn child_pids(ppid: u32) -> Vec<u32> {
+        let mut buf = [0i32; 64];
+        let n = unsafe {
+            proc_listchildpids(
+                ppid as i32,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * std::mem::size_of::<i32>()) as i32,
+            )
+        };
+        if n <= 0 {
+            return Vec::new();
+        }
+        let n = (n as usize).min(buf.len());
+        buf[..n]
+            .iter()
+            .copied()
+            .filter(|pid| *pid > 0)
+            .map(|pid| pid as u32)
+            .collect()
+    }
+
+    pub fn open_paths(pid: u32) -> Vec<PathBuf> {
+        let mut raw = vec![0u8; 8 * 256];
+        let got = unsafe {
+            proc_pidinfo(
+                pid as i32,
+                PROC_PIDLISTFDS,
+                0,
+                raw.as_mut_ptr().cast(),
+                raw.len() as i32,
+            )
+        };
+        if got <= 0 {
+            return Vec::new();
+        }
+        let count = (got as usize).min(raw.len()) / 8;
+        let mut out = Vec::new();
+        for index in 0..count {
+            let base = index * 8;
+            let fd = i32::from_ne_bytes(raw[base..base + 4].try_into().unwrap_or([0; 4]));
+            let kind = u32::from_ne_bytes(raw[base + 4..base + 8].try_into().unwrap_or([0; 4]));
+            if kind != FDTYPE_VNODE {
+                continue;
+            }
+            if let Some(path) = fd_path(pid, fd) {
+                out.push(path);
+            }
+            if out.len() >= 64 {
+                break;
+            }
+        }
+        out
+    }
+
+    fn fd_path(pid: u32, fd: i32) -> Option<PathBuf> {
+        let mut buf = vec![0u8; VNODE_PATH_SIZE as usize];
+        let rc = unsafe {
+            proc_pidfdinfo(
+                pid as i32,
+                fd,
+                PROC_PIDFDVNODEPATHINFO,
+                buf.as_mut_ptr().cast(),
+                VNODE_PATH_SIZE,
+            )
+        };
+        if rc != VNODE_PATH_SIZE {
+            return None;
+        }
+        let bytes = buf.get(VNODE_PATH_OFFSET..VNODE_PATH_OFFSET + 1024)?;
+        let nul = bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(bytes.len());
+        let text = std::str::from_utf8(&bytes[..nul]).ok()?;
+        if text.starts_with('/') {
+            Some(PathBuf::from(text))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_child_pids(ppid: u32) -> Vec<u32> {
+    macos_proc::child_pids(ppid)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_open_paths(pid: u32) -> Vec<PathBuf> {
+    macos_proc::open_paths(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_child_pids(ppid: u32) -> Vec<u32> {
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in dir.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        if ppid_of(pid) == Some(ppid) {
+            out.push(pid);
+        }
+        if out.len() >= 64 {
+            break;
+        }
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn ppid_of(pid: u32) -> Option<u32> {
+    let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let end = text.rfind(')')?;
+    let mut fields = text[end + 1..].split_whitespace();
+    let _state = fields.next()?;
+    fields.next()?.parse().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_open_paths(pid: u32) -> Vec<PathBuf> {
+    let Ok(dir) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in dir.flatten() {
+        if let Ok(target) = std::fs::read_link(entry.path()) {
+            if target.is_absolute() {
+                out.push(target);
+            }
+        }
+        if out.len() >= 64 {
+            break;
+        }
+    }
+    out
 }
 
 fn read_transcript(
@@ -429,7 +895,7 @@ fn push_grok(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
                 entries,
                 offset,
                 "reasoning",
-                "Reasoning",
+                "Thinking",
                 &reasoning_text(obj),
                 REASON_CAP,
             );
@@ -519,7 +985,7 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
             entries,
             offset,
             "reasoning",
-            "Reasoning",
+            "Thinking",
             &thinking.join("\n"),
             REASON_CAP,
         );
@@ -697,7 +1163,6 @@ fn truncate_chars(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::Duration;
 
     fn scratch(name: &str) -> PathBuf {
         let dir =
@@ -707,10 +1172,12 @@ mod tests {
         dir
     }
 
-    fn touch(path: &Path, secs: u64) {
-        let file = File::options().write(true).open(path).unwrap();
-        file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
-            .unwrap();
+    fn roots(dir: &Path, sessions: PathBuf, projects: PathBuf) -> TranscriptRoots {
+        TranscriptRoots {
+            grok_sessions: sessions,
+            claude_projects: projects,
+            grok_active_sessions: dir.join("active_sessions.json"),
+        }
     }
 
     #[test]
@@ -760,7 +1227,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(blob.contains("You build the panel"), "{blob}");
-        assert!(blob.contains("Reasoning check the layout"), "{blob}");
+        assert!(blob.contains("Thinking check the layout"), "{blob}");
         assert!(blob.contains("Assistant Done."), "{blob}");
         assert!(blob.contains("read_file src/App.tsx"), "{blob}");
         assert!(blob.contains("Result fn main()"), "{blob}");
@@ -801,59 +1268,48 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn write_grok(dir: &Path, session: &str, body: &str) {
+        let folder = dir.join(session);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("chat_history.jsonl"),
+            format!("{{\"type\":\"assistant\",\"content\":\"{body}\"}}\n"),
+        )
+        .unwrap();
+    }
+
     #[test]
-    fn newest_grok_session_wins_and_parent_cwd_matches() {
+    fn one_session_in_a_parent_directory_is_the_pane_transcript() {
         let dir = scratch("grok-find");
         let project = dir.join("proj");
         fs::create_dir_all(project.join("sub")).unwrap();
         let sessions = dir.join("sessions");
-        let encoded = encode_grok_path(&project);
-        let older = sessions.join(&encoded).join("old");
-        let newer = sessions.join(&encoded).join("new");
-        fs::create_dir_all(&older).unwrap();
-        fs::create_dir_all(&newer).unwrap();
-        let old_file = older.join("chat_history.jsonl");
-        let new_file = newer.join("chat_history.jsonl");
-        fs::write(
-            &old_file,
-            "{\"type\":\"assistant\",\"content\":\"old reply\"}\n",
-        )
-        .unwrap();
-        fs::write(
-            &new_file,
-            "{\"type\":\"assistant\",\"content\":\"new reply\"}\n",
-        )
-        .unwrap();
-        touch(&old_file, 10);
-        touch(&new_file, 50);
-        let roots = TranscriptRoots {
-            grok_sessions: sessions,
-            claude_projects: dir.join("no-claude"),
-        };
+        let encoded = sessions.join(encode_grok_path(&project));
+        write_grok(&encoded, "only", "only reply");
+        let roots = roots(&dir, sessions, dir.join("no-claude"));
         let cwd = project.join("sub");
-        let feed = load_artifacts("grok", &cwd.to_string_lossy(), "", &roots);
+        let feed = load_artifacts("grok", &cwd.to_string_lossy(), "", 0, &roots);
         assert_eq!(feed.cli.as_deref(), Some("grok"));
         assert!(
-            feed.entries.iter().any(|entry| entry.body == "new reply"),
+            feed.entries.iter().any(|entry| entry.body == "only reply"),
             "{feed:?}"
         );
-        assert!(feed.entries.iter().all(|entry| entry.body != "old reply"));
-        let shell = load_artifacts("zsh", &cwd.to_string_lossy(), "zsh", &roots);
+        let shell = load_artifacts("zsh", &cwd.to_string_lossy(), "zsh", 0, &roots);
         assert!(shell.cli.is_none());
         assert!(shell.entries.is_empty());
-        let titled = load_artifacts("zsh", &cwd.to_string_lossy(), "grok", &roots);
+        let titled = load_artifacts("zsh", &cwd.to_string_lossy(), "grok", 0, &roots);
         assert_eq!(titled.cli.as_deref(), Some("grok"));
-        assert!(titled.entries.iter().any(|entry| entry.body == "new reply"));
-        let versioned = load_artifacts("grok-1.0.50", &cwd.to_string_lossy(), "", &roots);
-        assert_eq!(versioned.cli.as_deref(), Some("grok"));
-        assert!(versioned
+        assert!(titled
             .entries
             .iter()
-            .any(|entry| entry.body == "new reply"));
+            .any(|entry| entry.body == "only reply"));
+        let versioned = load_artifacts("grok-1.0.50", &cwd.to_string_lossy(), "", 0, &roots);
+        assert_eq!(versioned.cli.as_deref(), Some("grok"));
         let status = load_artifacts(
             "zsh",
             &cwd.to_string_lossy(),
             "⠸ - Find a browser - Add pages - grok",
+            0,
             &roots,
         );
         assert_eq!(status.cli.as_deref(), Some("grok"));
@@ -861,13 +1317,87 @@ mod tests {
             "/Users/x/.grok/bin/grok-1.0.41-macos-aarch64",
             &cwd.to_string_lossy(),
             "",
+            0,
             &roots,
         );
         assert_eq!(packaged.cli.as_deref(), Some("grok"));
-        let other = load_artifacts("grokbot", &cwd.to_string_lossy(), "notes", &roots);
+        let other = load_artifacts("grokbot", &cwd.to_string_lossy(), "notes", 0, &roots);
         assert!(other.cli.is_none());
-        let extra = load_artifacts("grok-extra", &cwd.to_string_lossy(), "", &roots);
+        let extra = load_artifacts("grok-extra", &cwd.to_string_lossy(), "", 0, &roots);
         assert!(extra.cli.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pane_process_selects_its_session_and_other_consoles_stay_out() {
+        let dir = scratch("grok-pid");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let sessions = dir.join("sessions");
+        let encoded = sessions.join(encode_grok_path(&project));
+        write_grok(&encoded, "old", "old reply");
+        write_grok(&encoded, "new", "new reply");
+        let cwd = project.to_string_lossy().into_owned();
+        fs::write(
+            dir.join("active_sessions.json"),
+            format!(
+                "[{{\"session_id\":\"old\",\"pid\":42,\"cwd\":\"{cwd}\",\"opened_at\":\"2026-01-01T00:00:00Z\"}},{{\"session_id\":\"new\",\"pid\":99,\"cwd\":\"{cwd}\",\"opened_at\":\"2026-06-01T00:00:00Z\"}}]"
+            ),
+        )
+        .unwrap();
+        let roots = roots(&dir, sessions, dir.join("no-claude"));
+        // Shell pid 7, Grok child pid 42. The newer session belongs to another console.
+        let feed = load_for_family(
+            "grok-1.0.50",
+            &cwd,
+            "⠙ - Thinking - grok",
+            &[(7, 0), (42, 1)],
+            &roots,
+        );
+        assert!(
+            feed.entries.iter().any(|entry| entry.body == "old reply"),
+            "{feed:?}"
+        );
+        assert!(feed.entries.iter().all(|entry| entry.body != "new reply"));
+        let unbound = load_artifacts("grok", &cwd, "", 0, &roots);
+        assert!(unbound.transcript_path.is_none(), "{unbound:?}");
+        assert!(unbound.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pane_title_selects_the_named_session() {
+        let dir = scratch("grok-title");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let sessions = dir.join("sessions");
+        let encoded = sessions.join(encode_grok_path(&project));
+        write_grok(&encoded, "alpha", "alpha reply");
+        write_grok(&encoded, "beta", "beta reply");
+        fs::write(
+            encoded.join("beta").join("summary.json"),
+            "{\"generated_title\":\"Revert MiniMax H3 V2 to Turbo\"}\n",
+        )
+        .unwrap();
+        fs::write(
+            encoded.join("alpha").join("summary.json"),
+            "{\"generated_title\":\"Color the output panel\"}\n",
+        )
+        .unwrap();
+        let roots = roots(&dir, sessions, dir.join("no-claude"));
+        let cwd = project.to_string_lossy().into_owned();
+        let feed = load_artifacts(
+            "grok-1.0.50",
+            &cwd,
+            "⠙ - Thinking - Revert MiniMax H3 V2 to Turbo - grok",
+            0,
+            &roots,
+        );
+        assert!(
+            feed.entries.iter().any(|entry| entry.body == "beta reply"),
+            "{feed:?}"
+        );
+        assert!(feed.entries.iter().all(|entry| entry.body != "alpha reply"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -886,11 +1416,8 @@ mod tests {
         let sess = sessions.join(encode_grok_path(&project)).join("s1");
         fs::create_dir_all(&sess).unwrap();
         std::os::unix::fs::symlink(&outside, sess.join("chat_history.jsonl")).unwrap();
-        let roots = TranscriptRoots {
-            grok_sessions: sessions,
-            claude_projects: dir.join("no-claude"),
-        };
-        let feed = load_artifacts("grok", &project.to_string_lossy(), "", &roots);
+        let roots = roots(&dir, sessions, dir.join("no-claude"));
+        let feed = load_artifacts("grok", &project.to_string_lossy(), "", 0, &roots);
         assert!(feed.transcript_path.is_none(), "{feed:?}");
         assert!(feed.entries.is_empty());
         let _ = fs::remove_dir_all(&dir);
@@ -910,11 +1437,8 @@ mod tests {
             "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"hello from claude\"}}\n",
         )
         .unwrap();
-        let roots = TranscriptRoots {
-            grok_sessions: dir.join("no-grok"),
-            claude_projects: projects,
-        };
-        let feed = load_artifacts("zsh", &project.to_string_lossy(), "Claude Code", &roots);
+        let roots = roots(&dir, dir.join("no-grok"), projects);
+        let feed = load_artifacts("zsh", &project.to_string_lossy(), "Claude Code", 0, &roots);
         assert_eq!(feed.cli.as_deref(), Some("claude"));
         assert!(
             feed.entries
@@ -922,6 +1446,20 @@ mod tests {
                 .any(|entry| entry.body == "hello from claude"),
             "{feed:?}"
         );
+        fs::write(
+            folder.join("other.jsonl"),
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"other console\"}}\n",
+        )
+        .unwrap();
+        let mixed = load_artifacts(
+            "claude",
+            &project.to_string_lossy(),
+            "Claude Code",
+            0,
+            &roots,
+        );
+        assert!(mixed.transcript_path.is_none(), "{mixed:?}");
+        assert!(mixed.entries.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -956,6 +1494,13 @@ mod tests {
         assert!(panel.contains("Collapse"));
         assert!(panel.contains("Auto scroll"));
         assert!(panel.contains("paneArtifacts"));
+        assert!(app.contains("outputPaneForTab"));
+        assert!(app.contains("pid={outputPane?.pid ?? 0}"));
+        assert!(panel.contains("pid"));
+        let css = include_str!("../../src/index.css");
+        assert!(css.contains(".artifact-item.user"));
+        assert!(css.contains(".artifact-item.reasoning"));
+        assert!(css.contains(".artifact-item.assistant"));
         let lib = include_str!("lib.rs");
         assert!(lib.contains("artifacts::pane_artifacts"));
     }

@@ -23,11 +23,13 @@ export default function ArtifactPanel({
   command,
   cwd,
   title,
+  pid,
   onCollapse,
 }: {
   command: string;
   cwd: string;
   title: string;
+  pid: number;
   onCollapse: () => void;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
@@ -44,7 +46,7 @@ export default function ArtifactPanel({
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
-      void paneArtifacts(command, cwd, title)
+      void paneArtifacts(command, cwd, title, pid)
         .then((next) => {
           if (!cancelled) setFeed(next);
         })
@@ -68,7 +70,7 @@ export default function ArtifactPanel({
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [command, cwd, title]);
+  }, [command, cwd, title, pid]);
 
   const path = feed?.transcript_path ?? null;
   const through = clearedThrough(clears, path, feed?.file_len ?? 0);
@@ -86,7 +88,7 @@ export default function ArtifactPanel({
     ignoreScroll.current = true;
     el.scrollTop = 0;
     ignoreScroll.current = false;
-  }, [command, cwd, title]);
+  }, [command, cwd, title, pid]);
 
   useEffect(() => {
     if (!autoScroll) return;

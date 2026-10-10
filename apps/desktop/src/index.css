@@ -168,7 +168,7 @@ body.is-resizing .sidebar-slot {
 }
 
 .sidebar-kicker {
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-size: 10px;
@@ -813,11 +813,14 @@ body.is-resizing * {
 
 .artifact-item {
   margin: 0 0 12px;
+  border-radius: 6px;
 }
 
 .artifact-item .artifact-label {
   color: var(--muted);
   font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   margin-bottom: 2px;
 }
 
@@ -828,13 +831,32 @@ body.is-resizing * {
   user-select: text;
 }
 
+.artifact-item.user {
+  padding: 8px 10px;
+  border-left: 3px solid #e8a849;
+  background: rgba(232, 168, 73, 0.14);
+}
+
+.artifact-item.user .artifact-label {
+  color: #e8a849;
+}
+
 .artifact-item.user .artifact-body {
-  color: var(--fg);
+  color: #f6edd8;
 }
 
 .artifact-item.assistant {
-  padding-left: 8px;
-  border-left: 2px solid var(--accent);
+  padding: 8px 10px;
+  border-left: 3px solid #5b8def;
+  background: rgba(91, 141, 239, 0.12);
+}
+
+.artifact-item.assistant .artifact-label {
+  color: #9ec1ff;
+}
+
+.artifact-item.assistant .artifact-body {
+  color: #e7eeff;
 }
 
 .artifact-item.tool,
@@ -843,16 +865,35 @@ body.is-resizing * {
   gap: 8px;
   align-items: baseline;
   margin-bottom: 6px;
+  padding: 3px 8px;
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
+}
+
+.artifact-item.tool {
+  border-left: 3px solid #2dd4bf;
+  background: rgba(45, 212, 191, 0.1);
+}
+
+.artifact-item.tool_result {
+  border-left: 3px solid #4ade80;
+  background: rgba(74, 222, 128, 0.1);
 }
 
 .artifact-item.tool .artifact-label,
 .artifact-item.tool_result .artifact-label {
   flex: 0 0 auto;
   margin: 0;
-  color: var(--fg);
+  font-weight: 600;
+}
+
+.artifact-item.tool .artifact-label {
+  color: #5eead4;
+}
+
+.artifact-item.tool_result .artifact-label {
+  color: #86efac;
 }
 
 .artifact-item.tool .artifact-body,
@@ -864,13 +905,18 @@ body.is-resizing * {
 }
 
 .artifact-item.reasoning {
-  margin-bottom: 8px;
-  color: var(--muted);
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-left: 3px solid #c084fc;
+  background: rgba(192, 132, 252, 0.12);
+  color: #ddd6fe;
 }
 
 .artifact-item.reasoning summary {
   cursor: pointer;
-  font-size: 11px;
+  color: #d8b4fe;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .tile-split {

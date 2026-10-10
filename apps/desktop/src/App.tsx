@@ -36,7 +36,7 @@ import {
   windowResize,
 } from "./api";
 import ArtifactPanel from "./chrome/ArtifactPanel";
-import { findPane } from "./chrome/artifactModel";
+import { outputPaneForTab } from "./chrome/artifactModel";
 import ErrorPanel from "./chrome/ErrorPanel";
 import Splitter, {
   SIDEBAR_DEFAULT,
@@ -907,7 +907,7 @@ export default function App() {
   const visibleWin = attached?.windows.find((w) => w.id === visibleWindowId);
   const winName = visibleWin?.name ?? null;
   const shellNow = focusedShell(snap, focusedPane);
-  const outputPane = findPane(snap, focusedPane);
+  const outputPane = outputPaneForTab(visibleWin, focusedPane);
   const shellReady = shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
   const offerAsk = helperOn;
   const showTiles = !error && !empty && layout && attachedSession;
@@ -1055,9 +1055,11 @@ export default function App() {
                 />
                 {outputOpen && (
                   <ArtifactPanel
+                    key={outputPane?.id ?? "none"}
                     command={outputPane?.command ?? ""}
                     cwd={outputPane?.path ?? ""}
                     title={outputPane?.title ?? ""}
+                    pid={outputPane?.pid ?? 0}
                     onCollapse={() => setOutputOpen(false)}
                   />
                 )}

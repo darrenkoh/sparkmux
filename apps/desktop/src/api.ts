@@ -134,8 +134,9 @@ export function paneArtifacts(
   command: string,
   cwd: string,
   title: string,
+  pid: number,
 ): Promise<ArtifactFeed> {
-  return invoke("pane_artifacts", { command, cwd, title });
+  return invoke("pane_artifacts", { command, cwd, title, pid });
 }
 
 export interface HelperStatus {
