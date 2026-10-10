@@ -1724,15 +1724,31 @@ code {
   pointer-events: none;
   z-index: 5;
 }
-.scifi-viewport-mode {
+.scifi-viewport-toolbar {
   position: absolute;
   left: 12px;
   top: 36px;
   z-index: 6;
   display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.scifi-viewport-mode button {
+.scifi-viewport-mode,
+.scifi-viewport-fps {
+  display: flex;
+  align-items: center;
+}
+.scifi-fps-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.4);
+  margin-right: 5px;
+}
+.scifi-viewport-mode button,
+.scifi-viewport-fps button {
   font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 8px;
   letter-spacing: 0.14em;
   color: rgba(255, 255, 255, 0.45);
@@ -1740,14 +1756,18 @@ code {
   border: 1px solid rgba(255, 255, 255, 0.2);
   padding: 3px 8px;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
-.scifi-viewport-mode button + button {
+.scifi-viewport-mode button + button,
+.scifi-viewport-fps button + button {
   border-left: none;
 }
-.scifi-viewport-mode button.on {
+.scifi-viewport-mode button.on,
+.scifi-viewport-fps button.on {
   color: #fff;
   border-color: #ff9a3c;
   background: rgba(255, 154, 60, 0.15);
+  text-shadow: 0 0 6px rgba(255, 154, 60, 0.4);
 }
 
 /* Token Arc Gauge */

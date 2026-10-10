@@ -180,6 +180,12 @@ export default function TerrainViewport({
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
   const [realism, setRealism] = useState<"mono" | "color">("color");
+  const [targetFps, setTargetFps] = useState<number>(24);
+  const targetFpsRef = useRef<number>(24);
+
+  useEffect(() => {
+    targetFpsRef.current = targetFps;
+  }, [targetFps]);
 
   const camRef = useRef({
     azimuth: 0.38,
@@ -558,13 +564,26 @@ export default function TerrainViewport({
     // 4. Render Loop with 3D Axis HUD, Pin Lines and Top Title Banner
     // -------------------------------------------------------------------------
     let animId: number;
-    let fps = 60;
+    let fps = targetFpsRef.current;
     let lastFpsTime = performance.now();
     let frameCount = 0;
     const startTime = performance.now();
+    let lastRenderTime = performance.now();
 
     const render = () => {
+      animId = requestAnimationFrame(render);
+
       const now = performance.now();
+      const interval = 1000 / targetFpsRef.current;
+      const delta = now - lastRenderTime;
+
+      // Allow slight timing tolerance (1.5ms) for RAF alignment
+      if (delta < interval - 1.5) {
+        return;
+      }
+      lastRenderTime = now - (delta % interval);
+
+      const dt = delta / 1000;
       const elapsed = (now - startTime) / 1000;
       const cam = camRef.current;
 
@@ -576,7 +595,7 @@ export default function TerrainViewport({
       }
 
       if (!cam.isDragging && elapsed - cam.idleSince > 4) {
-        cam.azimuth += 0.002;
+        cam.azimuth += 0.12 * Math.min(dt, 0.1);
       }
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -819,8 +838,6 @@ export default function TerrainViewport({
       hud.textAlign = 'right';
       hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${stats?.total_events ?? timeline.length}   ${fps} FPS`, rect.width - 20, rect.height - 18);
 
-
-      animId = requestAnimationFrame(render);
     };
 
     animId = requestAnimationFrame(render);
@@ -896,21 +913,37 @@ export default function TerrainViewport({
         DRAG · ORBIT &nbsp;&nbsp; WHEEL · ZOOM &nbsp;&nbsp; DBL-CLICK · RESET
       </div>
 
-      <div className="scifi-viewport-mode">
-        <button
-          type="button"
-          className={realism === "mono" ? "on" : ""}
-          onClick={() => setRealism("mono")}
-        >
-          MONO
-        </button>
-        <button
-          type="button"
-          className={realism === "color" ? "on" : ""}
-          onClick={() => setRealism("color")}
-        >
-          SPECTRAL
-        </button>
+      <div className="scifi-viewport-toolbar">
+        <div className="scifi-viewport-mode">
+          <button
+            type="button"
+            className={realism === "mono" ? "on" : ""}
+            onClick={() => setRealism("mono")}
+          >
+            MONO
+          </button>
+          <button
+            type="button"
+            className={realism === "color" ? "on" : ""}
+            onClick={() => setRealism("color")}
+          >
+            SPECTRAL
+          </button>
+        </div>
+
+        <div className="scifi-viewport-fps">
+          <span className="scifi-fps-label">FPS</span>
+          {[15, 24, 30, 60].map((rate) => (
+            <button
+              key={rate}
+              type="button"
+              className={targetFps === rate ? "on" : ""}
+              onClick={() => setTargetFps(rate)}
+            >
+              {rate}
+            </button>
+          ))}
+        </div>
       </div>
     </section>
   );
