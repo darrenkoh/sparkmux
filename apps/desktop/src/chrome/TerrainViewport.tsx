@@ -89,8 +89,8 @@ void main() {
   float size = base + coc;
   gl_PointSize = size * uDpr;
   float energy = (base * base) / (size * size);
-  float twinkle = 0.85 + 0.15 * sin(uTime * 2.5 + aSeed * 45.0);
-  float scan = 1.0 + 2.4 * exp(-pow((aPos.y - uScan) * 4.0, 2.0));
+  float scanDist = abs(aPos.y - uScan);
+  float scan = 1.0 + 2.2 * exp(-scanDist * scanDist * 4.5);
   float fog = exp(-max(c.w - 35.0, 0.0) * 0.04);
   vA = aPos.w * energy * twinkle * scan * fog * uGain;
   vRing = smoothstep(4.0, 14.0, coc);
@@ -126,7 +126,8 @@ void main() {
   gl_Position = uVP * vec4(aPos, 1.0);
   float d = length(aPos - uCam);
   float fog = exp(-max(d - 30.0, 0.0) * 0.04);
-  float scan = 1.0 + 3.0 * exp(-pow((aPos.y - uScan) * 2.5, 2.0));
+  float scanDist = abs(aPos.y - uScan);
+  float scan = 1.0 + 2.4 * exp(-scanDist * scanDist * 3.5);
   vA = aA * fog * scan;
 }
 `;
@@ -405,8 +406,10 @@ export default function TerrainViewport({ timeline, activeModel }: TerrainViewpo
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
 
-      // Scanning wave height
-      const scanAlt = (Math.sin(elapsed * 1.5) * 0.5 + 0.5) * 4.2;
+      // Smooth continuous bidirectional wave: sweeps up from base to summit and gently descends
+      // Using an extended range (-0.5 to 4.2) so the pulse smoothly enters from beneath the base and glides over the peak
+      const scanPhase = (Math.sin(elapsed * 1.1) * 0.5 + 0.5); // 0.0 to 1.0 smooth cyclic oscillation
+      const scanAlt = -0.4 + scanPhase * 4.6; // smoothly ascends and descends without abrupt cuts
 
       // 1. Draw Contours
       gl.useProgram(progContour);
