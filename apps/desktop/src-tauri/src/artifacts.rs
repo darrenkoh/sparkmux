@@ -2,8 +2,9 @@
 //!
 //! The pane keeps its own `%output` stream. This module never writes to tmux.
 //! It only opens `chat_history.jsonl` or a Claude session file under the
-//! user's home directory, and only when the focused pane's command is `grok`
-//! or `claude`.
+//! user's home directory, and only when the focused pane is Grok or Claude.
+//! tmux reports the real executable name, so a `grok` symlink to
+//! `grok-1.0.50` shows up as `grok-1.0.50`. Grok's pane title ends in ` - grok`.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -115,9 +116,10 @@ pub fn load_artifacts(
     title: &str,
     roots: &TranscriptRoots,
 ) -> ArtifactFeed {
-    // tmux reports the foreground process. Grok and Claude set the pane title
-    // to their own name, including while the shell is still the process
-    // tmux names, and after the CLI has returned to the prompt.
+    // tmux reports the foreground executable's real file name (`grok-1.0.50`),
+    // which differs from argv0 (`grok`). The pane title stays a status line
+    // ending in ` - grok` or `Claude Code` while the shell is still the
+    // process tmux names, and after the CLI has returned to the prompt.
     let Some(kind) = cli_kind(command).or_else(|| cli_kind(title)) else {
         return ArtifactFeed::none();
     };
@@ -147,13 +149,38 @@ fn cli_kind(value: &str) -> Option<CliKind> {
     let name = base.strip_prefix('-').unwrap_or(base);
     let name = name.strip_suffix(".exe").unwrap_or(name);
     let name = name.to_ascii_lowercase();
-    if name == "grok" || name.starts_with("grok ") {
+    named_cli(&name).or_else(|| titled_cli(&name))
+}
+
+fn named_cli(name: &str) -> Option<CliKind> {
+    if name == "grok" || name.starts_with("grok ") || versioned_bin(name, "grok") {
         return Some(CliKind::Grok);
     }
-    if name == "claude" || name.starts_with("claude ") {
+    if name == "claude" || name.starts_with("claude ") || versioned_bin(name, "claude") {
         return Some(CliKind::Claude);
     }
     None
+}
+
+/// `grok-1.0.50` and `grok-1.0.41-macos-aarch64`. The text after `grok-` starts with a digit.
+fn versioned_bin(name: &str, cli: &str) -> bool {
+    let Some(rest) = name.strip_prefix(cli) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('-') else {
+        return false;
+    };
+    rest.starts_with(|ch: char| ch.is_ascii_digit())
+}
+
+/// Grok sets the pane title to `<status> - grok`. Claude uses `Claude Code`.
+fn titled_cli(name: &str) -> Option<CliKind> {
+    let last = name.rsplit(" - ").next().unwrap_or(name).trim();
+    match last {
+        "grok" => Some(CliKind::Grok),
+        "claude" | "claude code" => Some(CliKind::Claude),
+        _ => None,
+    }
 }
 
 fn normalize_cwd(cwd: &str) -> Option<PathBuf> {
@@ -817,6 +844,30 @@ mod tests {
         let titled = load_artifacts("zsh", &cwd.to_string_lossy(), "grok", &roots);
         assert_eq!(titled.cli.as_deref(), Some("grok"));
         assert!(titled.entries.iter().any(|entry| entry.body == "new reply"));
+        let versioned = load_artifacts("grok-1.0.50", &cwd.to_string_lossy(), "", &roots);
+        assert_eq!(versioned.cli.as_deref(), Some("grok"));
+        assert!(versioned
+            .entries
+            .iter()
+            .any(|entry| entry.body == "new reply"));
+        let status = load_artifacts(
+            "zsh",
+            &cwd.to_string_lossy(),
+            "⠸ - Find a browser - Add pages - grok",
+            &roots,
+        );
+        assert_eq!(status.cli.as_deref(), Some("grok"));
+        let packaged = load_artifacts(
+            "/Users/x/.grok/bin/grok-1.0.41-macos-aarch64",
+            &cwd.to_string_lossy(),
+            "",
+            &roots,
+        );
+        assert_eq!(packaged.cli.as_deref(), Some("grok"));
+        let other = load_artifacts("grokbot", &cwd.to_string_lossy(), "notes", &roots);
+        assert!(other.cli.is_none());
+        let extra = load_artifacts("grok-extra", &cwd.to_string_lossy(), "", &roots);
+        assert!(extra.cli.is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
