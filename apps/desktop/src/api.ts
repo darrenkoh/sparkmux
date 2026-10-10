@@ -139,6 +139,131 @@ export function paneArtifacts(
   return invoke("pane_artifacts", { command, cwd, title, pid });
 }
 
+export interface ActivityPoint {
+  timestamp: number;
+  user_count: number;
+  think_count: number;
+  reply_count: number;
+  tool_count: number;
+  tokens: number;
+}
+
+export interface ToolStat {
+  name: string;
+  calls: number;
+  errors: number;
+  avg_duration_ms: number;
+  max_duration_ms: number;
+  last_used: number;
+}
+
+export interface ModelStat {
+  model: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  reasoning_tokens: number;
+}
+
+export interface AnalyticsEvent {
+  t: number;
+  k: string;
+  s?: string;
+  cli?: string;
+  n?: string;
+  a?: string;
+  b?: string;
+  c?: number;
+  ms?: number;
+  err?: boolean;
+  ti?: number;
+  to?: number;
+  tc?: number;
+  tw?: number;
+  tr?: number;
+}
+
+export interface TabAnalyticsStats {
+  total_events: number;
+  user_prompts: number;
+  thinking_blocks: number;
+  assistant_replies: number;
+  tool_calls: number;
+  tool_results: number;
+  tool_errors: number;
+
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
+  total_reasoning_tokens: number;
+
+  avg_turn_duration_ms: number;
+  max_turn_duration_ms: number;
+  total_turn_duration_ms: number;
+  turn_count: number;
+
+  context_tokens_used: number;
+  context_window_tokens: number;
+  ttft_ms: number;
+  lines_added: number;
+  lines_removed: number;
+
+  active_model: string;
+  tools: ToolStat[];
+  models: ModelStat[];
+  timeline: ActivityPoint[];
+  recent_events: AnalyticsEvent[];
+}
+
+export interface AnalyticsConfig {
+  enabled: boolean;
+  total_bytes: number;
+  session_count: number;
+  tab_count: number;
+}
+
+export interface TabAnalyticsResponse {
+  enabled: boolean;
+  session_name: string;
+  tab_id: string;
+  cli: string | null;
+  transcript_path: string | null;
+  stats: TabAnalyticsStats;
+  storage: AnalyticsConfig;
+}
+
+export function tabAnalytics(
+  sessionName: string,
+  tabId: string,
+  command: string,
+  cwd: string,
+  title: string,
+  pid: number,
+): Promise<TabAnalyticsResponse> {
+  return invoke("tab_analytics", {
+    sessionName,
+    tabId,
+    command,
+    cwd,
+    title,
+    pid,
+  });
+}
+
+export function setAnalyticsEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_analytics_enabled", { enabled });
+}
+
+export function clearAnalyticsData(): Promise<void> {
+  return invoke("clear_analytics_data");
+}
+
+export function analyticsConfig(): Promise<AnalyticsConfig> {
+  return invoke("analytics_config");
+}
+
 export interface HelperStatus {
   enabled: boolean;
   weight_path: string | null;

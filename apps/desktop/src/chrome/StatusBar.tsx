@@ -13,7 +13,9 @@ export default function StatusBar({
   windowName,
   telemetry,
   outputOpen,
+  analyticsOpen,
   onOutput,
+  onAnalytics,
   onAsk,
 }: {
   status: TmuxStatus | null;
@@ -21,7 +23,9 @@ export default function StatusBar({
   windowName: string | null;
   telemetry: AppTelemetry | null;
   outputOpen: boolean;
+  analyticsOpen?: boolean;
   onOutput: () => void;
+  onAnalytics?: () => void;
   onAsk?: () => void;
 }) {
   const tmux = status?.version ?? "tmux";
@@ -68,6 +72,18 @@ export default function StatusBar({
       >
         Output
       </button>
+      {onAnalytics && (
+        <button
+          type="button"
+          className={`status-stats${analyticsOpen ? " open" : ""}`}
+          aria-pressed={analyticsOpen}
+          aria-label="Agent telemetry & stats HUD"
+          title="Show Sci-Fi Telemetry & Analytics HUD"
+          onClick={onAnalytics}
+        >
+          ◈ Stats
+        </button>
+      )}
       {onAsk && (
         <button type="button" className="status-ask" onClick={onAsk} aria-label="Ask">
           <svg viewBox="0 0 16 16" aria-hidden="true">

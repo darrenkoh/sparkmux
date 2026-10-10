@@ -25,12 +25,14 @@ export default function ArtifactPanel({
   title,
   pid,
   onCollapse,
+  onOpenAnalytics,
 }: {
   command: string;
   cwd: string;
   title: string;
   pid: number;
   onCollapse: () => void;
+  onOpenAnalytics?: () => void;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
   const [clears, setClears] = useState<ClearMap>(() => loadClears());
@@ -135,6 +137,17 @@ export default function ArtifactPanel({
           {subtitle && <span className="artifact-sub">{subtitle}</span>}
         </div>
         <div className="artifact-actions">
+          {onOpenAnalytics && (
+            <button
+              type="button"
+              className="artifact-stats-btn"
+              onClick={onOpenAnalytics}
+              aria-label="Open Sci-Fi Telemetry & Analytics HUD"
+              title="Open Sci-Fi Telemetry & Analytics HUD"
+            >
+              ◈ Stats
+            </button>
+          )}
           <button
             type="button"
             aria-pressed={autoScroll}

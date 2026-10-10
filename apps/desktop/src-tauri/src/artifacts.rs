@@ -27,13 +27,13 @@ const RESULT_CAP: usize = 180;
 const ARG_CAP: usize = 160;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CliKind {
+pub(crate) enum CliKind {
     Grok,
     Claude,
 }
 
 impl CliKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Grok => "grok",
             Self::Claude => "claude",
@@ -88,7 +88,7 @@ pub struct TranscriptRoots {
     pub grok_active_sessions: PathBuf,
 }
 
-fn default_roots() -> TranscriptRoots {
+pub(crate) fn default_roots() -> TranscriptRoots {
     match directories::UserDirs::new() {
         Some(dirs) => {
             let home = dirs.home_dir();
@@ -164,7 +164,7 @@ fn load_for_family(
     }
 }
 
-fn cli_kind(value: &str) -> Option<CliKind> {
+pub(crate) fn cli_kind(value: &str) -> Option<CliKind> {
     let base = value.rsplit(['/', '\\']).next().unwrap_or(value).trim();
     let name = base.strip_prefix('-').unwrap_or(base);
     let name = name.strip_suffix(".exe").unwrap_or(name);
@@ -273,7 +273,7 @@ struct ActiveSession {
 
 /// The pane pid, then its descendants, each with a depth from the pane.
 /// Depth 0 is the pane process itself. A shell's Grok child is depth 1.
-fn pane_family(root: u32) -> Vec<(u32, u8)> {
+pub(crate) fn pane_family(root: u32) -> Vec<(u32, u8)> {
     if root == 0 {
         return Vec::new();
     }
@@ -301,7 +301,7 @@ fn pane_family(root: u32) -> Vec<(u32, u8)> {
     out
 }
 
-fn select_transcript(
+pub(crate) fn select_transcript(
     kind: CliKind,
     cwd: &str,
     title: &str,
@@ -1012,7 +1012,7 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
     }
 }
 
-fn reasoning_text(obj: &serde_json::Map<String, Value>) -> String {
+pub(crate) fn reasoning_text(obj: &serde_json::Map<String, Value>) -> String {
     let Some(items) = obj.get("summary").and_then(Value::as_array) else {
         return String::new();
     };
@@ -1028,7 +1028,7 @@ fn reasoning_text(obj: &serde_json::Map<String, Value>) -> String {
     parts.join("\n")
 }
 
-fn text_from_value(content: &Value) -> String {
+pub(crate) fn text_from_value(content: &Value) -> String {
     match content {
         Value::String(text) => text.clone(),
         Value::Array(items) => {
@@ -1049,7 +1049,7 @@ fn text_from_value(content: &Value) -> String {
     }
 }
 
-fn extract_user_query(text: &str) -> String {
+pub(crate) fn extract_user_query(text: &str) -> String {
     if let Some(query) = last_tag(text, "user_query") {
         return query;
     }
@@ -1078,7 +1078,7 @@ fn last_tag(text: &str, tag: &str) -> Option<String> {
     last
 }
 
-fn args_summary(args: &Value) -> String {
+pub(crate) fn args_summary(args: &Value) -> String {
     let owned;
     let obj = match args {
         Value::Object(_) => args,
@@ -1140,7 +1140,7 @@ fn push_text(
     });
 }
 
-fn truncate_chars(text: &str, max: usize) -> String {
+pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
     if max == 0 {
         return String::new();
     }

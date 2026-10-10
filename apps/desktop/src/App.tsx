@@ -36,6 +36,7 @@ import {
   windowResize,
 } from "./api";
 import ArtifactPanel from "./chrome/ArtifactPanel";
+import AnalyticsHud from "./chrome/AnalyticsHud";
 import { outputPaneForTab } from "./chrome/artifactModel";
 import ErrorPanel from "./chrome/ErrorPanel";
 import Splitter, {
@@ -137,6 +138,7 @@ export default function App() {
   const [outputOpen, setOutputOpen] = useState(
     () => window.localStorage.getItem("sparkmux.artifactOpen") === "1",
   );
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [fontSize, setFontSize] = useState(() => {
     const raw = Number(window.localStorage.getItem("sparkmux.fontSize"));
     if (Number.isFinite(raw) && raw >= FONT_MIN && raw <= FONT_MAX) return raw;
@@ -1061,6 +1063,19 @@ export default function App() {
                     title={outputPane?.title ?? ""}
                     pid={outputPane?.pid ?? 0}
                     onCollapse={() => setOutputOpen(false)}
+                    onOpenAnalytics={() => setAnalyticsOpen(true)}
+                  />
+                )}
+                {analyticsOpen && (
+                  <AnalyticsHud
+                    sessionName={attachedSession ?? "sparkmux"}
+                    tabId={visibleWindowId ?? "main"}
+                    tabName={winName ?? "shell"}
+                    command={outputPane?.command ?? ""}
+                    cwd={outputPane?.path ?? ""}
+                    title={outputPane?.title ?? ""}
+                    pid={outputPane?.pid ?? 0}
+                    onClose={() => setAnalyticsOpen(false)}
                   />
                 )}
               </div>
@@ -1084,7 +1099,9 @@ export default function App() {
         windowName={winName}
         telemetry={telemetry}
         outputOpen={outputOpen && Boolean(showTiles)}
+        analyticsOpen={analyticsOpen}
         onOutput={() => setOutputOpen((open) => !open)}
+        onAnalytics={() => setAnalyticsOpen((open) => !open)}
         onAsk={
           offerAsk
             ? () => {

@@ -1,3 +1,4 @@
+mod analytics;
 mod artifacts;
 mod commands;
 mod control;
@@ -18,6 +19,7 @@ use crate::state::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
+    analytics::storage::init_config();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new())
@@ -54,6 +56,10 @@ pub fn run() {
             helper::suggest_shell_command,
             telemetry::app_telemetry,
             artifacts::pane_artifacts,
+            analytics::tab_analytics,
+            analytics::set_analytics_enabled,
+            analytics::clear_analytics_data,
+            analytics::analytics_config,
             open_url::open_http_url,
             relaunch::relaunch_after_update,
         ])
