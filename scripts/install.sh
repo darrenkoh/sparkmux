@@ -326,7 +326,7 @@ build_from_source() {
   # exits until the Xcode license is accepted, after the .app already exists.
   # GitHub Release still builds the .dmg; this path does not need it.
   if [[ "$OS" == "Darwin" ]]; then
-    (cd "$root/apps/desktop" && npm ci && npm run tauri build -- --bundles app)
+    (cd "$root/apps/desktop" && npm ci && npm run tauri build -- -b app)
   else
     (cd "$root/apps/desktop" && npm ci && npm run tauri build)
   fi
