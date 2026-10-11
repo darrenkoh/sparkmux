@@ -24,199 +24,113 @@ export interface AnalyticsHudProps {
 export { formatBytes, formatNum, formatMs };
 
 // ---------------------------------------------------------------------------
-// 3D Organic Branching Neuron & Synaptic Network (Bio-neural architecture)
-// Inspired by anatomical neural arborization and fluorescence microscopy
+// 3D Connectome Whole-Brain Neural Network
+// Modeled after anatomical human connectome imaging (dense gyral fiber tracts)
 // ---------------------------------------------------------------------------
-export interface NeuronBranchPoint {
+export interface ConnectomeNode {
   x: number;
   y: number;
   z: number;
-  radius: number;
   cat: "user" | "think" | "reply" | "tool";
   color: string;
-  isSoma?: boolean;
 }
 
-export interface NeuronSegment {
+export interface ConnectomeFiber {
   p0: [number, number, number];
   p1: [number, number, number];
   cat: "user" | "think" | "reply" | "tool";
-  color: string;
-  thickness: number;
 }
 
-// Generate organic neural branches resembling reference image 2 (whole brain axonal arborization)
-function generateBrainNeuralNetwork(): {
-  somas: NeuronBranchPoint[];
-  segments: NeuronSegment[];
-  vesicles: Array<{ segIdx: number; tOffset: number; speed: number; cat: string; color: string }>;
+function generateWholeBrainConnectome(): {
+  nodes: ConnectomeNode[];
+  fibers: ConnectomeFiber[];
 } {
-  const somas: NeuronBranchPoint[] = [];
-  const segments: NeuronSegment[] = [];
-  const vesicles: Array<{ segIdx: number; tOffset: number; speed: number; cat: string; color: string }> = [];
+  const nodes: ConnectomeNode[] = [];
+  const fibers: ConnectomeFiber[] = [];
 
-  // 4 Major Functional Brain Hubs (Soma nuclei) matching telemetry categories
-  const hubs = [
-    { cat: "user" as const, color: "#ff9a3c", center: [0.0, 0.28, 0.52], angleStart: 0.1, count: 18 },      // Frontal (User queries)
-    { cat: "think" as const, color: "#c084fc", center: [-0.05, 0.48, 0.05], angleStart: 1.8, count: 24 },    // Superior / Parietal (Thinking)
-    { cat: "reply" as const, color: "#5b8def", center: [0.0, 0.08, -0.45], angleStart: 3.4, count: 22 },     // Posterior / Temporal (Replies)
-    { cat: "tool" as const, color: "#2dd4bf", center: [0.0, -0.42, -0.15], angleStart: 4.8, count: 18 },     // Cerebellum / Brainstem (Tools)
-  ];
-
-  // Pseudo-random deterministic generator
-  let s = 42;
+  let s = 1337;
   const rnd = () => {
     s = (s * 16807) % 2147483647;
     return (s - 1) / 2147483646;
   };
 
-  hubs.forEach((hub) => {
-    // Add central soma body
-    somas.push({
-      x: hub.center[0],
-      y: hub.center[1],
-      z: hub.center[2],
-      radius: 4.5,
-      cat: hub.cat,
-      color: hub.color,
-      isSoma: true,
-    });
+  // Anatomical functional centers
+  // USER (Frontal Pole / Broca): Amber #ff9a3c
+  // THINK (Superior Parietal / Prefrontal): Purple #c084fc
+  // REPLY (Temporal / Wernicke / Occipital): Blue #5b8def
+  // TOOL (Cerebellar Hemisphere / Brainstem): Teal #2dd4bf
+  const regions = [
+    { cat: "user" as const, color: "#ff9a3c", center: [0.0, 0.22, 0.58], rX: 0.45, rY: 0.38, rZ: 0.38, n: 60 },
+    { cat: "think" as const, color: "#c084fc", center: [0.0, 0.44, 0.05], rX: 0.52, rY: 0.32, rZ: 0.45, n: 75 },
+    { cat: "reply" as const, color: "#5b8def", center: [0.0, 0.12, -0.45], rX: 0.52, rY: 0.40, rZ: 0.42, n: 70 },
+    { cat: "tool" as const, color: "#2dd4bf", center: [0.0, -0.40, -0.20], rX: 0.38, rY: 0.28, rZ: 0.32, n: 55 },
+  ];
 
-    // Grow branching axonal and dendritic arborizations from each hub
-    for (let b = 0; b < hub.count; b++) {
-      const theta = (b / hub.count) * Math.PI * 2 + (rnd() - 0.5) * 0.4;
-      const phi = (rnd() - 0.5) * Math.PI * 0.85;
+  // Distribute cortical & subcortical neuron soma nodes within true brain morphology
+  for (const reg of regions) {
+    for (let i = 0; i < reg.n; i++) {
+      const u = rnd();
+      const v = rnd();
+      const theta = u * 2.0 * Math.PI;
+      const phi = Math.acos(2.0 * v - 1.0);
+      const r = Math.cbrt(rnd()) * 0.95;
 
-      // Primary axon trunk
-      let currPos: [number, number, number] = [
-        hub.center[0] + (rnd() - 0.5) * 0.1,
-        hub.center[1] + (rnd() - 0.5) * 0.1,
-        hub.center[2] + (rnd() - 0.5) * 0.1,
-      ];
+      let x = reg.center[0] + r * reg.rX * Math.sin(phi) * Math.cos(theta);
+      let y = reg.center[1] + r * reg.rY * Math.sin(phi) * Math.sin(theta);
+      let z = reg.center[2] + r * reg.rZ * Math.cos(phi);
 
-      const branchSteps = 5 + Math.floor(rnd() * 4);
-      let dirX = Math.cos(theta) * Math.cos(phi);
-      let dirY = Math.sin(phi);
-      let dirZ = Math.sin(theta) * Math.cos(phi);
+      // Add lateral cerebral hemisphere separation & cortical sulci waviness
+      const hemiSide = x >= 0 ? 1 : -1;
+      x += hemiSide * 0.05; // Interhemispheric fissure
+      const sulcalRipple = 0.04 * Math.sin(x * 9.0) * Math.cos(z * 9.0);
+      y += sulcalRipple;
 
-      // Bound within ellipsoidal brain cranium shape: (x/0.78)^2 + (y/0.65)^2 + (z/0.88)^2 <= 1.0
-      for (let st = 0; st < branchSteps; st++) {
-        // Step forward with gentle organic curvature
-        const stepLen = 0.11 + rnd() * 0.08;
-        dirX += (rnd() - 0.5) * 0.45;
-        dirY += (rnd() - 0.5) * 0.40;
-        dirZ += (rnd() - 0.5) * 0.45;
-        const norm = Math.hypot(dirX, dirY, dirZ) || 1;
-        dirX /= norm;
-        dirY /= norm;
-        dirZ /= norm;
-
-        const nextPos: [number, number, number] = [
-          currPos[0] + dirX * stepLen,
-          currPos[1] + dirY * stepLen,
-          currPos[2] + dirZ * stepLen,
-        ];
-
-        // Constrain within brain envelope
-        const ellip = Math.pow(nextPos[0] / 0.82, 2) + Math.pow(nextPos[1] / 0.70, 2) + Math.pow(nextPos[2] / 0.90, 2);
-        if (ellip > 1.0) {
-          // Bounce back slightly toward center
-          nextPos[0] *= 0.92;
-          nextPos[1] *= 0.92;
-          nextPos[2] *= 0.92;
-        }
-
-        const segIdx = segments.length;
-        segments.push({
-          p0: [...currPos],
-          p1: [...nextPos],
-          cat: hub.cat,
-          color: hub.color,
-          thickness: Math.max(0.6, 2.2 - st * 0.35),
-        });
-
-        // Add synaptic bouton bead
-        if (rnd() > 0.45) {
-          somas.push({
-            x: nextPos[0],
-            y: nextPos[1],
-            z: nextPos[2],
-            radius: 1.6 + rnd() * 1.2,
-            cat: hub.cat,
-            color: hub.color,
-            isSoma: false,
-          });
-        }
-
-        // Vesicles (traveling action potential pulse beads)
-        if (rnd() > 0.6) {
-          vesicles.push({
-            segIdx,
-            tOffset: rnd(),
-            speed: 0.6 + rnd() * 0.8,
-            cat: hub.cat,
-            color: hub.color,
-          });
-        }
-
-        // Sub-branch bifurcation (dendritic arborization)
-        if (st >= 2 && rnd() > 0.5) {
-          const forkPos: [number, number, number] = [
-            nextPos[0] + (rnd() - 0.5) * 0.16,
-            nextPos[1] + (rnd() - 0.5) * 0.16,
-            nextPos[2] + (rnd() - 0.5) * 0.16,
-          ];
-          segments.push({
-            p0: [...nextPos],
-            p1: forkPos,
-            cat: hub.cat,
-            color: hub.color,
-            thickness: 0.8,
-          });
-          somas.push({
-            x: forkPos[0],
-            y: forkPos[1],
-            z: forkPos[2],
-            radius: 1.2,
-            cat: hub.cat,
-            color: hub.color,
-            isSoma: false,
-          });
-        }
-
-        currPos = nextPos;
+      // Bound strictly inside cranium envelope: (x/0.82)^2 + (y/0.72)^2 + (z/0.88)^2 <= 1.0
+      const ellip = Math.pow(x / 0.82, 2) + Math.pow(y / 0.72, 2) + Math.pow(z / 0.88, 2);
+      if (ellip > 1.0) {
+        const factor = 0.95 / Math.sqrt(ellip);
+        x *= factor;
+        y *= factor;
+        z *= factor;
       }
-    }
-  });
 
-  // Cross-hemispheric corpus callosum and inter-hub commissural fibers connecting hubs
-  for (let i = 0; i < hubs.length; i++) {
-    const hA = hubs[i];
-    const hB = hubs[(i + 1) % hubs.length];
-    const bridgeSteps = 6;
-    let bPos: [number, number, number] = [hA.center[0], hA.center[1], hA.center[2]];
-    for (let k = 1; k <= bridgeSteps; k++) {
-      const frac = k / bridgeSteps;
-      const bNext: [number, number, number] = [
-        hA.center[0] + (hB.center[0] - hA.center[0]) * frac + (rnd() - 0.5) * 0.12,
-        hA.center[1] + (hB.center[1] - hA.center[1]) * frac + (rnd() - 0.5) * 0.12,
-        hA.center[2] + (hB.center[2] - hA.center[2]) * frac + (rnd() - 0.5) * 0.12,
-      ];
-      segments.push({
-        p0: [...bPos],
-        p1: [...bNext],
-        cat: frac < 0.5 ? hA.cat : hB.cat,
-        color: frac < 0.5 ? hA.color : hB.color,
-        thickness: 1.1,
-      });
-      bPos = bNext;
+      nodes.push({ x, y, z, cat: reg.cat, color: reg.color });
     }
   }
 
-  return { somas, segments, vesicles };
+  // Generate dense connectome fiber tracts (axon bundles connecting nearby & projecting nodes)
+  const totalNodes = nodes.length;
+  for (let i = 0; i < totalNodes; i++) {
+    const nA = nodes[i];
+    // Connect to k nearest neighbors in the same region
+    let connections = 0;
+    for (let j = i + 1; j < totalNodes; j++) {
+      const nB = nodes[j];
+      const dist = Math.hypot(nA.x - nB.x, nA.y - nB.y, nA.z - nB.z);
+      const isSameCat = nA.cat === nB.cat;
+
+      if (isSameCat && dist < 0.28 && connections < 5) {
+        fibers.push({
+          p0: [nA.x, nA.y, nA.z],
+          p1: [nB.x, nB.y, nB.z],
+          cat: nA.cat,
+        });
+        connections++;
+      } else if (!isSameCat && dist < 0.32 && rnd() < 0.12) {
+        // Inter-regional associative white matter tract
+        fibers.push({
+          p0: [nA.x, nA.y, nA.z],
+          p1: [nB.x, nB.y, nB.z],
+          cat: rnd() < 0.5 ? nA.cat : nB.cat,
+        });
+      }
+    }
+  }
+
+  return { nodes, fibers };
 }
 
-const BRAIN_MODEL = generateBrainNeuralNetwork();
+const CONNECTOME_MODEL = generateWholeBrainConnectome();
 
 export default function AnalyticsHud({
   sessionName,
@@ -243,8 +157,8 @@ export default function AnalyticsHud({
 
   // Interactive 3D Orbit Camera for the Brain Viewport
   const brainCamRef = useRef({
-    rotY: 0.5,
-    rotX: 0.2,
+    rotY: 0.65,
+    rotX: 0.18,
     isDragging: false,
     lastX: 0,
     lastY: 0,
@@ -316,7 +230,7 @@ export default function AnalyticsHud({
 
         const cx = cssW / 2;
         const cy = cssH / 2;
-        const radiusScale = (cssW / 2) * 0.88;
+        const radiusScale = (cssW / 2) * 0.90;
 
         const st = statsRef.current;
         const recentEvents = st?.recent_events ?? [];
@@ -325,7 +239,7 @@ export default function AnalyticsHud({
         // Auto-rotation when user is not actively dragging
         const activityLevel = Math.min(3.0, 1.0 + (st?.total_events ?? 0) * 0.06);
         if (!brainCamRef.current.isDragging) {
-          brainCamRef.current.rotY += 0.010 * Math.min(activityLevel, 1.8);
+          brainCamRef.current.rotY += 0.009 * Math.min(activityLevel, 1.8);
         }
 
         const angleY = brainCamRef.current.rotY;
@@ -349,107 +263,82 @@ export default function AnalyticsHud({
           return { sx, sy, sz: z2, perspective };
         };
 
-        // 1. Draw Axon & Dendrite Fibers (Organic glowing fiber mesh)
-        ctx.lineCap = "round";
-        for (const seg of BRAIN_MODEL.segments) {
-          const p0 = project3D(seg.p0[0], seg.p0[1], seg.p0[2]);
-          const p1 = project3D(seg.p1[0], seg.p1[1], seg.p1[2]);
+        // 1. Ultra-Thin Fiber Tracts (Connectome mesh, matching reference 3)
+        // Default color is electric ice blue; active firing region illuminates in corresponding category hue
+        ctx.lineWidth = 0.55;
+        for (const fib of CONNECTOME_MODEL.fibers) {
+          const p0 = project3D(fib.p0[0], fib.p0[1], fib.p0[2]);
+          const p1 = project3D(fib.p1[0], fib.p1[1], fib.p1[2]);
 
           const avgZ = (p0.sz + p1.sz) / 2;
-          const depthAlpha = Math.max(0.12, Math.min(0.85, 0.40 + avgZ * 0.35));
+          const depthAlpha = Math.max(0.08, Math.min(0.70, 0.28 + avgZ * 0.25));
 
           const isFiring =
-            (seg.cat === "user" && lastEventKind === "user") ||
-            (seg.cat === "think" && lastEventKind === "think") ||
-            (seg.cat === "reply" && lastEventKind === "reply") ||
-            (seg.cat === "tool" && (lastEventKind === "tool" || lastEventKind === "done"));
+            (fib.cat === "user" && lastEventKind === "user") ||
+            (fib.cat === "think" && lastEventKind === "think") ||
+            (fib.cat === "reply" && lastEventKind === "reply") ||
+            (fib.cat === "tool" && (lastEventKind === "tool" || lastEventKind === "done"));
 
           ctx.beginPath();
           ctx.moveTo(p0.sx, p0.sy);
           ctx.lineTo(p1.sx, p1.sy);
-          ctx.lineWidth = seg.thickness * p0.perspective * (isFiring ? 1.4 : 1.0);
-          ctx.strokeStyle = isFiring ? "#ffffff" : seg.color;
-          ctx.globalAlpha = isFiring ? 0.90 : depthAlpha;
+
+          if (isFiring) {
+            // Illuminated tract in category color
+            const catColor = fib.cat === "user" ? "#ff9a3c" : fib.cat === "think" ? "#c084fc" : fib.cat === "reply" ? "#5b8def" : "#2dd4bf";
+            ctx.strokeStyle = catColor;
+            ctx.globalAlpha = Math.min(0.95, depthAlpha * 2.2);
+          } else {
+            // Delicate anatomical ice blue tract
+            ctx.strokeStyle = "rgba(100, 185, 255, 0.85)";
+            ctx.globalAlpha = depthAlpha * 0.75;
+          }
           ctx.stroke();
         }
 
-        // 2. Traveling Synaptic Action Potentials (Glowing pulses rushing along neural branches)
-        const vCount = BRAIN_MODEL.vesicles.length;
-        for (let i = 0; i < vCount; i++) {
-          const ves = BRAIN_MODEL.vesicles[i];
-          const seg = BRAIN_MODEL.segments[ves.segIdx];
-          if (!seg) continue;
-
-          const progress = ((time * 0.0012 * ves.speed * activityLevel + ves.tOffset) % 1.0);
-          const vx = seg.p0[0] + (seg.p1[0] - seg.p0[0]) * progress;
-          const vy = seg.p0[1] + (seg.p1[1] - seg.p0[1]) * progress;
-          const vz = seg.p0[2] + (seg.p1[2] - seg.p0[2]) * progress;
-
-          const pt = project3D(vx, vy, vz);
-          const vAlpha = Math.max(0.2, Math.min(1.0, 0.65 + pt.sz * 0.35));
-
-          ctx.beginPath();
-          ctx.arc(pt.sx, pt.sy, 1.4 * pt.perspective, 0, Math.PI * 2);
-          ctx.fillStyle = "#ffffff";
-          ctx.globalAlpha = vAlpha;
-          ctx.fill();
-
-          ctx.beginPath();
-          ctx.arc(pt.sx, pt.sy, 2.8 * pt.perspective, 0, Math.PI * 2);
-          ctx.fillStyle = ves.color;
-          ctx.globalAlpha = vAlpha * 0.55;
-          ctx.fill();
-        }
-
-        // 3. Soma Nuclei & Synaptic Boutons (Sorting back-to-front for realistic depth)
-        const projectedSomas = BRAIN_MODEL.somas.map((soma) => ({
-          ...soma,
-          ...project3D(soma.x, soma.y, soma.z),
+        // 2. Synaptic Soma Beads / Neurons (Only the firing neurons light up brightly!)
+        const projectedNodes = CONNECTOME_MODEL.nodes.map((n) => ({
+          ...n,
+          ...project3D(n.x, n.y, n.z),
         }));
-        projectedSomas.sort((a, b) => a.sz - b.sz);
+        projectedNodes.sort((a, b) => a.sz - b.sz);
 
-        for (const soma of projectedSomas) {
+        for (const node of projectedNodes) {
           const isFiring =
-            (soma.cat === "user" && lastEventKind === "user") ||
-            (soma.cat === "think" && lastEventKind === "think") ||
-            (soma.cat === "reply" && lastEventKind === "reply") ||
-            (soma.cat === "tool" && (lastEventKind === "tool" || lastEventKind === "done"));
+            (node.cat === "user" && lastEventKind === "user") ||
+            (node.cat === "think" && lastEventKind === "think") ||
+            (node.cat === "reply" && lastEventKind === "reply") ||
+            (node.cat === "tool" && (lastEventKind === "tool" || lastEventKind === "done"));
 
-          const depthAlpha = Math.max(0.25, Math.min(1.0, 0.60 + soma.sz * 0.40));
-          const rBase = soma.radius * soma.perspective;
+          const depthAlpha = Math.max(0.20, Math.min(1.0, 0.50 + node.sz * 0.35));
 
-          // Glowing Soma Outer Halo (Photomicrograph bioluminescent effect)
-          if (soma.isSoma || isFiring) {
-            const auraScale = soma.isSoma ? 2.8 : 2.0;
+          if (isFiring) {
+            // Targeted Neuron Firing: Radiant flash and gleaming white core!
+            const pulse = Math.sin(time * 0.012 + (node.x + node.z) * 10) * 0.4 + 0.6;
+            const rGlow = 3.6 * node.perspective * pulse;
+
+            // Outer Aura
             ctx.beginPath();
-            ctx.arc(soma.sx, soma.sy, rBase * auraScale, 0, Math.PI * 2);
-            ctx.fillStyle = soma.color;
-            ctx.globalAlpha = (isFiring ? 0.60 : 0.25) * depthAlpha;
+            ctx.arc(node.sx, node.sy, rGlow, 0, Math.PI * 2);
+            ctx.fillStyle = node.color;
+            ctx.globalAlpha = 0.55 * depthAlpha;
+            ctx.fill();
+
+            // Luminous Core
+            ctx.beginPath();
+            ctx.arc(node.sx, node.sy, 1.6 * node.perspective, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffffff";
+            ctx.globalAlpha = depthAlpha;
+            ctx.fill();
+          } else {
+            // Quiescent delicate synapse puncta (subtle, tiny pinprick point)
+            ctx.beginPath();
+            ctx.arc(node.sx, node.sy, 0.85 * node.perspective, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(130, 200, 255, 0.70)";
+            ctx.globalAlpha = depthAlpha * 0.60;
             ctx.fill();
           }
-
-          // Intermediate radiant disc
-          ctx.beginPath();
-          ctx.arc(soma.sx, soma.sy, rBase * 1.3, 0, Math.PI * 2);
-          ctx.fillStyle = soma.color;
-          ctx.globalAlpha = (isFiring ? 0.90 : 0.65) * depthAlpha;
-          ctx.fill();
-
-          // Luminous core
-          ctx.beginPath();
-          ctx.arc(soma.sx, soma.sy, rBase * 0.75, 0, Math.PI * 2);
-          ctx.fillStyle = isFiring ? "#ffffff" : soma.color;
-          ctx.globalAlpha = depthAlpha;
-          ctx.fill();
         }
-
-        // 4. Subtle Cyberspace Scan Ring at the Equatorial Plane
-        ctx.beginPath();
-        ctx.ellipse(cx, cy + radiusScale * 0.25, radiusScale * 1.08, radiusScale * 0.32, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(255, 154, 60, 0.14)";
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 1.0;
-        ctx.stroke();
       }
 
       animFrameRef.current = requestAnimationFrame(render);

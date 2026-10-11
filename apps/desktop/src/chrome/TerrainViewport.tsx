@@ -561,8 +561,8 @@ export default function TerrainViewport({
 
     const gridExtentX = baseShape === "globe" ? GLOBE_RADIUS : RECT_HX;
     const gridExtentZ = baseShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
-    const GRID_X = baseShape === "globe" ? 160 : 150;
-    const GRID_Z = baseShape === "globe" ? 160 : 100;
+    const GRID_X = baseShape === "globe" ? 190 : 180;
+    const GRID_Z = baseShape === "globe" ? 190 : 120;
     const stepX = (gridExtentX * 2) / (GRID_X - 1);
     const stepZ = (gridExtentZ * 2) / (GRID_Z - 1);
     const elevMap = new Float32Array(GRID_X * GRID_Z);
@@ -575,10 +575,10 @@ export default function TerrainViewport({
       }
     }
 
-    // Dynamic contour thresholds scaling with the mountain altitude ceiling (Ultra-Dense 64 tiers)
+    // Dynamic contour thresholds scaling with the mountain altitude ceiling (Ultra-Dense 96 tiers)
     const cLevels: number[] = [];
-    const contourStep = maxAltitude / 64; // 64 ultra-dense contour levels across full altitude
-    for (let l = 0.12; l <= maxAltitude + 1.0; l += contourStep) {
+    const contourStep = maxAltitude / 96; // 96 ultra-dense contour levels across full altitude
+    for (let l = 0.08; l <= maxAltitude + 1.0; l += contourStep) {
       cLevels.push(l);
     }
 
@@ -595,7 +595,7 @@ export default function TerrainViewport({
 
         const minC = Math.min(c0, c1, c2, c3);
         const maxC = Math.max(c0, c1, c2, c3);
-        if (maxC < 0.12 || minC > maxAltitude + 1.0) continue;
+        if (maxC < 0.08 || minC > maxAltitude + 1.0) continue;
 
         for (const lvl of cLevels) {
           if (lvl < minC || lvl >= maxC) continue;
