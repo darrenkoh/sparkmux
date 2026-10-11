@@ -4,18 +4,20 @@
 //! Claude keeps its reset meter inside the CLI process, so those bars stay
 //! empty until a local payload is handed to the parser.
 //! Antigravity prints the same table as `/usage` from `agy --print /usage`.
-//! While an agy pane is focused, that command runs at most once a minute.
+//! While an agy pane is focused, that command runs on the interval chosen in
+//! the Sparkmux menu (off, 1 minute, then every 5 minutes through 60).
 //! Its log goes to a temp file. This module does not open credential files.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::artifacts::{cli_kind, CliKind};
@@ -23,9 +25,18 @@ use crate::artifacts::{cli_kind, CliKind};
 const GROK_MARKER: &str = "billing: fetched credits config";
 const CHUNK: u64 = 256 * 1024;
 const MAX_SCAN: u64 = 8 * 1024 * 1024;
-const AGY_REFRESH_MS: i64 = 60_000;
 const AGY_PRINT_TIMEOUT: Duration = Duration::from_secs(15);
 const AGY_PRINT_STDOUT_CAP: u64 = 64 * 1024;
+/// Off, 1 minute, then 5-minute steps through an hour.
+const AGY_REFRESH_CHOICES: &[u32] = &[0, 1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60];
+const AGY_USAGE_FILE: &str = "agy-usage.toml";
+
+static AGY_MINUTES: AtomicU32 = AtomicU32::new(1);
+
+#[derive(Debug, Deserialize)]
+struct AgyUsageFile {
+    minutes: u32,
+}
 
 struct AgyPrintState {
     usage: Option<LlmUsage>,
@@ -115,10 +126,86 @@ struct UsagePaths {
 pub fn llm_usage(command: String, title: String) -> LlmUsage {
     let now = now_ms();
     let usage = usage_for(&command, &title, &default_paths(), now);
-    if usage.cli.as_deref() == Some("antigravity") && usage.bars.is_empty() {
-        return agy_print_cached(now);
+    if usage.cli.as_deref() == Some("antigravity") {
+        if agy_refresh_minutes() == 0 {
+            return LlmUsage::empty();
+        }
+        if usage.bars.is_empty() {
+            return agy_print_cached(now);
+        }
     }
     usage
+}
+
+/// Menu choices for the Antigravity refresh. `0` is off.
+pub fn agy_refresh_choices() -> &'static [u32] {
+    AGY_REFRESH_CHOICES
+}
+
+pub fn agy_refresh_label(minutes: u32) -> String {
+    match minutes {
+        0 => "Off".to_string(),
+        1 => "1 minute".to_string(),
+        minutes => format!("{minutes} minutes"),
+    }
+}
+
+pub fn agy_refresh_minutes() -> u32 {
+    AGY_MINUTES.load(Ordering::Relaxed)
+}
+
+/// Loads the saved interval. A missing or invalid file keeps the 1 minute default.
+pub fn init_agy_usage() {
+    let Some(path) = agy_usage_path() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    if let Some(minutes) = parse_agy_minutes(&text) {
+        AGY_MINUTES.store(minutes, Ordering::Relaxed);
+    }
+}
+
+/// Saves a menu choice. Returns false when `minutes` is not a menu choice.
+pub fn set_agy_refresh_minutes(minutes: u32) -> bool {
+    if !valid_agy_minutes(minutes) {
+        return false;
+    }
+    AGY_MINUTES.store(minutes, Ordering::Relaxed);
+    if let Some(path) = agy_usage_path() {
+        let _ = write_agy_minutes(&path, minutes);
+    }
+    true
+}
+
+fn valid_agy_minutes(minutes: u32) -> bool {
+    AGY_REFRESH_CHOICES.contains(&minutes)
+}
+
+fn agy_refresh_interval_ms() -> Option<i64> {
+    match agy_refresh_minutes() {
+        0 => None,
+        minutes => Some(i64::from(minutes) * 60_000),
+    }
+}
+
+fn agy_usage_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "sparkmux")
+        .map(|dirs| dirs.config_dir().join(AGY_USAGE_FILE))
+}
+
+fn parse_agy_minutes(text: &str) -> Option<u32> {
+    let file: AgyUsageFile = toml::from_str(text).ok()?;
+    valid_agy_minutes(file.minutes).then_some(file.minutes)
+}
+
+fn write_agy_minutes(path: &Path, minutes: u32) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let body = format!("minutes = {minutes}\n");
+    std::fs::write(path, body).map_err(|err| err.to_string())
 }
 
 fn default_paths() -> UsagePaths {
@@ -191,7 +278,7 @@ fn read_agy(path: Option<&Path>, now: i64) -> LlmUsage {
     usage
 }
 
-/// Last successful `agy --print /usage` table, refreshed at most once a minute.
+/// Last successful `agy --print /usage` table, refreshed on the menu interval.
 fn agy_print_cached(now: i64) -> LlmUsage {
     let (lock, cv) = &*AGY_PRINT;
     {
@@ -199,7 +286,10 @@ fn agy_print_cached(now: i64) -> LlmUsage {
         while guard.inflight {
             guard = cv.wait(guard).unwrap_or_else(|err| err.into_inner());
         }
-        if now.saturating_sub(guard.attempted_at_ms) < AGY_REFRESH_MS {
+        let Some(refresh_ms) = agy_refresh_interval_ms() else {
+            return LlmUsage::recognized("antigravity");
+        };
+        if now.saturating_sub(guard.attempted_at_ms) < refresh_ms {
             return guard
                 .usage
                 .clone()
@@ -982,6 +1072,29 @@ Claude and GPT models  Five Hour Limit Remaining  100%  2026-10-11 16:48 PDT
     }
 
     #[test]
+    fn agy_refresh_choices_are_off_one_minute_then_five_minute_steps() {
+        assert_eq!(agy_refresh_choices().first().copied(), Some(0));
+        assert_eq!(agy_refresh_label(0), "Off");
+        assert_eq!(agy_refresh_label(1), "1 minute");
+        assert_eq!(agy_refresh_label(5), "5 minutes");
+        assert!(valid_agy_minutes(1));
+        assert!(valid_agy_minutes(60));
+        assert!(!valid_agy_minutes(2));
+        assert!(!valid_agy_minutes(6));
+        assert!(!valid_agy_minutes(65));
+        assert_eq!(parse_agy_minutes("minutes = 15\n"), Some(15));
+        assert_eq!(parse_agy_minutes("minutes = 0\n"), Some(0));
+        assert_eq!(parse_agy_minutes("minutes = 6\n"), None);
+        assert_eq!(parse_agy_minutes("nope"), None);
+        let dir = scratch("agy-menu");
+        let path = dir.join("agy-usage.toml");
+        write_agy_minutes(&path, 10).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(parse_agy_minutes(&text), Some(10));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_status_bar_polls_llm_usage() {
         let bar = include_str!("../../src/chrome/StatusBar.tsx");
         assert!(bar.contains("status-usage"));
@@ -990,5 +1103,9 @@ Claude and GPT models  Five Hour Limit Remaining  100%  2026-10-11 16:48 PDT
         assert!(app.contains("15_000"));
         let lib = include_str!("lib.rs");
         assert!(lib.contains("llm_usage::llm_usage"));
+        assert!(lib.contains("init_agy_usage"));
+        let menu = include_str!("menu.rs");
+        assert!(menu.contains("Antigravity usage"));
+        assert!(menu.contains("agy-usage-"));
     }
 }

@@ -66,6 +66,7 @@ pub fn run() {
             relaunch::relaunch_after_update,
         ])
         .setup(|app| {
+            llm_usage::init_agy_usage();
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;
             menu::set_command_helper_label(app.handle(), helper::command_helper_status().enabled);
