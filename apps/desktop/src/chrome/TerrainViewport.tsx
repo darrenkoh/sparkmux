@@ -183,6 +183,20 @@ const persistentCam = {
 
 export type BaseShape = "rect" | "wave" | "island";
 
+const STORAGE_KEY_BASE_SHAPE = "sparkmux_area_map_base_shape";
+
+function getInitialBaseShape(): BaseShape {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_BASE_SHAPE);
+    if (saved === "rect" || saved === "wave" || saved === "island") {
+      return saved;
+    }
+  } catch {}
+  return "rect";
+}
+
+let persistentBaseShape: BaseShape = getInitialBaseShape();
+
 export default function TerrainViewport({
   timeline,
   activeModel,
@@ -196,9 +210,17 @@ export default function TerrainViewport({
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
   const [realism, setRealism] = useState<"mono" | "color">("color");
-  const [baseShape, setBaseShape] = useState<BaseShape>("rect");
+  const [baseShape, setBaseShapeState] = useState<BaseShape>(persistentBaseShape);
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
+
+  const setBaseShape = (next: BaseShape) => {
+    persistentBaseShape = next;
+    setBaseShapeState(next);
+    try {
+      localStorage.setItem(STORAGE_KEY_BASE_SHAPE, next);
+    } catch {}
+  };
 
   // Per-instance clock and pointer tracking to prevent clock starvation
   const clockRef = useRef({
@@ -386,9 +408,9 @@ export default function TerrainViewport({
           val += 0.08 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
           val += 0.04 * Math.sin(x * 1.8 - z * 1.2);
 
-          // Subtle ripple undercurrent even within the core
+          // Visible droplet ripple undercurrent radiating through the core
           const rad = Math.hypot(x * 0.8, z);
-          val += 0.03 * Math.sin(rad * 1.6);
+          val += 0.08 * Math.sin(rad * 1.5);
 
           for (let c = 0; c < 4; c++) {
             const laneZ = zLanes[c];
@@ -412,14 +434,15 @@ export default function TerrainViewport({
           }
           return Math.max(0, val);
         } else {
-          // Outside the rectangular core: concentric water ripple waves expanding across background
-          const r = Math.hypot(x * 0.8, z * 1.1);
-          // Ripple wavelength and damping as it spreads to pool edge
-          const rippleFreq = 1.35;
-          const rippleDecay = Math.exp(-r * 0.07);
-          const outerFade = smoothstep(1.0, 0.82, distNorm);
-          const waveHeight = (0.09 * Math.sin(r * rippleFreq) + 0.04 * Math.cos(r * 2.7)) * rippleDecay * outerFade;
-          return Math.max(0, 0.02 + waveHeight);
+          // Outside the rectangular core: prominent whipple water droplet waves expanding across background
+          const r = Math.hypot(x * 0.82, z * 1.08);
+          // High-visibility wave amplitude with harmonic ripple peaks and distance decay
+          const ripplePhase = r * 1.35;
+          const primaryWave = Math.sin(ripplePhase);
+          const secondaryWave = 0.35 * Math.sin(ripplePhase * 2.1 + 0.5);
+          const waveHeight = (0.28 * primaryWave + 0.10 * secondaryWave) * Math.exp(-r * 0.045);
+          const outerFade = smoothstep(1.0, 0.85, distNorm);
+          return Math.max(0, 0.04 + waveHeight * outerFade);
         }
       }
 
@@ -495,18 +518,32 @@ export default function TerrainViewport({
 
       // Category color interpolation along Z
       let r = 0.2, g = 0.8, b = 0.7;
-      if (rz < -4.5) {
-        // USER lane: Amber / Gold
-        r = 1.0; g = 0.62; b = 0.24;
-      } else if (rz < 0.0) {
-        // THINK lane: Purple / Magenta
-        r = 0.75; g = 0.52; b = 0.98;
-      } else if (rz < 4.5) {
-        // REPLY lane: Cobalt Blue
-        r = 0.36; g = 0.58; b = 0.95;
+      const inCore = Math.abs(rx) <= RECT_HX && Math.abs(rz) <= RECT_HZ;
+
+      if (baseShape === "wave" && !inCore) {
+        // Outer wave pool: aquatic cerulean cyan with luminous crests
+        const rDist = Math.hypot(rx * 0.82, rz * 1.08);
+        const waveSin = Math.sin(rDist * 1.35); // -1.0 to 1.0
+        const crestFactor = Math.max(0, waveSin); // 0.0 to 1.0
+
+        // Base water deep cyan [0.10, 0.45, 0.75] -> bright ripple crest [0.25, 0.90, 1.0]
+        r = 0.10 + 0.18 * crestFactor;
+        g = 0.42 + 0.48 * crestFactor;
+        b = 0.72 + 0.28 * crestFactor;
       } else {
-        // TOOL lane: Teal / Mint
-        r = 0.18; g = 0.84; b = 0.75;
+        if (rz < -4.5) {
+          // USER lane: Amber / Gold
+          r = 1.0; g = 0.62; b = 0.24;
+        } else if (rz < 0.0) {
+          // THINK lane: Purple / Magenta
+          r = 0.75; g = 0.52; b = 0.98;
+        } else if (rz < 4.5) {
+          // REPLY lane: Cobalt Blue
+          r = 0.36; g = 0.58; b = 0.95;
+        } else {
+          // TOOL lane: Teal / Mint
+          r = 0.18; g = 0.84; b = 0.75;
+        }
       }
 
       // Coastal / perimeter glow along outer edge
@@ -564,10 +601,10 @@ export default function TerrainViewport({
     const contourVerts: number[] = [];
     const baseGridVerts: number[] = [];
 
-    const gridExtentX = baseShape === "island" ? ISLAND_HX : RECT_HX;
-    const gridExtentZ = baseShape === "island" ? ISLAND_HZ : RECT_HZ;
-    const GRID_X = 120;
-    const GRID_Z = 80;
+    const gridExtentX = baseShape === "island" ? ISLAND_HX : baseShape === "wave" ? WAVE_EXT_HX : RECT_HX;
+    const gridExtentZ = baseShape === "island" ? ISLAND_HZ : baseShape === "wave" ? WAVE_EXT_HZ : RECT_HZ;
+    const GRID_X = baseShape === "wave" ? 140 : 120;
+    const GRID_Z = baseShape === "wave" ? 96 : 80;
     const stepX = (gridExtentX * 2) / (GRID_X - 1);
     const stepZ = (gridExtentZ * 2) / (GRID_Z - 1);
     const elevMap = new Float32Array(GRID_X * GRID_Z);
@@ -580,9 +617,10 @@ export default function TerrainViewport({
       }
     }
 
-    // Contour thresholds every 0.18 vertical units
+    // Contour thresholds every 0.18 vertical units (including low ripple tiers for wave mode)
     const cLevels: number[] = [];
-    for (let l = 0.2; l <= 3.6; l += 0.18) {
+    const minLevel = baseShape === "wave" ? 0.08 : 0.2;
+    for (let l = minLevel; l <= 3.6; l += 0.15) {
       cLevels.push(l);
     }
 
@@ -599,7 +637,7 @@ export default function TerrainViewport({
 
         const minC = Math.min(c0, c1, c2, c3);
         const maxC = Math.max(c0, c1, c2, c3);
-        if (maxC < 0.2 || minC > 3.6) continue;
+        if (maxC < minLevel || minC > 3.6) continue;
 
         for (const lvl of cLevels) {
           if (lvl < minC || lvl >= maxC) continue;
@@ -623,7 +661,7 @@ export default function TerrainViewport({
             segs.push([x0, z0 + f * stepZ]);
           }
 
-          const isMajor = Math.abs(lvl % 0.72) < 0.09;
+          const isMajor = Math.abs(lvl % 0.6) < 0.08;
           const alpha = isMajor ? 0.44 : 0.16;
 
           for (let s = 0; s + 1 < segs.length; s += 2) {
@@ -689,18 +727,23 @@ export default function TerrainViewport({
       baseGridVerts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
     } else if (baseShape === "wave") {
       // (1) Bright neon rectangular boundary bounding the core telemetry area
-      const rA = 0.82;
-      baseGridVerts.push(-RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, -RECT_HZ, rA);
-      baseGridVerts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
-      baseGridVerts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
-      baseGridVerts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
+      const rA = 0.88;
+      baseGridVerts.push(-RECT_HX, 0.03, -RECT_HZ, rA, RECT_HX, 0.03, -RECT_HZ, rA);
+      baseGridVerts.push(RECT_HX, 0.03, -RECT_HZ, rA, RECT_HX, 0.03, RECT_HZ, rA);
+      baseGridVerts.push(RECT_HX, 0.03, RECT_HZ, rA, -RECT_HX, 0.03, RECT_HZ, rA);
+      baseGridVerts.push(-RECT_HX, 0.03, RECT_HZ, rA, -RECT_HX, 0.03, -RECT_HZ, rA);
 
-      // (2) Concentric water ripple wave rings expanding outward like a drop falling into a pool
+      // (2) Dense concentric water ripple wave rings following the 3D ripple surface
       const RING_SEGS = 120;
-      const rippleRadii = [4.5, 8.5, 12.5, 16.5, 20.5, 24.5];
+      // Dense ripples every ~2.3 units from center to pool perimeter
+      const rippleRadii: number[] = [];
+      for (let r = 3.5; r <= 24.5; r += 2.3) {
+        rippleRadii.push(r);
+      }
+
       for (const rad of rippleRadii) {
-        // Damped brightness as ripples expand across the outer pool
-        const ringAlpha = rad <= 12.5 ? 0.35 : clamp(0.45 * Math.exp(-rad * 0.04), 0.12, 0.35);
+        // High-contrast alpha for prominent crest visibility
+        const ringAlpha = clamp(0.65 * Math.exp(-rad * 0.035), 0.22, 0.65);
         for (let s = 0; s < RING_SEGS; s++) {
           const th0 = (s / RING_SEGS) * Math.PI * 2;
           const th1 = ((s + 1) / RING_SEGS) * Math.PI * 2;
@@ -708,14 +751,43 @@ export default function TerrainViewport({
           const z0 = Math.sin(th0) * rad;
           const x1 = Math.cos(th1) * (rad * 1.25);
           const z1 = Math.sin(th1) * rad;
-          const y0 = getAlt(x0, z0) + 0.015;
-          const y1 = getAlt(x1, z1) + 0.015;
+          const y0 = getAlt(x0, z0) + 0.02;
+          const y1 = getAlt(x1, z1) + 0.02;
           baseGridVerts.push(x0, y0, z0, ringAlpha, x1, y1, z1, ringAlpha);
         }
       }
 
-      // (3) Subtle outer pool boundary
-      const pA = 0.22;
+      // (3) Radial ripple rays / ribs radiating outward from the water drop epicenter
+      const RAY_COUNT = 16;
+      for (let i = 0; i < RAY_COUNT; i++) {
+        const th = (i / RAY_COUNT) * Math.PI * 2;
+        const dirX = Math.cos(th) * 1.25;
+        const dirZ = Math.sin(th);
+        let inRay = false;
+        let lastPt: [number, number, number] = [0, 0, 0];
+
+        for (let rad = 3.5; rad <= 24.0; rad += 0.5) {
+          const rx = dirX * rad;
+          const rz = dirZ * rad;
+          const inCore = Math.abs(rx) <= RECT_HX && Math.abs(rz) <= RECT_HZ;
+          const outside = getBaseDistNorm(rx, rz) <= 1.0;
+          if (outside && !inCore) {
+            const ry = getAlt(rx, rz) + 0.015;
+            if (!inRay) {
+              inRay = true;
+              lastPt = [rx, ry, rz];
+            } else {
+              baseGridVerts.push(lastPt[0], lastPt[1], lastPt[2], 0.16, rx, ry, rz, 0.16);
+              lastPt = [rx, ry, rz];
+            }
+          } else {
+            inRay = false;
+          }
+        }
+      }
+
+      // (4) Subtle outer pool boundary
+      const pA = 0.28;
       baseGridVerts.push(-WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA, WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA);
       baseGridVerts.push(WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA, WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA);
       baseGridVerts.push(WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA, -WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA);
