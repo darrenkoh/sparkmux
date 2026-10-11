@@ -5,6 +5,7 @@ mod control;
 mod error;
 mod helper;
 mod helper_model;
+mod llm_usage;
 mod menu;
 mod open_url;
 mod relaunch;
@@ -55,6 +56,7 @@ pub fn run() {
             helper::disable_command_helper,
             helper::suggest_shell_command,
             telemetry::app_telemetry,
+            llm_usage::llm_usage,
             artifacts::pane_artifacts,
             analytics::tab_analytics,
             analytics::set_analytics_enabled,

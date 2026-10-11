@@ -1,4 +1,5 @@
-import type { TmuxStatus } from "../types";
+import type { LlmUsage, TmuxStatus } from "../types";
+import { usageChips } from "./llmUsage";
 import {
   formatCpu,
   formatMemory,
@@ -12,6 +13,7 @@ export default function StatusBar({
   session,
   windowName,
   telemetry,
+  usage,
   outputOpen,
   analyticsOpen,
   onOutput,
@@ -22,6 +24,7 @@ export default function StatusBar({
   session: string | null;
   windowName: string | null;
   telemetry: AppTelemetry | null;
+  usage?: LlmUsage | null;
   outputOpen: boolean;
   analyticsOpen?: boolean;
   onOutput: () => void;
@@ -35,6 +38,7 @@ export default function StatusBar({
   const helper = helperStatusText(telemetry);
   const memory = formatMemory(telemetry?.memory_bytes);
   const cpu = formatCpu(telemetry?.cpu_percent);
+  const chips = usageChips(usage, Date.now());
   return (
     <footer className="status">
       <span>{tmux}</span>
@@ -43,6 +47,24 @@ export default function StatusBar({
       <span className="sep">·</span>
       <span className="status-loc">{loc}</span>
       <span className="status-metrics">
+        {chips.length > 0 && (
+          <span className="status-usage-row">
+            {chips.map((chip, index) => (
+              <span
+                key={`${chip.text}-${index}`}
+                className={`status-usage ${chip.tone}`}
+                title={chip.title}
+                aria-label={`Model allowance: ${chip.text}`}
+              >
+                <span className="status-usage-text">{chip.text}</span>
+                <span className="status-usage-track" aria-hidden="true">
+                  <span className="status-usage-fill" style={{ width: `${chip.fill}%` }} />
+                </span>
+              </span>
+            ))}
+          </span>
+        )}
+        {chips.length > 0 && <span className="sep">·</span>}
         <span
           className="status-helper"
           title={helperStatusTitle(telemetry)}

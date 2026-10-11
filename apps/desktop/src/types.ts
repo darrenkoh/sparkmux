@@ -63,6 +63,24 @@ export interface AppTelemetry {
   model_loaded: boolean;
 }
 
+export type UsageDirection = "used" | "remaining";
+
+export interface UsageBar {
+  group: string | null;
+  label: string;
+  percent: number;
+  direction: UsageDirection;
+  resets_at_ms: number | null;
+}
+
+export interface LlmUsage {
+  cli: string | null;
+  bars: UsageBar[];
+  fetched_at_ms: number | null;
+  plan: string | null;
+  credits_usd: number | null;
+}
+
 export interface TmuxStatus {
   bin: string | null;
   version: string | null;

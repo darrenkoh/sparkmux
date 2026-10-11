@@ -1106,14 +1106,73 @@ body.is-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
+}
+
+.status-usage-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+
+.status-metrics > span:not(.status-usage-row) {
+  flex: 0 0 auto;
+}
+
+.status-usage {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 40ch;
+  flex: 0 1 auto;
+  line-height: 1.15;
+}
+
+.status-usage-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-usage-track {
+  height: 4px;
+  width: 100%;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.status-usage-fill {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+
+.status-usage.ok {
+  color: var(--ok);
+}
+
+.status-usage.warn {
+  color: #e8a849;
+}
+
+.status-usage.hot {
+  color: var(--danger);
 }
 
 .status-helper {
   max-width: 28ch;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .status-output {

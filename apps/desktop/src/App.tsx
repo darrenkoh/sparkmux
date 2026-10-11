@@ -6,6 +6,7 @@ import {
   attachTargetName,
   clipboardWrite,
   appTelemetry,
+  llmUsage,
   commandHelperStatus,
   disableCommandHelper,
   enableCommandHelper,
@@ -45,6 +46,7 @@ import {
   DOCK_DEFAULT_WIDTH,
 } from "./chrome/DockSplitters";
 import { outputPaneForTab } from "./chrome/artifactModel";
+import { allowanceWatchKey } from "./chrome/llmUsage";
 import ErrorPanel from "./chrome/ErrorPanel";
 import Splitter, {
   SIDEBAR_DEFAULT,
@@ -87,6 +89,7 @@ import type {
   TmuxStatus,
   Window as TmuxWindow,
   AppTelemetry,
+  LlmUsage,
 } from "./types";
 
 type Dialog =
@@ -128,6 +131,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [helperOn, setHelperOn] = useState(false);
   const [telemetry, setTelemetry] = useState<AppTelemetry | null>(null);
+  const [allowance, setAllowance] = useState<LlmUsage | null>(null);
   const [helperBusy, setHelperBusy] = useState(false);
   const helperBusyRef = useRef(false);
   const helperOnRef = useRef(false);
@@ -940,6 +944,36 @@ export default function App() {
   const winName = visibleWin?.name ?? null;
   const shellNow = focusedShell(snap, focusedPane);
   const outputPane = outputPaneForTab(visibleWin, focusedPane);
+  const usageCommand = outputPane?.command ?? "";
+  const usageTitle = outputPane?.title ?? "";
+  const usageCommandRef = useRef(usageCommand);
+  const usageTitleRef = useRef(usageTitle);
+  usageCommandRef.current = usageCommand;
+  usageTitleRef.current = usageTitle;
+  const allowanceKey = allowanceWatchKey(usageCommand, usageTitle);
+
+  useEffect(() => {
+    if (!attachedSession) {
+      setAllowance(null);
+      return;
+    }
+    let cancel = false;
+    const load = () => {
+      void llmUsage(usageCommandRef.current, usageTitleRef.current)
+        .then((next) => {
+          if (!cancel) setAllowance(next);
+        })
+        .catch(() => {
+          if (!cancel) setAllowance(null);
+        });
+    };
+    load();
+    const id = window.setInterval(load, 15_000);
+    return () => {
+      cancel = true;
+      window.clearInterval(id);
+    };
+  }, [attachedSession, allowanceKey]);
   const shellReady = shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
   const offerAsk = helperOn;
   const showTiles = !error && !empty && layout && attachedSession;
@@ -1245,6 +1279,7 @@ export default function App() {
         session={attachedSession}
         windowName={winName}
         telemetry={telemetry}
+        usage={allowance}
         outputOpen={outputOpen && Boolean(showTiles)}
         analyticsOpen={analyticsOpen || statsDocked}
         onOutput={() => setOutputOpen((open) => !open)}
