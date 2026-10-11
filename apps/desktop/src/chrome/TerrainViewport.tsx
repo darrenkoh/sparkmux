@@ -181,6 +181,8 @@ const persistentCam = {
   target: [0, 1.2, 0] as [number, number, number],
 };
 
+export type BaseShape = "rect" | "chamfer" | "island";
+
 export default function TerrainViewport({
   timeline,
   activeModel,
@@ -194,6 +196,7 @@ export default function TerrainViewport({
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
   const [realism, setRealism] = useState<"mono" | "color">("color");
+  const [baseShape, setBaseShape] = useState<BaseShape>("rect");
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
 
@@ -221,7 +224,7 @@ export default function TerrainViewport({
   }, [autoRotate, docked]);
 
   // Fingerprint data structure so routine polling doesn't restart WebGL or loop
-  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${realism}:${docked ? "1" : "0"}`;
+  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${realism}:${baseShape}:${docked ? "1" : "0"}`;
 
   useEffect(() => {
     const glCanvas = glCanvasRef.current;
@@ -279,7 +282,6 @@ export default function TerrainViewport({
     // Y-Axis = Value (Event frequency, volume, token weight)
     // -------------------------------------------------------------------------
     const TIME_SPAN = 28;  // X extent: -14 to +14
-    const LABEL_SPAN = 18; // Z extent: -9 to +9
     const rng = makeRng(2077);
 
     // Normalize timeline points or generate structured history
@@ -321,34 +323,60 @@ export default function TerrainViewport({
     const heightScale = 2.4 / Math.log1p(Math.max(1, maxMetric));
 
     // -------------------------------------------------------------------------
-    // Organic Island Boundary: Irregular fractal coastline with natural bays/fjords
+    // Base Boundary Definitions & Geometry:
+    // 1. "rect"   : Clean rectangular coordinate matrix ([-14, 14] x [-9, 9])
+    // 2. "chamfer": Cybernetic platform with 45-degree beveled corners
+    // 3. "island" : Organic irregular island with fractal bays & coves,
+    //               calibrated so agent trajectory (max X=12.5, Z=6.75) stays well inland
     // -------------------------------------------------------------------------
-    const hx = TIME_SPAN / 2 - 1.2;
-    const hz = LABEL_SPAN / 2 - 1.0;
+    const RECT_HX = 14.0;
+    const RECT_HZ = 9.0;
+    const CHAMFER_C = 4.2; // Chamfer corner cut size
+
+    // Expanded Island dimensions to prevent agent trajectory clipping at the corners:
+    const ISLAND_HX = 17.5;
+    const ISLAND_HZ = 11.5;
 
     const getIslandRadius = (theta: number): number => {
       let r = 1.0;
-      r += 0.16 * Math.sin(3 * theta + 0.5);
-      r += 0.11 * Math.cos(5 * theta - 0.8);
-      r += 0.07 * Math.sin(7 * theta + 1.3);
-      r += 0.04 * Math.cos(11 * theta - 0.4);
-      return Math.max(0.65, r);
+      r += 0.12 * Math.sin(3 * theta + 0.5);
+      r += 0.08 * Math.cos(5 * theta - 0.8);
+      r += 0.05 * Math.sin(7 * theta + 1.2);
+      return Math.max(0.85, r);
     };
 
-    const getIslandDistNorm = (x: number, z: number): number => {
-      const nx = x / hx;
-      const nz = z / hz;
-      const theta = Math.atan2(nz, nx);
-      const rCoast = getIslandRadius(theta);
-      const r = Math.hypot(nx, nz);
-      return r / rCoast;
+    // Normalized distance metric where value <= 1.0 indicates inside the shape
+    const getBaseDistNorm = (x: number, z: number): number => {
+      if (baseShape === "rect") {
+        const nx = Math.abs(x) / RECT_HX;
+        const nz = Math.abs(z) / RECT_HZ;
+        return Math.max(nx, nz);
+      } else if (baseShape === "chamfer") {
+        const ax = Math.abs(x);
+        const az = Math.abs(z);
+        if (ax > RECT_HX || az > RECT_HZ) return 1.05;
+        // Chamfer corner check: (ax - (HX - C)) + (az - (HZ - C)) <= C
+        const cornerDist = (ax - (RECT_HX - CHAMFER_C)) + (az - (RECT_HZ - CHAMFER_C));
+        if (cornerDist > CHAMFER_C && ax > (RECT_HX - CHAMFER_C) && az > (RECT_HZ - CHAMFER_C)) {
+          return 1.0 + (cornerDist - CHAMFER_C) / CHAMFER_C;
+        }
+        return Math.max(ax / RECT_HX, az / RECT_HZ);
+      } else {
+        // Island mode
+        const nx = x / ISLAND_HX;
+        const nz = z / ISLAND_HZ;
+        const theta = Math.atan2(nz, nx);
+        const rCoast = getIslandRadius(theta);
+        const r = Math.hypot(nx, nz);
+        return r / rCoast;
+      }
     };
 
     // Calculate height Y at any 3D coordinate (x = Time, z = Label)
     const getAlt = (x: number, z: number): number => {
-      const distNorm = getIslandDistNorm(x, z);
+      const distNorm = getBaseDistNorm(x, z);
       if (distNorm >= 1.0) {
-        return 0; // Off-island in surrounding ocean/void
+        return 0; // Off-platform / in surrounding ocean
       }
 
       // Base gentle shelf
@@ -380,16 +408,16 @@ export default function TerrainViewport({
         }
       }
 
-      // Smooth falloff down to sea level at the irregular island coastline
-      const islandFalloff = smoothstep(1.0, 0.72, distNorm);
-      return Math.max(0, val * islandFalloff);
+      // Smooth falloff down to base level near the boundary edges
+      const edgeFalloff = smoothstep(1.0, 0.72, distNorm);
+      return Math.max(0, val * edgeFalloff);
     };
 
     // Reference directional light vector [-0.45, 0.8, 0.4]
     const lightDir = [-0.45, 0.8, 0.4];
 
     // -------------------------------------------------------------------------
-    // 1. High-Density 50,000 Particle Field on Island Landmass
+    // 1. High-Density 50,000 Particle Field on Active Base Platform
     // -------------------------------------------------------------------------
     const pointCount = 50000;
     const posData = new Float32Array(pointCount * 4);
@@ -399,13 +427,16 @@ export default function TerrainViewport({
     let pIdx = 0;
     let attempts = 0;
     const maxAttempts = pointCount * 3;
+    const sampleExtentX = baseShape === "island" ? ISLAND_HX : RECT_HX;
+    const sampleExtentZ = baseShape === "island" ? ISLAND_HZ : RECT_HZ;
+
     while (pIdx < pointCount && attempts < maxAttempts) {
       attempts++;
-      const rx = (rng() * 2 - 1) * (TIME_SPAN / 2);
-      const rz = (rng() * 2 - 1) * (LABEL_SPAN / 2);
-      const distNorm = getIslandDistNorm(rx, rz);
+      const rx = (rng() * 2 - 1) * sampleExtentX;
+      const rz = (rng() * 2 - 1) * sampleExtentZ;
+      const distNorm = getBaseDistNorm(rx, rz);
       if (distNorm > 1.0) {
-        continue; // Keep particles within irregular island boundaries
+        continue; // Keep particles strictly inside selected boundary
       }
       const alt = getAlt(rx, rz);
 
@@ -434,7 +465,7 @@ export default function TerrainViewport({
         r = 0.18; g = 0.84; b = 0.75;
       }
 
-      // Coastal shoreline teal/cyan glow along island edge
+      // Coastal / perimeter glow along outer edge
       if (distNorm > 0.88) {
         const coastMix = (distNorm - 0.88) / 0.12;
         r = r * (1 - coastMix) + 0.22 * coastMix;
@@ -489,16 +520,18 @@ export default function TerrainViewport({
     const contourVerts: number[] = [];
     const baseGridVerts: number[] = [];
 
+    const gridExtentX = baseShape === "island" ? ISLAND_HX : RECT_HX;
+    const gridExtentZ = baseShape === "island" ? ISLAND_HZ : RECT_HZ;
     const GRID_X = 120;
     const GRID_Z = 80;
-    const stepX = TIME_SPAN / (GRID_X - 1);
-    const stepZ = LABEL_SPAN / (GRID_Z - 1);
+    const stepX = (gridExtentX * 2) / (GRID_X - 1);
+    const stepZ = (gridExtentZ * 2) / (GRID_Z - 1);
     const elevMap = new Float32Array(GRID_X * GRID_Z);
 
     for (let gz = 0; gz < GRID_Z; gz++) {
-      const cz = -LABEL_SPAN / 2 + gz * stepZ;
+      const cz = -gridExtentZ + gz * stepZ;
       for (let gx = 0; gx < GRID_X; gx++) {
-        const cx = -TIME_SPAN / 2 + gx * stepX;
+        const cx = -gridExtentX + gx * stepX;
         elevMap[gz * GRID_X + gx] = getAlt(cx, cz);
       }
     }
@@ -510,9 +543,9 @@ export default function TerrainViewport({
     }
 
     for (let gz = 0; gz < GRID_Z - 1; gz++) {
-      const z0 = -LABEL_SPAN / 2 + gz * stepZ;
+      const z0 = -gridExtentZ + gz * stepZ;
       for (let gx = 0; gx < GRID_X - 1; gx++) {
-        const x0 = -TIME_SPAN / 2 + gx * stepX;
+        const x0 = -gridExtentX + gx * stepX;
         const idx = gz * GRID_X + gx;
 
         const c0 = elevMap[idx];
@@ -559,14 +592,17 @@ export default function TerrainViewport({
       }
     }
 
-    // Coordinate Grid along Base Plane (Clipped to Island Shoreline)
+    // Coordinate Grid along Base Plane (Clipped to selected base boundary)
     const GRID_STEP = 0.35;
-    for (let gx = -14; gx <= 14; gx += 2) {
+    const gridLimitX = Math.round(gridExtentX);
+    const gridLimitZ = Math.round(gridExtentZ);
+
+    for (let gx = -gridLimitX; gx <= gridLimitX; gx += 2) {
       const a = gx === 0 ? 0.35 : gx % 4 === 0 ? 0.18 : 0.07;
       let inSeg = false;
       let segStart = 0;
-      for (let z = -9; z <= 9.001; z += GRID_STEP) {
-        const inside = getIslandDistNorm(gx, z) <= 1.0;
+      for (let z = -gridLimitZ; z <= gridLimitZ + 0.001; z += GRID_STEP) {
+        const inside = getBaseDistNorm(gx, z) <= 1.0;
         if (inside && !inSeg) {
           inSeg = true;
           segStart = z;
@@ -576,16 +612,16 @@ export default function TerrainViewport({
         }
       }
       if (inSeg) {
-        baseGridVerts.push(gx, 0, segStart, a, gx, 0, 9, a);
+        baseGridVerts.push(gx, 0, segStart, a, gx, 0, gridLimitZ, a);
       }
     }
 
-    for (let gz = -9; gz <= 9; gz += 2) {
+    for (let gz = -gridLimitZ; gz <= gridLimitZ; gz += 2) {
       const a = gz === 0 ? 0.35 : gz % 4 === 0 ? 0.18 : 0.07;
       let inSeg = false;
       let segStart = 0;
-      for (let x = -14; x <= 14.001; x += GRID_STEP) {
-        const inside = getIslandDistNorm(x, gz) <= 1.0;
+      for (let x = -gridLimitX; x <= gridLimitX + 0.001; x += GRID_STEP) {
+        const inside = getBaseDistNorm(x, gz) <= 1.0;
         if (inside && !inSeg) {
           inSeg = true;
           segStart = x;
@@ -595,23 +631,49 @@ export default function TerrainViewport({
         }
       }
       if (inSeg) {
-        baseGridVerts.push(segStart, 0, gz, a, 14, 0, gz, a);
+        baseGridVerts.push(segStart, 0, gz, a, gridLimitX, 0, gz, a);
       }
     }
 
-    // Glowing Island Shoreline Coastline Perimeter with irregular fractal edges
-    const COAST_SEGS = 240;
-    for (let i = 0; i < COAST_SEGS; i++) {
-      const th0 = (i / COAST_SEGS) * Math.PI * 2;
-      const th1 = ((i + 1) / COAST_SEGS) * Math.PI * 2;
-      const r0 = getIslandRadius(th0);
-      const r1 = getIslandRadius(th1);
-      const x0 = Math.cos(th0) * r0 * hx;
-      const z0 = Math.sin(th0) * r0 * hz;
-      const x1 = Math.cos(th1) * r1 * hx;
-      const z1 = Math.sin(th1) * r1 * hz;
-      // High-intensity shoreline contour line
-      baseGridVerts.push(x0, 0.02, z0, 0.75, x1, 0.02, z1, 0.75);
+    // High-intensity Shoreline / Platform Outer Perimeter
+    if (baseShape === "rect") {
+      // 4-sided boundary loop
+      const rA = 0.75;
+      baseGridVerts.push(-RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, -RECT_HZ, rA);
+      baseGridVerts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
+      baseGridVerts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
+      baseGridVerts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
+    } else if (baseShape === "chamfer") {
+      // 8-sided chamfered platform loop
+      const cA = 0.75;
+      const x1 = RECT_HX - CHAMFER_C;
+      const x2 = RECT_HX;
+      const z1 = RECT_HZ - CHAMFER_C;
+      const z2 = RECT_HZ;
+      const loop: Array<[number, number]> = [
+        [-x1, -z2], [x1, -z2],
+        [x2, -z1],  [x2, z1],
+        [x1, z2],   [-x1, z2],
+        [-x2, z1],  [-x2, -z1],
+      ];
+      for (let i = 0; i < loop.length; i++) {
+        const next = (i + 1) % loop.length;
+        baseGridVerts.push(loop[i][0], 0.02, loop[i][1], cA, loop[next][0], 0.02, loop[next][1], cA);
+      }
+    } else {
+      // Glowing Island Shoreline Coastline Perimeter with irregular fractal edges
+      const COAST_SEGS = 240;
+      for (let i = 0; i < COAST_SEGS; i++) {
+        const th0 = (i / COAST_SEGS) * Math.PI * 2;
+        const th1 = ((i + 1) / COAST_SEGS) * Math.PI * 2;
+        const r0 = getIslandRadius(th0);
+        const r1 = getIslandRadius(th1);
+        const x0 = Math.cos(th0) * r0 * ISLAND_HX;
+        const z0 = Math.sin(th0) * r0 * ISLAND_HZ;
+        const x1 = Math.cos(th1) * r1 * ISLAND_HX;
+        const z1 = Math.sin(th1) * r1 * ISLAND_HZ;
+        baseGridVerts.push(x0, 0.02, z0, 0.75, x1, 0.02, z1, 0.75);
+      }
     }
 
     const createLineVAO = (verts: number[]) => {
@@ -1147,6 +1209,33 @@ export default function TerrainViewport({
             onClick={() => setRealism("color")}
           >
             SPECTRAL
+          </button>
+        </div>
+
+        <div className="scifi-viewport-mode" title="Area Map Base Platform Shape">
+          <button
+            type="button"
+            className={baseShape === "rect" ? "on" : ""}
+            onClick={() => setBaseShape("rect")}
+            title="Rectangular matrix base"
+          >
+            RECT
+          </button>
+          <button
+            type="button"
+            className={baseShape === "chamfer" ? "on" : ""}
+            onClick={() => setBaseShape("chamfer")}
+            title="Cybernetic platform with beveled chamfered corners"
+          >
+            CHAMFER
+          </button>
+          <button
+            type="button"
+            className={baseShape === "island" ? "on" : ""}
+            onClick={() => setBaseShape("island")}
+            title="Organic irregular island landmass"
+          >
+            ISLAND
           </button>
         </div>
 
