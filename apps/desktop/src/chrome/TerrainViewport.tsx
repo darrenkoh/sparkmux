@@ -181,7 +181,7 @@ const persistentCam = {
   target: [0, 1.2, 0] as [number, number, number],
 };
 
-export type BaseShape = "rect" | "chamfer" | "island";
+export type BaseShape = "rect" | "wave" | "island";
 
 export default function TerrainViewport({
   timeline,
@@ -324,14 +324,18 @@ export default function TerrainViewport({
 
     // -------------------------------------------------------------------------
     // Base Boundary Definitions & Geometry:
-    // 1. "rect"   : Clean rectangular coordinate matrix ([-14, 14] x [-9, 9])
-    // 2. "chamfer": Cybernetic platform with 45-degree beveled corners
-    // 3. "island" : Organic irregular island with fractal bays & coves,
-    //               calibrated so agent trajectory (max X=12.5, Z=6.75) stays well inland
+    // 1. "rect"  : Clean rectangular coordinate matrix ([-14, 14] x [-9, 9])
+    // 2. "wave"  : Rectangular core telemetry platform ([-14, 14] x [-9, 9]),
+    //              extending outward across the background ([-24, 24] x [-16, 16])
+    //              with concentric water ripples like a drop falling into a calm pool.
+    // 3. "island": Organic irregular island with fractal bays & coves ([-17.5, 17.5] x [-11.5, 11.5])
     // -------------------------------------------------------------------------
     const RECT_HX = 14.0;
     const RECT_HZ = 9.0;
-    const CHAMFER_C = 4.2; // Chamfer corner cut size
+
+    // Extended background domain for the WAVE water pool ripples:
+    const WAVE_EXT_HX = 24.0;
+    const WAVE_EXT_HZ = 16.0;
 
     // Expanded Island dimensions to prevent agent trajectory clipping at the corners:
     const ISLAND_HX = 17.5;
@@ -351,16 +355,11 @@ export default function TerrainViewport({
         const nx = Math.abs(x) / RECT_HX;
         const nz = Math.abs(z) / RECT_HZ;
         return Math.max(nx, nz);
-      } else if (baseShape === "chamfer") {
-        const ax = Math.abs(x);
-        const az = Math.abs(z);
-        if (ax > RECT_HX || az > RECT_HZ) return 1.05;
-        // Chamfer corner check: (ax - (HX - C)) + (az - (HZ - C)) <= C
-        const cornerDist = (ax - (RECT_HX - CHAMFER_C)) + (az - (RECT_HZ - CHAMFER_C));
-        if (cornerDist > CHAMFER_C && ax > (RECT_HX - CHAMFER_C) && az > (RECT_HZ - CHAMFER_C)) {
-          return 1.0 + (cornerDist - CHAMFER_C) / CHAMFER_C;
-        }
-        return Math.max(ax / RECT_HX, az / RECT_HZ);
+      } else if (baseShape === "wave") {
+        // Pool boundary covers the wider viewport background
+        const nx = Math.abs(x) / WAVE_EXT_HX;
+        const nz = Math.abs(z) / WAVE_EXT_HZ;
+        return Math.max(nx, nz);
       } else {
         // Island mode
         const nx = x / ISLAND_HX;
@@ -376,10 +375,55 @@ export default function TerrainViewport({
     const getAlt = (x: number, z: number): number => {
       const distNorm = getBaseDistNorm(x, z);
       if (distNorm >= 1.0) {
-        return 0; // Off-platform / in surrounding ocean
+        return 0; // Off-platform / in surrounding space
       }
 
-      // Base gentle shelf
+      if (baseShape === "wave") {
+        const inCore = Math.abs(x) <= RECT_HX && Math.abs(z) <= RECT_HZ;
+        if (inCore) {
+          // Inside the rectangular core platform: telemetry mountain ridges
+          let val = 0.08;
+          val += 0.08 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
+          val += 0.04 * Math.sin(x * 1.8 - z * 1.2);
+
+          // Subtle ripple undercurrent even within the core
+          const rad = Math.hypot(x * 0.8, z);
+          val += 0.03 * Math.sin(rad * 1.6);
+
+          for (let c = 0; c < 4; c++) {
+            const laneZ = zLanes[c];
+            const distZ = Math.abs(z - laneZ);
+            const zWeight = Math.exp(-Math.pow(distZ / 2.2, 2));
+
+            for (const pt of dataPoints) {
+              const ptX = pt.tNorm * (TIME_SPAN / 2 - 1.5);
+              const distX = Math.abs(x - ptX);
+              if (distX > 5.0) continue;
+
+              let rawH = 0;
+              if (c === 0) rawH = Math.log1p(pt.user) * 1.1;
+              else if (c === 1) rawH = Math.log1p(pt.think) * 0.95;
+              else if (c === 2) rawH = Math.log1p(pt.reply) * 1.05;
+              else if (c === 3) rawH = Math.log1p(pt.tool) * 0.85;
+
+              const hContrib = rawH * heightScale * Math.exp(-Math.pow(distX / 1.6, 2)) * zWeight;
+              val += hContrib;
+            }
+          }
+          return Math.max(0, val);
+        } else {
+          // Outside the rectangular core: concentric water ripple waves expanding across background
+          const r = Math.hypot(x * 0.8, z * 1.1);
+          // Ripple wavelength and damping as it spreads to pool edge
+          const rippleFreq = 1.35;
+          const rippleDecay = Math.exp(-r * 0.07);
+          const outerFade = smoothstep(1.0, 0.82, distNorm);
+          const waveHeight = (0.09 * Math.sin(r * rippleFreq) + 0.04 * Math.cos(r * 2.7)) * rippleDecay * outerFade;
+          return Math.max(0, 0.02 + waveHeight);
+        }
+      }
+
+      // Base gentle shelf for rect & island
       let val = 0.08;
 
       // Geological ripples and ridges across time and category for rich texture
@@ -427,8 +471,8 @@ export default function TerrainViewport({
     let pIdx = 0;
     let attempts = 0;
     const maxAttempts = pointCount * 3;
-    const sampleExtentX = baseShape === "island" ? ISLAND_HX : RECT_HX;
-    const sampleExtentZ = baseShape === "island" ? ISLAND_HZ : RECT_HZ;
+    const sampleExtentX = baseShape === "island" ? ISLAND_HX : baseShape === "wave" ? WAVE_EXT_HX : RECT_HX;
+    const sampleExtentZ = baseShape === "island" ? ISLAND_HZ : baseShape === "wave" ? WAVE_EXT_HZ : RECT_HZ;
 
     while (pIdx < pointCount && attempts < maxAttempts) {
       attempts++;
@@ -635,7 +679,7 @@ export default function TerrainViewport({
       }
     }
 
-    // High-intensity Shoreline / Platform Outer Perimeter
+    // High-intensity Shoreline / Platform Outer Perimeter & Concentric Wave Rings
     if (baseShape === "rect") {
       // 4-sided boundary loop
       const rA = 0.75;
@@ -643,23 +687,39 @@ export default function TerrainViewport({
       baseGridVerts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
       baseGridVerts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
       baseGridVerts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
-    } else if (baseShape === "chamfer") {
-      // 8-sided chamfered platform loop
-      const cA = 0.75;
-      const x1 = RECT_HX - CHAMFER_C;
-      const x2 = RECT_HX;
-      const z1 = RECT_HZ - CHAMFER_C;
-      const z2 = RECT_HZ;
-      const loop: Array<[number, number]> = [
-        [-x1, -z2], [x1, -z2],
-        [x2, -z1],  [x2, z1],
-        [x1, z2],   [-x1, z2],
-        [-x2, z1],  [-x2, -z1],
-      ];
-      for (let i = 0; i < loop.length; i++) {
-        const next = (i + 1) % loop.length;
-        baseGridVerts.push(loop[i][0], 0.02, loop[i][1], cA, loop[next][0], 0.02, loop[next][1], cA);
+    } else if (baseShape === "wave") {
+      // (1) Bright neon rectangular boundary bounding the core telemetry area
+      const rA = 0.82;
+      baseGridVerts.push(-RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, -RECT_HZ, rA);
+      baseGridVerts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
+      baseGridVerts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
+      baseGridVerts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
+
+      // (2) Concentric water ripple wave rings expanding outward like a drop falling into a pool
+      const RING_SEGS = 120;
+      const rippleRadii = [4.5, 8.5, 12.5, 16.5, 20.5, 24.5];
+      for (const rad of rippleRadii) {
+        // Damped brightness as ripples expand across the outer pool
+        const ringAlpha = rad <= 12.5 ? 0.35 : clamp(0.45 * Math.exp(-rad * 0.04), 0.12, 0.35);
+        for (let s = 0; s < RING_SEGS; s++) {
+          const th0 = (s / RING_SEGS) * Math.PI * 2;
+          const th1 = ((s + 1) / RING_SEGS) * Math.PI * 2;
+          const x0 = Math.cos(th0) * (rad * 1.25);
+          const z0 = Math.sin(th0) * rad;
+          const x1 = Math.cos(th1) * (rad * 1.25);
+          const z1 = Math.sin(th1) * rad;
+          const y0 = getAlt(x0, z0) + 0.015;
+          const y1 = getAlt(x1, z1) + 0.015;
+          baseGridVerts.push(x0, y0, z0, ringAlpha, x1, y1, z1, ringAlpha);
+        }
       }
+
+      // (3) Subtle outer pool boundary
+      const pA = 0.22;
+      baseGridVerts.push(-WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA, WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA);
+      baseGridVerts.push(WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA, WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA);
+      baseGridVerts.push(WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA, -WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA);
+      baseGridVerts.push(-WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA, -WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA);
     } else {
       // Glowing Island Shoreline Coastline Perimeter with irregular fractal edges
       const COAST_SEGS = 240;
@@ -1223,11 +1283,11 @@ export default function TerrainViewport({
           </button>
           <button
             type="button"
-            className={baseShape === "chamfer" ? "on" : ""}
-            onClick={() => setBaseShape("chamfer")}
-            title="Cybernetic platform with beveled chamfered corners"
+            className={baseShape === "wave" ? "on" : ""}
+            onClick={() => setBaseShape("wave")}
+            title="Rectangular core with ripple waves extending across pool background"
           >
-            CHAMFER
+            WAVE
           </button>
           <button
             type="button"
