@@ -1392,6 +1392,21 @@ code {
   color: #e9e9e9;
   letter-spacing: 0.04em;
   overflow: hidden;
+  transition: max-width 0.2s ease, max-height 0.2s ease, width 0.2s ease, height 0.2s ease;
+}
+
+.scifi-hud-frame.fullscreen {
+  max-width: 100vw;
+  max-height: 100vh;
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+  padding: 14px 20px 10px;
+}
+
+.scifi-hud-overlay:has(.scifi-hud-frame.fullscreen) {
+  padding: 0;
 }
 
 /* Top Frame Lines */
@@ -1623,21 +1638,23 @@ code {
 
 /* Radar & KPIs Panel */
 .telemetry {
-  flex: 0 0 130px;
+  flex: 0 0 144px;
 }
 .telemetry .body {
   display: grid;
-  grid-template-columns: 86px 1fr;
+  grid-template-columns: 104px 1fr;
   gap: 12px;
   align-items: center;
 }
 .radar {
-  width: 84px;
-  height: 84px;
+  width: 100px;
+  height: 100px;
   position: relative;
 }
 .scifi-radar-canvas {
   display: block;
+  width: 100px;
+  height: 100px;
 }
 
 .kpis {

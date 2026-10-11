@@ -364,14 +364,17 @@ export default function TerrainViewport({
 
     // Dynamic Summit Metric Scaling:
     // Scale mountain ridges dynamically with session activity volume.
-    // Base ceiling starts at 4.2 for rich relief and scales dynamically up to 8.0+ as metrics surge!
+    // Calculate the summit height directly from peak metric volume so the mountain summit is never clipped!
     let maxMetric = 1;
     for (const pt of dataPoints) {
       maxMetric = Math.max(maxMetric, pt.user, pt.think, pt.reply, pt.tool);
     }
     // Dynamic max ceiling: scales from 4.0 up to 8.5 with high token/turn volumes
     const maxAltitude = Math.min(8.5, Math.max(4.0, 3.2 + Math.log10(Math.max(1, maxMetric)) * 1.5));
-    const heightScale = (maxAltitude * 0.88) / Math.log1p(Math.max(1, maxMetric));
+    // Base shelf + ripples max ~0.35 + dome (up to 1.6 on globe)
+    // Scale Gaussian peaks so that maximum peak altitude (shelf + gaussian sum) reaches maxAltitude
+    const maxGaussianHeight = Math.max(1.0, maxAltitude - (baseShape === "globe" ? 1.7 : 0.35));
+    const heightScale = (maxGaussianHeight * 0.96) / (Math.log1p(Math.max(1, maxMetric)) * 1.1);
 
     // -------------------------------------------------------------------------
     // Base Boundary Definitions & Geometry:
@@ -557,8 +560,8 @@ export default function TerrainViewport({
 
     const gridExtentX = baseShape === "globe" ? GLOBE_RADIUS : RECT_HX;
     const gridExtentZ = baseShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
-    const GRID_X = baseShape === "globe" ? 130 : 120;
-    const GRID_Z = baseShape === "globe" ? 130 : 80;
+    const GRID_X = baseShape === "globe" ? 160 : 150;
+    const GRID_Z = baseShape === "globe" ? 160 : 100;
     const stepX = (gridExtentX * 2) / (GRID_X - 1);
     const stepZ = (gridExtentZ * 2) / (GRID_Z - 1);
     const elevMap = new Float32Array(GRID_X * GRID_Z);
@@ -571,10 +574,10 @@ export default function TerrainViewport({
       }
     }
 
-    // Dynamic contour thresholds scaling with the mountain altitude ceiling (Ultra-Dense 42 tiers)
+    // Dynamic contour thresholds scaling with the mountain altitude ceiling (Ultra-Dense 64 tiers)
     const cLevels: number[] = [];
-    const contourStep = maxAltitude / 42; // 42 dense contour levels across full altitude
-    for (let l = 0.16; l <= maxAltitude + 0.5; l += contourStep) {
+    const contourStep = maxAltitude / 64; // 64 ultra-dense contour levels across full altitude
+    for (let l = 0.12; l <= maxAltitude + 1.0; l += contourStep) {
       cLevels.push(l);
     }
 
@@ -591,7 +594,7 @@ export default function TerrainViewport({
 
         const minC = Math.min(c0, c1, c2, c3);
         const maxC = Math.max(c0, c1, c2, c3);
-        if (maxC < 0.16 || minC > maxAltitude + 0.5) continue;
+        if (maxC < 0.12 || minC > maxAltitude + 1.0) continue;
 
         for (const lvl of cLevels) {
           if (lvl < minC || lvl >= maxC) continue;
