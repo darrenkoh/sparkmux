@@ -1636,19 +1636,23 @@ code {
   padding: 8px 10px;
 }
 
-/* Radar & KPIs Panel */
+/* Radar & KPIs Panel (fills 70% of left side container) */
 .telemetry {
-  flex: 0 0 164px;
+  flex: 7;
+  min-height: 0;
 }
 .telemetry .body {
-  display: grid;
-  grid-template-columns: 124px 1fr;
-  gap: 12px;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  gap: 8px;
+  min-height: 0;
+  height: 100%;
 }
 .radar {
-  width: 120px;
-  height: 120px;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
   position: relative;
   cursor: grab;
 }
@@ -1657,19 +1661,34 @@ code {
 }
 .scifi-radar-canvas {
   display: block;
-  width: 120px;
-  height: 120px;
+  width: 100%;
+  height: 100%;
   border-radius: 4px;
+}
+.radar-hint {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .kpis {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 10px;
+  gap: 6px 12px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
 }
 .kpis small {
   display: block;
-  font-size: 7.5px;
+  font-size: 8px;
   letter-spacing: 0.12em;
   color: rgba(255, 255, 255, 0.45);
 }
@@ -1681,9 +1700,10 @@ code {
   color: #fff;
 }
 
-/* Tools Table */
+/* Tools Table (takes remaining 30% of left column with increased font size) */
 .tools-table-panel {
-  flex: 1;
+  flex: 3;
+  min-height: 0;
 }
 .table-scroll {
   overflow-y: auto;
@@ -1691,35 +1711,40 @@ code {
 .scifi-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 10px;
+  font-size: 12px;
 }
 .scifi-table th {
   text-align: left;
   color: rgba(255, 255, 255, 0.45);
   font-weight: 500;
-  font-size: 8.5px;
+  font-size: 10px;
   letter-spacing: 0.14em;
   padding: 0 0 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
 .scifi-table td {
-  padding: 5px 0;
+  padding: 6px 0;
   border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
   white-space: nowrap;
+  font-size: 12px;
 }
 .scifi-table td.num,
 .scifi-table th.num {
   text-align: right;
   padding-left: 10px;
   font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
 }
 .scifi-table td.tool-name {
-  max-width: 110px;
+  max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   color: #5eead4;
   font-weight: 600;
-  font-size: 10.5px;
+  font-size: 12px;
+}
+.scifi-status {
+  font-size: 11px;
 }
 .scifi-status.ok {
   color: #3dd68c;
@@ -1733,7 +1758,7 @@ code {
   text-align: center;
   color: rgba(255, 255, 255, 0.3);
   padding: 16px 0;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 /* 3D Topographical Viewport Panel */
@@ -1944,16 +1969,16 @@ code {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 8px;
-  line-height: 1.35;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 1.4;
 }
 .scifi-log-item {
   display: grid;
-  grid-template-columns: 46px 48px minmax(0, 1fr);
-  gap: 6px;
+  grid-template-columns: 66px 64px minmax(0, 1fr);
+  gap: 8px;
   align-items: baseline;
-  padding: 3px 6px;
+  padding: 4px 8px;
   border-left: 2px solid transparent;
   background: rgba(255, 255, 255, 0.02);
   border-radius: 1px;
@@ -1985,7 +2010,7 @@ code {
   display: flex;
   gap: 4px;
   align-items: center;
-  padding: 4px 8px;
+  padding: 6px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(0, 0, 0, 0.25);
 }
@@ -1994,9 +2019,9 @@ code {
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: rgba(255, 255, 255, 0.45);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 7.5px;
+  font-size: 9.5px;
   letter-spacing: 0.05em;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: 2px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -2014,14 +2039,14 @@ code {
 
 .ev-time {
   color: rgba(255, 255, 255, 0.38);
-  font-size: 7.5px;
+  font-size: 10.5px;
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 .ev-tag {
   font-weight: 700;
-  font-size: 7.5px;
+  font-size: 10.5px;
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
@@ -2047,7 +2072,7 @@ code {
 .ev-usage-metric {
   color: #93c5fd;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 10.5px;
   font-weight: 500;
 }
 
@@ -2056,7 +2081,7 @@ code {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: rgba(255, 255, 255, 0.85);
-  font-size: 8px;
+  font-size: 11.5px;
   min-width: 0;
 }
 .ev-content strong {
@@ -2067,7 +2092,7 @@ code {
   color: rgba(255, 255, 255, 0.3);
   text-align: center;
   padding: 40px 0;
-  font-size: 8px;
+  font-size: 11.5px;
   letter-spacing: 0.1em;
 }
 

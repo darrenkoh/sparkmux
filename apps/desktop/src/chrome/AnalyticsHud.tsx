@@ -199,7 +199,6 @@ export default function AnalyticsHud({
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [eventFilter, setEventFilter] = useState<"all" | "turns" | "tools" | "usage">("all");
 
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -291,11 +290,14 @@ export default function AnalyticsHud({
       const ctx = canvas.getContext("2d");
       if (ctx) {
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const cssW = 120;
-        const cssH = 120;
-        if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
-          canvas.width = cssW * dpr;
-          canvas.height = cssH * dpr;
+        const rect = canvas.getBoundingClientRect();
+        const cssW = Math.max(1, Math.round(rect.width || canvas.clientWidth || 300));
+        const cssH = Math.max(1, Math.round(rect.height || canvas.clientHeight || 300));
+        const w = Math.round(cssW * dpr);
+        const h = Math.round(cssH * dpr);
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
         }
 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -303,7 +305,7 @@ export default function AnalyticsHud({
 
         const cx = cssW / 2;
         const cy = cssH / 2;
-        const radiusScale = (cssW / 2) * 0.88;
+        const radiusScale = Math.min(cssW, cssH) * 0.44;
 
         const st = statsRef.current;
         const recentEvents = st?.recent_events ?? [];
@@ -343,7 +345,7 @@ export default function AnalyticsHud({
         };
 
         // 1. Ultra-Thin Connectome Fiber Tracts (Lines visible in their true colors!)
-        ctx.lineWidth = 0.50;
+        ctx.lineWidth = 0.70;
         for (const fib of CONNECTOME_MODEL.fibers) {
           const p0 = project3D(fib.p0[0], fib.p0[1], fib.p0[2]);
           const p1 = project3D(fib.p1[0], fib.p1[1], fib.p1[2]);
@@ -392,7 +394,7 @@ export default function AnalyticsHud({
           if (isTargeted) {
             // Targeted Neuron Firing: lights up radiant in category color + white core
             const pulse = (Math.sin(time * 0.012 + (node.x + node.z) * 8.0) * 0.35 + 0.65) * firingPower;
-            const rGlow = Math.max(1.8, 3.8 * node.perspective * pulse);
+            const rGlow = Math.max(2.4, 4.8 * node.perspective * pulse);
 
             // Outer Radiant Aura
             ctx.beginPath();
@@ -403,14 +405,14 @@ export default function AnalyticsHud({
 
             // Gleaming Luminous Bead Core
             ctx.beginPath();
-            ctx.arc(node.sx, node.sy, 1.8 * node.perspective, 0, Math.PI * 2);
+            ctx.arc(node.sx, node.sy, 2.0 * node.perspective, 0, Math.PI * 2);
             ctx.fillStyle = "#ffffff";
             ctx.globalAlpha = depthAlpha;
             ctx.fill();
           } else {
             // Quiescent neuron point: subtle pinprick colored bead
             ctx.beginPath();
-            ctx.arc(node.sx, node.sy, 0.95 * node.perspective, 0, Math.PI * 2);
+            ctx.arc(node.sx, node.sy, 1.1 * node.perspective, 0, Math.PI * 2);
             ctx.fillStyle = node.color;
             ctx.globalAlpha = depthAlpha * 0.55;
             ctx.fill();
@@ -504,7 +506,7 @@ export default function AnalyticsHud({
   return (
     <div className="scifi-hud-overlay" onClick={onClose}>
       <div
-        className={`scifi-hud-frame ${isFullscreen ? "fullscreen" : ""}`}
+        className="scifi-hud-frame fullscreen"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Sci-Fi Analytics HUD"
@@ -581,16 +583,6 @@ export default function AnalyticsHud({
               </button>
             )}
 
-            <button
-              type="button"
-              className={`scifi-btn ${isFullscreen ? "on" : ""}`}
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              title={isFullscreen ? "Exit Fullscreen HUD" : "Expand to Fullscreen HUD"}
-              aria-label={isFullscreen ? "Exit Fullscreen HUD" : "Expand to Fullscreen HUD"}
-            >
-              {isFullscreen ? "🗗 RESTORE" : "⤢ FULLSCREEN"}
-            </button>
-
             {onDock && (
               <button
                 type="button"
@@ -625,10 +617,9 @@ export default function AnalyticsHud({
                 >
                   <canvas
                     ref={radarCanvasRef}
-                    width={120}
-                    height={120}
                     className="scifi-radar-canvas"
                   />
+                  <div className="radar-hint">DRAG · ORBIT</div>
                 </div>
                 <div className="kpis">
                   <div>
