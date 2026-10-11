@@ -320,8 +320,37 @@ export default function TerrainViewport({
     }
     const heightScale = 2.4 / Math.log1p(Math.max(1, maxMetric));
 
+    // -------------------------------------------------------------------------
+    // Organic Island Boundary: Irregular fractal coastline with natural bays/fjords
+    // -------------------------------------------------------------------------
+    const hx = TIME_SPAN / 2 - 1.2;
+    const hz = LABEL_SPAN / 2 - 1.0;
+
+    const getIslandRadius = (theta: number): number => {
+      let r = 1.0;
+      r += 0.16 * Math.sin(3 * theta + 0.5);
+      r += 0.11 * Math.cos(5 * theta - 0.8);
+      r += 0.07 * Math.sin(7 * theta + 1.3);
+      r += 0.04 * Math.cos(11 * theta - 0.4);
+      return Math.max(0.65, r);
+    };
+
+    const getIslandDistNorm = (x: number, z: number): number => {
+      const nx = x / hx;
+      const nz = z / hz;
+      const theta = Math.atan2(nz, nx);
+      const rCoast = getIslandRadius(theta);
+      const r = Math.hypot(nx, nz);
+      return r / rCoast;
+    };
+
     // Calculate height Y at any 3D coordinate (x = Time, z = Label)
     const getAlt = (x: number, z: number): number => {
+      const distNorm = getIslandDistNorm(x, z);
+      if (distNorm >= 1.0) {
+        return 0; // Off-island in surrounding ocean/void
+      }
+
       // Base gentle shelf
       let val = 0.08;
 
@@ -351,18 +380,16 @@ export default function TerrainViewport({
         }
       }
 
-      // Edge falloff at boundary margins
-      const marginFalloff = smoothstep(TIME_SPAN / 2, TIME_SPAN / 2 - 2, Math.abs(x)) *
-                            smoothstep(LABEL_SPAN / 2, LABEL_SPAN / 2 - 1.5, Math.abs(z));
-
-      return Math.max(0, val * marginFalloff);
+      // Smooth falloff down to sea level at the irregular island coastline
+      const islandFalloff = smoothstep(1.0, 0.72, distNorm);
+      return Math.max(0, val * islandFalloff);
     };
 
     // Reference directional light vector [-0.45, 0.8, 0.4]
     const lightDir = [-0.45, 0.8, 0.4];
 
     // -------------------------------------------------------------------------
-    // 1. High-Density 50,000 Particle Field with Channel Shading
+    // 1. High-Density 50,000 Particle Field on Island Landmass
     // -------------------------------------------------------------------------
     const pointCount = 50000;
     const posData = new Float32Array(pointCount * 4);
@@ -370,9 +397,16 @@ export default function TerrainViewport({
     const seedData = new Float32Array(pointCount);
 
     let pIdx = 0;
-    for (let i = 0; i < pointCount; i++) {
+    let attempts = 0;
+    const maxAttempts = pointCount * 3;
+    while (pIdx < pointCount && attempts < maxAttempts) {
+      attempts++;
       const rx = (rng() * 2 - 1) * (TIME_SPAN / 2);
       const rz = (rng() * 2 - 1) * (LABEL_SPAN / 2);
+      const distNorm = getIslandDistNorm(rx, rz);
+      if (distNorm > 1.0) {
+        continue; // Keep particles within irregular island boundaries
+      }
       const alt = getAlt(rx, rz);
 
       // Light normal calculation
@@ -398,6 +432,14 @@ export default function TerrainViewport({
       } else {
         // TOOL lane: Teal / Mint
         r = 0.18; g = 0.84; b = 0.75;
+      }
+
+      // Coastal shoreline teal/cyan glow along island edge
+      if (distNorm > 0.88) {
+        const coastMix = (distNorm - 0.88) / 0.12;
+        r = r * (1 - coastMix) + 0.22 * coastMix;
+        g = g * (1 - coastMix) + 0.85 * coastMix;
+        b = b * (1 - coastMix) + 0.95 * coastMix;
       }
 
       // Summit amber elevation boost
@@ -517,14 +559,59 @@ export default function TerrainViewport({
       }
     }
 
-    // Coordinate Grid along Base Plane
+    // Coordinate Grid along Base Plane (Clipped to Island Shoreline)
+    const GRID_STEP = 0.35;
     for (let gx = -14; gx <= 14; gx += 2) {
       const a = gx === 0 ? 0.35 : gx % 4 === 0 ? 0.18 : 0.07;
-      baseGridVerts.push(gx, 0, -9, a, gx, 0, 9, a);
+      let inSeg = false;
+      let segStart = 0;
+      for (let z = -9; z <= 9.001; z += GRID_STEP) {
+        const inside = getIslandDistNorm(gx, z) <= 1.0;
+        if (inside && !inSeg) {
+          inSeg = true;
+          segStart = z;
+        } else if (!inside && inSeg) {
+          inSeg = false;
+          baseGridVerts.push(gx, 0, segStart, a, gx, 0, z - GRID_STEP, a);
+        }
+      }
+      if (inSeg) {
+        baseGridVerts.push(gx, 0, segStart, a, gx, 0, 9, a);
+      }
     }
+
     for (let gz = -9; gz <= 9; gz += 2) {
       const a = gz === 0 ? 0.35 : gz % 4 === 0 ? 0.18 : 0.07;
-      baseGridVerts.push(-14, 0, gz, a, 14, 0, gz, a);
+      let inSeg = false;
+      let segStart = 0;
+      for (let x = -14; x <= 14.001; x += GRID_STEP) {
+        const inside = getIslandDistNorm(x, gz) <= 1.0;
+        if (inside && !inSeg) {
+          inSeg = true;
+          segStart = x;
+        } else if (!inside && inSeg) {
+          inSeg = false;
+          baseGridVerts.push(segStart, 0, gz, a, x - GRID_STEP, 0, gz, a);
+        }
+      }
+      if (inSeg) {
+        baseGridVerts.push(segStart, 0, gz, a, 14, 0, gz, a);
+      }
+    }
+
+    // Glowing Island Shoreline Coastline Perimeter with irregular fractal edges
+    const COAST_SEGS = 240;
+    for (let i = 0; i < COAST_SEGS; i++) {
+      const th0 = (i / COAST_SEGS) * Math.PI * 2;
+      const th1 = ((i + 1) / COAST_SEGS) * Math.PI * 2;
+      const r0 = getIslandRadius(th0);
+      const r1 = getIslandRadius(th1);
+      const x0 = Math.cos(th0) * r0 * hx;
+      const z0 = Math.sin(th0) * r0 * hz;
+      const x1 = Math.cos(th1) * r1 * hx;
+      const z1 = Math.sin(th1) * r1 * hz;
+      // High-intensity shoreline contour line
+      baseGridVerts.push(x0, 0.02, z0, 0.75, x1, 0.02, z1, 0.75);
     }
 
     const createLineVAO = (verts: number[]) => {

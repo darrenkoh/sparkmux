@@ -23,6 +23,52 @@ export interface AnalyticsHudProps {
 
 export { formatBytes, formatNum, formatMs };
 
+// 18 Brain Neural Cortex Nodes matching Area Map categories and colors
+const BRAIN_NODES = [
+  // Frontal lobe (USER queries): Amber #ff9a3c
+  { id: 0, x: -0.32, y: -0.66, cat: "user", color: "#ff9a3c" },
+  { id: 1, x: 0.32, y: -0.66, cat: "user", color: "#ff9a3c" },
+  { id: 2, x: -0.15, y: -0.50, cat: "user", color: "#ff9a3c" },
+  { id: 3, x: 0.15, y: -0.50, cat: "user", color: "#ff9a3c" },
+
+  // Parietal & Central lobe (THINK / reasoning): Purple #c084fc
+  { id: 4, x: -0.54, y: -0.26, cat: "think", color: "#c084fc" },
+  { id: 5, x: 0.54, y: -0.26, cat: "think", color: "#c084fc" },
+  { id: 6, x: -0.22, y: -0.16, cat: "think", color: "#c084fc" },
+  { id: 7, x: 0.22, y: -0.16, cat: "think", color: "#c084fc" },
+  { id: 8, x: 0.0, y: -0.04, cat: "think", color: "#c084fc" },
+
+  // Temporal & Occipital lobe (REPLY / assistant): Cobalt Blue #5b8def
+  { id: 9, x: -0.56, y: 0.16, cat: "reply", color: "#5b8def" },
+  { id: 10, x: 0.56, y: 0.16, cat: "reply", color: "#5b8def" },
+  { id: 11, x: -0.28, y: 0.28, cat: "reply", color: "#5b8def" },
+  { id: 12, x: 0.28, y: 0.28, cat: "reply", color: "#5b8def" },
+  { id: 13, x: 0.0, y: 0.38, cat: "reply", color: "#5b8def" },
+
+  // Cerebellum & Brainstem (TOOL executions): Teal #2dd4bf
+  { id: 14, x: -0.36, y: 0.58, cat: "tool", color: "#2dd4bf" },
+  { id: 15, x: 0.36, y: 0.58, cat: "tool", color: "#2dd4bf" },
+  { id: 16, x: -0.16, y: 0.72, cat: "tool", color: "#2dd4bf" },
+  { id: 17, x: 0.16, y: 0.72, cat: "tool", color: "#2dd4bf" },
+];
+
+const BRAIN_SYNAPSES: Array<[number, number]> = [
+  // Frontal
+  [0, 1], [0, 2], [1, 3], [2, 3],
+  // Frontal to Parietal
+  [0, 4], [1, 5], [2, 6], [3, 7],
+  // Parietal internal
+  [4, 6], [5, 7], [6, 8], [7, 8], [6, 7],
+  // Parietal to Temporal
+  [4, 9], [5, 10], [6, 11], [7, 12], [8, 13],
+  // Temporal internal
+  [9, 11], [10, 12], [11, 13], [12, 13],
+  // Temporal to Cerebellum
+  [9, 14], [10, 15], [11, 14], [12, 15], [13, 16], [13, 17],
+  // Cerebellum internal
+  [14, 16], [15, 17], [16, 17],
+];
+
 export default function AnalyticsHud({
   sessionName,
   tabId,
@@ -37,14 +83,20 @@ export default function AnalyticsHud({
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [eventFilter, setEventFilter] = useState<"all" | "turns" | "tools" | "usage">("all");
 
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
   const tokenCanvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
+  const statsRef = useRef(data?.stats);
+  statsRef.current = data?.stats;
 
   const fetchData = () => {
     tabAnalytics(sessionName, tabId, command, cwd, title, pid)
-      .then((res) => setData(res))
+      .then((res) => {
+        setData(res);
+        statsRef.current = res.stats;
+      })
       .catch((err) => console.error("tabAnalytics error:", err));
   };
 
@@ -54,12 +106,9 @@ export default function AnalyticsHud({
     return () => clearInterval(interval);
   }, [sessionName, tabId, command, cwd, title, pid]);
 
-  // Sci-Fi radar sweep animation
+  // Sci-Fi Brain Neural Cortex synaptogenesis & neuron firing animation
   useEffect(() => {
-    let current = 0;
-    const render = () => {
-      current = (current + 0.035) % (Math.PI * 2);
-
+    const render = (time: number) => {
       const canvas = radarCanvasRef.current;
       if (canvas) {
         const ctx = canvas.getContext("2d");
@@ -69,43 +118,111 @@ export default function AnalyticsHud({
           ctx.clearRect(0, 0, w, h);
           const cx = w / 2;
           const cy = h / 2;
-          const r = Math.min(cx, cy) - 4;
+          const scaleX = (w / 2) - 6;
+          const scaleY = (h / 2) - 6;
 
-          // Background concentric circles
-          ctx.strokeStyle = "rgba(255, 154, 60, 0.15)";
+          const st = statsRef.current;
+          const recentEvents = st?.recent_events ?? [];
+          const lastEventKind = recentEvents.length > 0 ? recentEvents[recentEvents.length - 1].k : null;
+
+          // Activity factor accelerates pulse speed during busy turns
+          const activityLevel = Math.min(3.0, 1.0 + (st?.total_events ?? 0) * 0.05);
+
+          // 1. Faint Brain Hemisphere Silhouette Outline
+          ctx.beginPath();
+          // Left hemisphere lobe
+          ctx.ellipse(cx - scaleX * 0.28, cy - scaleY * 0.08, scaleX * 0.58, scaleY * 0.76, -0.05, 0, Math.PI * 2);
+          // Right hemisphere lobe
+          ctx.ellipse(cx + scaleX * 0.28, cy - scaleY * 0.08, scaleX * 0.58, scaleY * 0.76, 0.05, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
           ctx.lineWidth = 1;
-          for (let step = 1; step <= 3; step++) {
+          ctx.stroke();
+
+          // 2. Synaptic Edges connecting brain neurons
+          ctx.lineWidth = 1.0;
+          for (const [fromIdx, toIdx] of BRAIN_SYNAPSES) {
+            const nA = BRAIN_NODES[fromIdx];
+            const nB = BRAIN_NODES[toIdx];
+            const x1 = cx + nA.x * scaleX;
+            const y1 = cy + nA.y * scaleY;
+            const x2 = cx + nB.x * scaleX;
+            const y2 = cy + nB.y * scaleY;
+
             ctx.beginPath();
-            ctx.arc(cx, cy, (r / 3) * step, 0, Math.PI * 2);
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
             ctx.stroke();
           }
 
-          // Crosshairs
-          ctx.beginPath();
-          ctx.moveTo(cx - r, cy);
-          ctx.lineTo(cx + r, cy);
-          ctx.moveTo(cx, cy - r);
-          ctx.lineTo(cx, cy + r);
-          ctx.stroke();
+          // 3. Firing Synaptic Action Potentials (Pulses traveling along neural pathways)
+          const pulseCount = 14;
+          for (let p = 0; p < pulseCount; p++) {
+            const synIdx = (p * 3) % BRAIN_SYNAPSES.length;
+            const [fromIdx, toIdx] = BRAIN_SYNAPSES[synIdx];
+            const nA = BRAIN_NODES[fromIdx];
+            const nB = BRAIN_NODES[toIdx];
 
-          // Sweep beam
-          const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-          grad.addColorStop(0, "rgba(255, 154, 60, 0.35)");
-          grad.addColorStop(1, "rgba(255, 154, 60, 0.0)");
+            // Progress along the axon/synapse
+            const offset = (p * 0.18 + fromIdx * 0.05);
+            const progress = ((time * 0.0012 * activityLevel + offset) % 1.0);
 
-          ctx.beginPath();
-          ctx.moveTo(cx, cy);
-          ctx.arc(cx, cy, r, current - 0.45, current);
-          ctx.closePath();
-          ctx.fillStyle = grad;
-          ctx.fill();
+            const x1 = cx + nA.x * scaleX;
+            const y1 = cy + nA.y * scaleY;
+            const x2 = cx + nB.x * scaleX;
+            const y2 = cy + nB.y * scaleY;
 
-          // Sweep leading edge
+            const px = x1 + (x2 - x1) * progress;
+            const py = y1 + (y2 - y1) * progress;
+
+            // Draw traveling synaptic pulse
+            ctx.beginPath();
+            ctx.arc(px, py, 1.4, 0, Math.PI * 2);
+            ctx.fillStyle = nA.color;
+            ctx.globalAlpha = 0.85;
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+          }
+
+          // 4. Brain Neurons (Hubs firing in category colors: Amber, Purple, Cobalt, Teal)
+          for (const node of BRAIN_NODES) {
+            const nx = cx + node.x * scaleX;
+            const ny = cy + node.y * scaleY;
+
+            // Check if this node matches the most recent active event kind
+            const isFiring =
+              (node.cat === "user" && lastEventKind === "user") ||
+              (node.cat === "think" && lastEventKind === "think") ||
+              (node.cat === "reply" && lastEventKind === "reply") ||
+              (node.cat === "tool" && (lastEventKind === "tool" || lastEventKind === "done"));
+
+            // Pulse wave oscillation
+            const phase = (time * 0.0035 + node.id * 0.5) % (Math.PI * 2);
+            const auraR = 3.0 + (isFiring ? 3.0 : 1.4) * Math.sin(phase);
+
+            // Glowing Outer Aura
+            ctx.beginPath();
+            ctx.arc(nx, ny, Math.max(1.5, auraR), 0, Math.PI * 2);
+            ctx.fillStyle = node.color;
+            ctx.globalAlpha = isFiring ? 0.45 : 0.18;
+            ctx.fill();
+
+            // Core Neuron Bead
+            ctx.beginPath();
+            ctx.arc(nx, ny, isFiring ? 2.6 : 2.0, 0, Math.PI * 2);
+            ctx.fillStyle = isFiring ? "#ffffff" : node.color;
+            ctx.globalAlpha = 0.95;
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+          }
+
+          // 5. Central Synaptogenesis Wave Pulse (Encephalogram ripple)
+          const wavePhase = (time * 0.001) % 1.0;
+          const waveR = wavePhase * (Math.min(scaleX, scaleY) * 0.95);
           ctx.beginPath();
-          ctx.moveTo(cx, cy);
-          ctx.lineTo(cx + Math.cos(current) * r, cy + Math.sin(current) * r);
-          ctx.strokeStyle = "#ff9a3c";
-          ctx.lineWidth = 1.5;
+          ctx.arc(cx, cy, waveR, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(192, 132, 252, " + ((1.0 - wavePhase) * 0.25).toFixed(2) + ")";
+          ctx.lineWidth = 1;
           ctx.stroke();
         }
       }
@@ -293,11 +410,14 @@ export default function AnalyticsHud({
             <section className="scifi-panel telemetry">
               <header>
                 <span className="tag">01</span>
-                <span>QUANTUM TELEMETRY</span>
-                <small>LIVE FEED</small>
+                <span>NEURAL TELEMETRY</span>
+                <small>SYNAPTIC CORE</small>
               </header>
               <div className="body">
-                <div className="radar">
+                <div
+                  className="radar"
+                  title="Neural Cortex: User (Amber) · Think (Purple) · Reply (Blue) · Tool (Teal)"
+                >
                   <canvas
                     ref={radarCanvasRef}
                     width={84}
@@ -484,26 +604,69 @@ export default function AnalyticsHud({
                 <span>EVENT STREAM LOG</span>
                 <small>LIVE REPLAY</small>
               </header>
+              <div className="stream-filters">
+                {(["all", "turns", "tools", "usage"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`stream-filter-btn ${eventFilter === mode ? "active" : ""}`}
+                    onClick={() => setEventFilter(mode)}
+                  >
+                    {mode.toUpperCase()}
+                  </button>
+                ))}
+              </div>
               <div className="body stream-body">
                 <ul className="scifi-log-list">
                   {(!st?.recent_events || st.recent_events.length === 0) && (
                     <li className="empty-log">NO LOGGED EVENTS CAPTURED</li>
                   )}
                   {st?.recent_events
-                    ?.slice()
+                    ?.filter((ev) => {
+                      if (eventFilter === "all") return true;
+                      if (eventFilter === "turns")
+                        return ev.k === "user" || ev.k === "reply" || ev.k === "think";
+                      if (eventFilter === "tools")
+                        return ev.k === "tool" || ev.k === "result" || ev.k === "done";
+                      if (eventFilter === "usage") return ev.k === "usage";
+                      return true;
+                    })
+                    .slice()
                     .reverse()
-                    .map((ev, i) => (
-                      <li key={`${ev.t}-${i}`} className={`scifi-log-item ${ev.k}`}>
-                        <span className="ev-time">
-                          {new Date(ev.t).toLocaleTimeString()}
-                        </span>
-                        <span className={`ev-tag ${ev.k}`}>[{ev.k.toUpperCase()}]</span>
-                        <span className="ev-content" title={ev.b || ev.a || ev.n || ""}>
-                          {ev.n ? <strong>{ev.n}: </strong> : null}
-                          {ev.a || ev.b || (ev.ms ? `${ev.ms}ms` : "")}
-                        </span>
-                      </li>
-                    ))}
+                    .map((ev, i) => {
+                      const isUsage = ev.k === "usage";
+                      return (
+                        <li key={`${ev.t}-${i}`} className={`scifi-log-item ${ev.k}`}>
+                          <span className="ev-time">
+                            {new Date(ev.t).toLocaleTimeString()}
+                          </span>
+                          <span className={`ev-tag ${ev.k}`}>
+                            [{ev.k.toUpperCase()}]
+                          </span>
+                          {isUsage ? (
+                            <span
+                              className="ev-content ev-usage-content"
+                              title={`Token Checkpoint: ${formatNum(ev.ti ?? 0)} in, ${formatNum(ev.to ?? 0)} out, ${formatNum(ev.tc ?? 0)} cached, ${formatNum(ev.tr ?? 0)} reasoning`}
+                            >
+                              {ev.n ? <strong>{ev.n}: </strong> : null}
+                              <span className="ev-usage-metric">
+                                +{formatNum(ev.ti ?? 0)} in / {formatNum(ev.to ?? 0)} out
+                                {(ev.tc ?? 0) > 0 ? ` (${formatNum(ev.tc ?? 0)} cached)` : ""}
+                                {(ev.tr ?? 0) > 0 ? ` [${formatNum(ev.tr ?? 0)} reasoning]` : ""}
+                              </span>
+                            </span>
+                          ) : (
+                            <span
+                              className="ev-content"
+                              title={ev.b || ev.a || ev.n || ""}
+                            >
+                              {ev.n ? <strong>{ev.n}: </strong> : null}
+                              {ev.a || ev.b || (ev.ms ? `${ev.ms}ms` : "")}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
                 </ul>
               </div>
             </section>

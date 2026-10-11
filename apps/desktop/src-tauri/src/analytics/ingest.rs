@@ -88,6 +88,8 @@ pub struct Cursor {
     pub lines_added: u64,
     #[serde(default)]
     pub lines_removed: u64,
+    #[serde(default)]
+    pub pending_reasoning_tokens: u64,
 }
 
 /// First 8 characters of the Grok session directory or the Claude file stem.
@@ -246,6 +248,129 @@ fn pop_queue(queue: &mut VecDeque<i64>, chat_count: &mut u64, fallback: i64) -> 
     queue.pop_front().unwrap_or(fallback)
 }
 
+pub fn estimate_tokens(text: &str) -> u64 {
+    let t = text.trim();
+    if t.is_empty() {
+        return 0;
+    }
+    let chars = t.chars().count();
+    chars.div_ceil(4).max(1) as u64
+}
+
+fn count_lines(text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+    text.split('\n').count() as u64
+}
+
+fn str_of_any(obj: &Value, keys: &[&str]) -> String {
+    let Some(map) = obj.as_object() else {
+        return String::new();
+    };
+    for key in keys {
+        if let Some(val) = map.get(*key) {
+            match val {
+                Value::String(s) => {
+                    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+                        if let Ok(unquoted) = serde_json::from_str::<String>(s) {
+                            return unquoted;
+                        }
+                        return s[1..s.len() - 1].to_string();
+                    }
+                    return s.clone();
+                }
+                Value::Array(arr) => {
+                    let parts: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    if !parts.is_empty() {
+                        return parts.join("\n");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    String::new()
+}
+
+fn get_args_value<'a>(val: &'a Value, buf: &'a mut Option<Value>) -> &'a Value {
+    if let Value::String(s) = val {
+        if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+            *buf = Some(parsed);
+            return buf.as_ref().unwrap();
+        }
+    }
+    val
+}
+
+fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
+    let name_lower = tool_name.to_ascii_lowercase();
+    match name_lower.as_str() {
+        "replace_file_content" | "edit" | "edit_file" | "str_replace_editor" | "str_replace" => {
+            let old_str = str_of_any(
+                args,
+                &[
+                    "TargetContent",
+                    "target_content",
+                    "targetContent",
+                    "old_string",
+                    "old_str",
+                    "oldstr",
+                    "search",
+                ],
+            );
+            let new_str = str_of_any(
+                args,
+                &[
+                    "ReplacementContent",
+                    "replacement_content",
+                    "replacementContent",
+                    "new_string",
+                    "new_str",
+                    "newstr",
+                    "replace",
+                ],
+            );
+            if !old_str.is_empty() {
+                cur.lines_removed += count_lines(&old_str);
+            }
+            if !new_str.is_empty() {
+                cur.lines_added += count_lines(&new_str);
+            }
+        }
+        "write_to_file" | "write" | "write_file" | "create_file" => {
+            let content = str_of_any(
+                args,
+                &[
+                    "CodeContent",
+                    "code_content",
+                    "codeContent",
+                    "content",
+                    "file_text",
+                    "text",
+                ],
+            );
+            if !content.is_empty() {
+                cur.lines_added += count_lines(&content);
+            }
+        }
+        "patch" | "apply_patch" => {
+            let patch = str_of_any(args, &["patch", "diff"]);
+            for line in patch.lines() {
+                if line.starts_with('+') && !line.starts_with("+++") {
+                    cur.lines_added += 1;
+                } else if line.starts_with('-') && !line.starts_with("---") {
+                    cur.lines_removed += 1;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 // ---------------------------------------------------------------- Grok
 
 fn ingest_grok(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
@@ -340,7 +465,14 @@ fn grok_usage(path: &Path, cur: &mut Cursor, now: i64, out: &mut Vec<Event>) {
         ev.to = u64_of(turn, "outputTokens");
         ev.tc = u64_of(turn, "cachedReadTokens");
         ev.tw = u64_of(turn, "cacheCreationTokens");
-        ev.tr = u64_of(turn, "reasoningTokens");
+        let rep_reasoning = u64_of(turn, "reasoningTokens");
+        if rep_reasoning > 0 {
+            ev.tr = rep_reasoning;
+            cur.pending_reasoning_tokens = 0;
+        } else if cur.pending_reasoning_tokens > 0 {
+            ev.tr = cur.pending_reasoning_tokens;
+            cur.pending_reasoning_tokens = 0;
+        }
         ev.n = str_of(turn, "primaryModelId").to_string();
         ev.c = u64_of(turn, "modelCalls");
         if !ev.n.is_empty() {
@@ -363,8 +495,12 @@ fn grok_signals(path: &Path, cur: &mut Cursor) {
     cur.ctx_used = u64_of(&obj, "contextTokensUsed");
     cur.ctx_window = u64_of(&obj, "contextWindowTokens");
     cur.ttft_ms = u64_of(&obj, "avgTimeToFirstTokenMs");
-    cur.lines_added = u64_of(&obj, "agentLinesAdded");
-    cur.lines_removed = u64_of(&obj, "agentLinesRemoved");
+    let sig_added = u64_of(&obj, "agentLinesAdded");
+    let sig_removed = u64_of(&obj, "agentLinesRemoved");
+    if sig_added > 0 || sig_removed > 0 {
+        cur.lines_added = cur.lines_added.max(sig_added);
+        cur.lines_removed = cur.lines_removed.max(sig_removed);
+    }
 }
 
 fn grok_chat(
@@ -403,7 +539,9 @@ fn grok_chat(
         }
         "reasoning" => {
             let mut ev = Event::new(fallback(cur), event::THINK);
-            (ev.b, ev.c) = body(&reasoning_text(obj), THINK_CAP);
+            let text = reasoning_text(obj);
+            (ev.b, ev.c) = body(&text, THINK_CAP);
+            cur.pending_reasoning_tokens += estimate_tokens(&text);
             out.push(ev);
         }
         "assistant" => {
@@ -423,6 +561,13 @@ fn grok_chat(
                         .and_then(Value::as_str)
                         .unwrap_or("tool")
                         .to_string();
+                    let args = call
+                        .get("arguments")
+                        .or_else(|| call.get("args"))
+                        .unwrap_or(&Value::Null);
+                    let mut args_buf = None;
+                    let parsed_args = get_args_value(args, &mut args_buf);
+                    track_tool_code_delta(&ev.n, parsed_args, cur);
                     ev.a = truncate_chars(
                         &args_summary(call.get("arguments").unwrap_or(&Value::Null)),
                         ARG_CAP,
@@ -544,12 +689,25 @@ fn claude_record(obj: &Map<String, Value>, cur: &mut Cursor, fallback: i64, out:
                     let input = u64_of(usage, "input_tokens");
                     let read = u64_of(usage, "cache_read_input_tokens");
                     let write = u64_of(usage, "cache_creation_input_tokens");
+                    let explicit_reasoning = explicit_num(
+                        usage,
+                        &[
+                            "reasoning_tokens",
+                            "reasoningTokens",
+                            "thinking_tokens",
+                            "thinkingTokens",
+                        ],
+                    );
+                    let reasoning_val = explicit_reasoning.unwrap_or(cur.pending_reasoning_tokens);
+                    cur.pending_reasoning_tokens = 0;
+
                     let mut ev = Event::new(ts, event::USAGE);
                     // `ti` is the whole prompt, cache included, as Grok reports it.
                     ev.ti = input + read + write;
                     ev.tc = read;
                     ev.tw = write;
                     ev.to = u64_of(usage, "output_tokens");
+                    ev.tr = reasoning_val;
                     ev.n.clone_from(&model);
                     ev.c = 1;
                     cur.ctx_used = ev.ti;
@@ -581,6 +739,7 @@ fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut
             let text = block.get("thinking").and_then(Value::as_str).unwrap_or("");
             let mut ev = Event::new(ts, event::THINK);
             (ev.b, ev.c) = body(text, THINK_CAP);
+            cur.pending_reasoning_tokens += estimate_tokens(text);
             out.push(ev);
         }
         "text" => {
@@ -599,11 +758,12 @@ fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut
                 .and_then(Value::as_str)
                 .unwrap_or("tool")
                 .to_string();
+            let input = block.get("input").unwrap_or(&Value::Null);
+            let mut args_buf = None;
+            let parsed_args = get_args_value(input, &mut args_buf);
+            track_tool_code_delta(&name, parsed_args, cur);
             let mut ev = Event::new(ts, event::TOOL);
-            ev.a = truncate_chars(
-                &args_summary(block.get("input").unwrap_or(&Value::Null)),
-                ARG_CAP,
-            );
+            ev.a = truncate_chars(&args_summary(input), ARG_CAP);
             ev.n.clone_from(&name);
             if let Some(id) = block.get("id").and_then(Value::as_str) {
                 if cur.pending.len() >= PENDING_CAP {
@@ -696,6 +856,7 @@ fn agy_step(
             if !thinking.trim().is_empty() {
                 let mut ev = Event::new(ts, event::THINK);
                 (ev.b, ev.c) = body(thinking, THINK_CAP);
+                cur.pending_reasoning_tokens += estimate_tokens(thinking);
                 out.push(ev);
             }
             let content = text_from_value(obj.get("content").unwrap_or(&Value::Null));
@@ -716,8 +877,12 @@ fn agy_step(
                         .and_then(Value::as_str)
                         .unwrap_or("tool")
                         .to_string();
+                    let args = tool_args(call);
+                    let mut args_buf = None;
+                    let parsed_args = get_args_value(args, &mut args_buf);
+                    track_tool_code_delta(&name, parsed_args, cur);
                     let mut ev = Event::new(ts, event::TOOL);
-                    ev.a = truncate_chars(&args_summary(tool_args(call)), ARG_CAP);
+                    ev.a = truncate_chars(&args_summary(args), ARG_CAP);
                     ev.n.clone_from(&name);
                     out.push(ev);
                     remember_agy_tool(cur, ts, name);
@@ -783,7 +948,6 @@ fn agy_model(obj: &Map<String, Value>) -> String {
     String::new()
 }
 
-/// Explicit counters only. A missing field is zero, never a character-count guess.
 fn agy_usage(obj: &Map<String, Value>, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>) {
     let input = explicit_num(obj, &["input_tokens", "inputTokens"]);
     let output = explicit_num(obj, &["output_tokens", "outputTokens"]);
@@ -799,13 +963,26 @@ fn agy_usage(obj: &Map<String, Value>, cur: &mut Cursor, ts: i64, out: &mut Vec<
             "cache_creation_input_tokens",
         ],
     );
-    let reasoning = explicit_num(obj, &["reasoning_tokens", "reasoningTokens"]);
+    let explicit_reasoning = explicit_num(
+        obj,
+        &[
+            "reasoning_tokens",
+            "reasoningTokens",
+            "thinking_tokens",
+            "thinkingTokens",
+            "thought_tokens",
+            "thoughts_tokens",
+        ],
+    );
+    let reasoning_val = explicit_reasoning.unwrap_or(cur.pending_reasoning_tokens);
+    cur.pending_reasoning_tokens = 0;
     let model = agy_model(obj);
     if input.is_none()
         && output.is_none()
         && cache.is_none()
         && write.is_none()
-        && reasoning.is_none()
+        && explicit_reasoning.is_none()
+        && reasoning_val == 0
         && model.is_empty()
     {
         return;
@@ -818,7 +995,7 @@ fn agy_usage(obj: &Map<String, Value>, cur: &mut Cursor, ts: i64, out: &mut Vec<
     ev.to = output.unwrap_or(0);
     ev.tc = cache.unwrap_or(0);
     ev.tw = write.unwrap_or(0);
-    ev.tr = reasoning.unwrap_or(0);
+    ev.tr = reasoning_val;
     ev.n = model;
     ev.c = 1;
     if ev.ti > 0 {
@@ -1243,5 +1420,56 @@ mod tests {
         assert_eq!(appended[0].b, "only the new step");
         assert_eq!(appended[0].ti, 0);
         let _ = fs::remove_dir_all(&scratch_dir);
+    }
+
+    #[test]
+    fn agy_estimates_reasoning_and_tracks_tool_code_delta() {
+        let scratch_dir = scratch("agy_delta");
+        let dir = scratch_dir
+            .join("brain")
+            .join("aaaaaaaa-1111-2222-3333-444444444444");
+        let logs = dir.join(".system_generated").join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let path = logs.join("transcript.jsonl");
+
+        fs::write(
+            &path,
+            concat!(
+                "{\"step_index\":1,\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:00Z\",\"content\":\"refactor the code\"}\n",
+                "{\"step_index\":2,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:05Z\",\"thinking\":\"pondering deep architecture decisions\",\"content\":\"done\",\"input_tokens\":500,\"output_tokens\":50,\"cache_read_tokens\":100,\"tool_calls\":[{\"name\":\"replace_file_content\",\"args\":{\"TargetContent\":\"line1\\nline2\",\"ReplacementContent\":\"newLine1\\nnewLine2\\nnewLine3\"}},{\"name\":\"write_to_file\",\"args\":{\"CodeContent\":\"a\\nb\\nc\\nd\"}}]}\n",
+            ),
+        )
+        .unwrap();
+
+        let mut cur = Cursor::default();
+        let events = ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        let usage = events.iter().find(|e| e.k == "usage").unwrap();
+        // Thinking text "pondering deep architecture decisions" has 37 chars -> ~10 estimated tokens
+        assert!(usage.tr > 0, "Reasoning tokens must be > 0: {}", usage.tr);
+        assert_eq!(cur.lines_removed, 2);
+        assert_eq!(cur.lines_added, 3 + 4);
+        let _ = fs::remove_dir_all(&scratch_dir);
+    }
+
+    #[test]
+    fn claude_estimates_reasoning_and_tracks_tool_code_delta() {
+        let dir = scratch("claude_delta");
+        let path = dir.join("proj.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"user\",\"timestamp\":\"2026-04-30T22:09:20Z\",\"message\":{\"content\":\"fix bug\"}}\n",
+                "{\"type\":\"assistant\",\"timestamp\":\"2026-04-30T22:09:30Z\",\"message\":{\"id\":\"m1\",\"model\":\"claude-3-7-sonnet\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"analyzing the root cause here\"},{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{\"old_string\":\"bad line\",\"new_string\":\"fixed line 1\\nfixed line 2\"}}],\"usage\":{\"input_tokens\":120,\"output_tokens\":40,\"cache_read_input_tokens\":500,\"cache_creation_input_tokens\":0}}}\n",
+            ),
+        )
+        .unwrap();
+
+        let mut cur = Cursor::default();
+        let events = ingest(CliKind::Claude, &path, &mut cur, 0);
+        let usage = events.iter().find(|e| e.k == "usage").unwrap();
+        assert!(usage.tr > 0, "Reasoning tokens must be > 0: {}", usage.tr);
+        assert_eq!(cur.lines_removed, 1);
+        assert_eq!(cur.lines_added, 2);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

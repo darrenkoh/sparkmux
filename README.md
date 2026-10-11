@@ -1,12 +1,22 @@
 # sparkmux
 
-A desktop app that **launches and owns** a private tmux server, then shows **tiled real terminals** — one xterm.js view per pane — laid out from tmux itself.
+A desktop app that **launches and owns** a private tmux server, then shows **tiled real terminals** — one xterm.js view per pane — laid out from tmux itself, paired with **real-time AI agent telemetry** and an interactive **3D Area Map**.
 
 Works on Apple Silicon macOS and NVIDIA DGX Spark (ARM64 Ubuntu 24.04). Requires **tmux 3.2+**.
 
-Your default tmux server is never touched. sparkmux uses `-L sparkmux`.
+Your default tmux server is never touched. sparkmux strictly uses `-L sparkmux`.
 
 ![Sparkmux desktop](docs/screenshot.png)
+
+![Sparkmux Area Map & Telemetry HUD](docs/stats-preview.png)
+
+## Highlights
+
+- **Private tmux Server**: App owns `-L sparkmux`. Tiled xterm.js real terminals rendered strictly matching tmux `window_layout`.
+- **AI Agent Intelligence & Telemetry**: Live, read-only follower for **Google Antigravity CLI** (`agy`), **Claude Code CLI**, and **Grok Build CLI**.
+- **3D Topographical Area Map**: WebGL2 interactive island landscape with irregular coastlines, elevation ridges visualizing session channels (`[USER]`, `[THINK]`, `[REPLY]`, `[TOOL]`), marching squares contours, and particle fields. Can be explored in the full HUD or docked to the bottom right of the terminal workspace.
+- **Neural Telemetry HUD**: Sci-Fi telemetry dashboard featuring a live neural cortex brain with firing synapses, **Token Spectrum** distribution (input, output, cached, and reasoning tokens), **Code Delta** (`+added / -removed`), action/tool execution matrix with latency and errors, and a filtered **Event Stream Log**.
+- **Command Helper**: Embedded local LLM (Qwen GGUF) for natural-language shell command assistance directly on your command line via `Ask`.
 
 ## Install
 
@@ -97,6 +107,9 @@ Flag > env (`SPARKMUX_TMUX`) > config file > default.
 
 - Sidebar: sessions / windows / panes of `-L sparkmux` only. Drag the sash to resize; the header icon or hover chevron hides it. A pip marks hidden windows with bell or activity.
 - Main: tiled xterm.js matching `window_layout`. Typing goes to the focused pane.
+- Output & AI Follower: Click **Output** on the status bar to view agent steps side-by-side with your terminal in real-time.
+- Stats HUD & Area Map: Click **Stats** on the status bar to open the full-screen 3D topographical island HUD, or **Dock** the interactive map to the bottom right of the terminal workspace.
+- Command Helper (`Ask`): Provides natural-language shell completions from a local GGUF model without touching external services.
 - File → New Session… creates that name only (does not also create `main`).
 - File → New Tab (⌘T) adds a window in the attached session.
 - Paste with ⌘V (macOS) or Ctrl+Shift+V (Linux).
