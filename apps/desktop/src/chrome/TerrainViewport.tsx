@@ -181,14 +181,14 @@ const persistentCam = {
   target: [0, 1.2, 0] as [number, number, number],
 };
 
-export type BaseShape = "rect" | "wave" | "island";
+export type BaseShape = "rect" | "globe";
 
 const STORAGE_KEY_BASE_SHAPE = "sparkmux_area_map_base_shape";
 
 function getInitialBaseShape(): BaseShape {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_BASE_SHAPE);
-    if (saved === "rect" || saved === "wave" || saved === "island") {
+    if (saved === "rect" || saved === "globe") {
       return saved;
     }
   } catch {}
@@ -337,59 +337,35 @@ export default function TerrainViewport({
     // Channel lane positions along Z
     const zLanes = [-6.75, -2.25, 2.25, 6.75]; // USER, THINK, REPLY, TOOL
 
-    // Scale mountain ridges so peaks naturally reach ~2.4 - 2.8 on the 3.0 altitude ruler
-    let maxMetric = 0.5;
+    // Dynamic Summit Metric Scaling:
+    // Scale mountain ridges dynamically with session activity volume.
+    // Base ceiling starts at 4.2 for rich relief and scales dynamically up to 8.0+ as metrics surge!
+    let maxMetric = 1;
     for (const pt of dataPoints) {
       maxMetric = Math.max(maxMetric, pt.user, pt.think, pt.reply, pt.tool);
     }
-    const heightScale = 2.4 / Math.log1p(Math.max(1, maxMetric));
+    // Dynamic max ceiling: scales from 4.0 up to 8.5 with high token/turn volumes
+    const maxAltitude = Math.min(8.5, Math.max(4.0, 3.2 + Math.log10(Math.max(1, maxMetric)) * 1.5));
+    const heightScale = (maxAltitude * 0.88) / Math.log1p(Math.max(1, maxMetric));
 
     // -------------------------------------------------------------------------
     // Base Boundary Definitions & Geometry:
-    // 1. "rect"  : Clean rectangular coordinate matrix ([-14, 14] x [-9, 9])
-    // 2. "wave"  : Rectangular core telemetry platform ([-14, 14] x [-9, 9]),
-    //              extending outward across the background ([-24, 24] x [-16, 16])
-    //              with concentric water ripples like a drop falling into a calm pool.
-    // 3. "island": Organic irregular island with fractal bays & coves ([-17.5, 17.5] x [-11.5, 11.5])
+    // 1. "rect" : Clean rectangular coordinate matrix ([-14, 14] x [-9, 9])
+    // 2. "globe": Big circular spherical dome base with radial planetoid coordinates (Radius = 18.0)
     // -------------------------------------------------------------------------
     const RECT_HX = 14.0;
     const RECT_HZ = 9.0;
+    const GLOBE_RADIUS = 18.0;
 
-    // Extended background domain for the WAVE water pool ripples:
-    const WAVE_EXT_HX = 24.0;
-    const WAVE_EXT_HZ = 16.0;
-
-    // Expanded Island dimensions to prevent agent trajectory clipping at the corners:
-    const ISLAND_HX = 17.5;
-    const ISLAND_HZ = 11.5;
-
-    const getIslandRadius = (theta: number): number => {
-      let r = 1.0;
-      r += 0.12 * Math.sin(3 * theta + 0.5);
-      r += 0.08 * Math.cos(5 * theta - 0.8);
-      r += 0.05 * Math.sin(7 * theta + 1.2);
-      return Math.max(0.85, r);
-    };
-
-    // Normalized distance metric where value <= 1.0 indicates inside the shape
+    // Normalized distance metric where value <= 1.0 indicates inside the base
     const getBaseDistNorm = (x: number, z: number): number => {
       if (baseShape === "rect") {
         const nx = Math.abs(x) / RECT_HX;
         const nz = Math.abs(z) / RECT_HZ;
         return Math.max(nx, nz);
-      } else if (baseShape === "wave") {
-        // Pool boundary covers the wider viewport background
-        const nx = Math.abs(x) / WAVE_EXT_HX;
-        const nz = Math.abs(z) / WAVE_EXT_HZ;
-        return Math.max(nx, nz);
       } else {
-        // Island mode
-        const nx = x / ISLAND_HX;
-        const nz = z / ISLAND_HZ;
-        const theta = Math.atan2(nz, nx);
-        const rCoast = getIslandRadius(theta);
-        const r = Math.hypot(nx, nz);
-        return r / rCoast;
+        // Globe mode: Euclidean circular radius
+        return Math.hypot(x, z) / GLOBE_RADIUS;
       }
     };
 
@@ -400,58 +376,22 @@ export default function TerrainViewport({
         return 0; // Off-platform / in surrounding space
       }
 
-      if (baseShape === "wave") {
-        const inCore = Math.abs(x) <= RECT_HX && Math.abs(z) <= RECT_HZ;
-        if (inCore) {
-          // Inside the rectangular core platform: telemetry mountain ridges
-          let val = 0.08;
-          val += 0.08 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
-          val += 0.04 * Math.sin(x * 1.8 - z * 1.2);
+      // Base shelf elevation
+      let val = 0.12;
 
-          // Visible droplet ripple undercurrent radiating through the core
-          const rad = Math.hypot(x * 0.8, z);
-          val += 0.08 * Math.sin(rad * 1.5);
+      if (baseShape === "globe") {
+        // Planetary dome curvature: convex spherical hemisphere base
+        // Drops smoothly toward zero at the circular perimeter edge
+        const sphericalDome = Math.sqrt(Math.max(0, 1.0 - Math.pow(distNorm, 2))) * 1.6;
+        val += sphericalDome;
 
-          for (let c = 0; c < 4; c++) {
-            const laneZ = zLanes[c];
-            const distZ = Math.abs(z - laneZ);
-            const zWeight = Math.exp(-Math.pow(distZ / 2.2, 2));
-
-            for (const pt of dataPoints) {
-              const ptX = pt.tNorm * (TIME_SPAN / 2 - 1.5);
-              const distX = Math.abs(x - ptX);
-              if (distX > 5.0) continue;
-
-              let rawH = 0;
-              if (c === 0) rawH = Math.log1p(pt.user) * 1.1;
-              else if (c === 1) rawH = Math.log1p(pt.think) * 0.95;
-              else if (c === 2) rawH = Math.log1p(pt.reply) * 1.05;
-              else if (c === 3) rawH = Math.log1p(pt.tool) * 0.85;
-
-              const hContrib = rawH * heightScale * Math.exp(-Math.pow(distX / 1.6, 2)) * zWeight;
-              val += hContrib;
-            }
-          }
-          return Math.max(0, val);
-        } else {
-          // Outside the rectangular core: prominent whipple water droplet waves expanding across background
-          const r = Math.hypot(x * 0.82, z * 1.08);
-          // High-visibility wave amplitude with harmonic ripple peaks and distance decay
-          const ripplePhase = r * 1.35;
-          const primaryWave = Math.sin(ripplePhase);
-          const secondaryWave = 0.35 * Math.sin(ripplePhase * 2.1 + 0.5);
-          const waveHeight = (0.28 * primaryWave + 0.10 * secondaryWave) * Math.exp(-r * 0.045);
-          const outerFade = smoothstep(1.0, 0.85, distNorm);
-          return Math.max(0, 0.04 + waveHeight * outerFade);
-        }
+        // Subtle planetary longitudinal & latitudinal ripples
+        val += 0.08 * Math.sin(x * 0.6) * Math.cos(z * 0.7);
+      } else {
+        // Rectangular terrain ripples
+        val += 0.14 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
+        val += 0.07 * Math.sin(x * 1.8 - z * 1.2);
       }
-
-      // Base gentle shelf for rect & island
-      let val = 0.08;
-
-      // Geological ripples and ridges across time and category for rich texture
-      val += 0.12 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
-      val += 0.06 * Math.sin(x * 1.8 - z * 1.2);
 
       // Accumulate Gaussian mountain ridges per channel along the Time axis
       for (let c = 0; c < 4; c++) {
@@ -476,7 +416,7 @@ export default function TerrainViewport({
       }
 
       // Smooth falloff down to base level near the boundary edges
-      const edgeFalloff = smoothstep(1.0, 0.72, distNorm);
+      const edgeFalloff = smoothstep(1.0, 0.82, distNorm);
       return Math.max(0, val * edgeFalloff);
     };
 
@@ -494,8 +434,8 @@ export default function TerrainViewport({
     let pIdx = 0;
     let attempts = 0;
     const maxAttempts = pointCount * 3;
-    const sampleExtentX = baseShape === "island" ? ISLAND_HX : baseShape === "wave" ? WAVE_EXT_HX : RECT_HX;
-    const sampleExtentZ = baseShape === "island" ? ISLAND_HZ : baseShape === "wave" ? WAVE_EXT_HZ : RECT_HZ;
+    const sampleExtentX = baseShape === "globe" ? GLOBE_RADIUS : RECT_HX;
+    const sampleExtentZ = baseShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
 
     while (pIdx < pointCount && attempts < maxAttempts) {
       attempts++;
@@ -518,45 +458,34 @@ export default function TerrainViewport({
 
       // Category color interpolation along Z
       let r = 0.2, g = 0.8, b = 0.7;
-      const inCore = Math.abs(rx) <= RECT_HX && Math.abs(rz) <= RECT_HZ;
-
-      if (baseShape === "wave" && !inCore) {
-        // Outer wave pool: aquatic cerulean cyan with luminous crests
-        const rDist = Math.hypot(rx * 0.82, rz * 1.08);
-        const waveSin = Math.sin(rDist * 1.35); // -1.0 to 1.0
-        const crestFactor = Math.max(0, waveSin); // 0.0 to 1.0
-
-        // Base water deep cyan [0.10, 0.45, 0.75] -> bright ripple crest [0.25, 0.90, 1.0]
-        r = 0.10 + 0.18 * crestFactor;
-        g = 0.42 + 0.48 * crestFactor;
-        b = 0.72 + 0.28 * crestFactor;
+      if (rz < -4.5) {
+        // USER lane: Amber / Gold
+        r = 1.0; g = 0.62; b = 0.24;
+      } else if (rz < 0.0) {
+        // THINK lane: Purple / Magenta
+        r = 0.75; g = 0.52; b = 0.98;
+      } else if (rz < 4.5) {
+        // REPLY lane: Cobalt Blue
+        r = 0.36; g = 0.58; b = 0.95;
       } else {
-        if (rz < -4.5) {
-          // USER lane: Amber / Gold
-          r = 1.0; g = 0.62; b = 0.24;
-        } else if (rz < 0.0) {
-          // THINK lane: Purple / Magenta
-          r = 0.75; g = 0.52; b = 0.98;
-        } else if (rz < 4.5) {
-          // REPLY lane: Cobalt Blue
-          r = 0.36; g = 0.58; b = 0.95;
-        } else {
-          // TOOL lane: Teal / Mint
-          r = 0.18; g = 0.84; b = 0.75;
-        }
+        // TOOL lane: Teal / Mint
+        r = 0.18; g = 0.84; b = 0.75;
       }
 
       // Coastal / perimeter glow along outer edge
       if (distNorm > 0.88) {
         const coastMix = (distNorm - 0.88) / 0.12;
-        r = r * (1 - coastMix) + 0.22 * coastMix;
-        g = g * (1 - coastMix) + 0.85 * coastMix;
+        r = r * (1 - coastMix) + (baseShape === "globe" ? 0.35 : 0.22) * coastMix;
+        g = g * (1 - coastMix) + (baseShape === "globe" ? 0.65 : 0.85) * coastMix;
         b = b * (1 - coastMix) + 0.95 * coastMix;
       }
 
-      // Summit amber elevation boost
-      if (alt > 2.8) {
-        r = 1.0; g = 0.85; b = 0.4;
+      // High mountain summit amber / golden glow
+      if (alt > maxAltitude * 0.7) {
+        const summitMix = clamp((alt - maxAltitude * 0.7) / (maxAltitude * 0.3), 0, 1);
+        r = r * (1 - summitMix) + 1.0 * summitMix;
+        g = g * (1 - summitMix) + 0.88 * summitMix;
+        b = b * (1 - summitMix) + 0.38 * summitMix;
       }
 
       posData[pIdx * 4] = rx;
@@ -601,10 +530,10 @@ export default function TerrainViewport({
     const contourVerts: number[] = [];
     const baseGridVerts: number[] = [];
 
-    const gridExtentX = baseShape === "island" ? ISLAND_HX : baseShape === "wave" ? WAVE_EXT_HX : RECT_HX;
-    const gridExtentZ = baseShape === "island" ? ISLAND_HZ : baseShape === "wave" ? WAVE_EXT_HZ : RECT_HZ;
-    const GRID_X = baseShape === "wave" ? 140 : 120;
-    const GRID_Z = baseShape === "wave" ? 96 : 80;
+    const gridExtentX = baseShape === "globe" ? GLOBE_RADIUS : RECT_HX;
+    const gridExtentZ = baseShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
+    const GRID_X = baseShape === "globe" ? 130 : 120;
+    const GRID_Z = baseShape === "globe" ? 130 : 80;
     const stepX = (gridExtentX * 2) / (GRID_X - 1);
     const stepZ = (gridExtentZ * 2) / (GRID_Z - 1);
     const elevMap = new Float32Array(GRID_X * GRID_Z);
@@ -617,10 +546,10 @@ export default function TerrainViewport({
       }
     }
 
-    // Contour thresholds every 0.18 vertical units (including low ripple tiers for wave mode)
+    // Dynamic contour thresholds scaling with the mountain altitude ceiling
     const cLevels: number[] = [];
-    const minLevel = baseShape === "wave" ? 0.08 : 0.2;
-    for (let l = minLevel; l <= 3.6; l += 0.15) {
+    const contourStep = maxAltitude / 20; // 20 contour levels across full altitude
+    for (let l = 0.25; l <= maxAltitude + 0.5; l += contourStep) {
       cLevels.push(l);
     }
 
@@ -637,7 +566,7 @@ export default function TerrainViewport({
 
         const minC = Math.min(c0, c1, c2, c3);
         const maxC = Math.max(c0, c1, c2, c3);
-        if (maxC < minLevel || minC > 3.6) continue;
+        if (maxC < 0.25 || minC > maxAltitude + 0.5) continue;
 
         for (const lvl of cLevels) {
           if (lvl < minC || lvl >= maxC) continue;
@@ -661,7 +590,7 @@ export default function TerrainViewport({
             segs.push([x0, z0 + f * stepZ]);
           }
 
-          const isMajor = Math.abs(lvl % 0.6) < 0.08;
+          const isMajor = Math.abs((lvl / contourStep) % 4) < 0.5;
           const alpha = isMajor ? 0.44 : 0.16;
 
           for (let s = 0; s + 1 < segs.length; s += 2) {
@@ -717,7 +646,7 @@ export default function TerrainViewport({
       }
     }
 
-    // High-intensity Shoreline / Platform Outer Perimeter & Concentric Wave Rings
+    // High-intensity Base Perimeter Loop
     if (baseShape === "rect") {
       // 4-sided boundary loop
       const rA = 0.75;
@@ -725,86 +654,31 @@ export default function TerrainViewport({
       baseGridVerts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
       baseGridVerts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
       baseGridVerts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
-    } else if (baseShape === "wave") {
-      // (1) Bright neon rectangular boundary bounding the core telemetry area
-      const rA = 0.88;
-      baseGridVerts.push(-RECT_HX, 0.03, -RECT_HZ, rA, RECT_HX, 0.03, -RECT_HZ, rA);
-      baseGridVerts.push(RECT_HX, 0.03, -RECT_HZ, rA, RECT_HX, 0.03, RECT_HZ, rA);
-      baseGridVerts.push(RECT_HX, 0.03, RECT_HZ, rA, -RECT_HX, 0.03, RECT_HZ, rA);
-      baseGridVerts.push(-RECT_HX, 0.03, RECT_HZ, rA, -RECT_HX, 0.03, -RECT_HZ, rA);
-
-      // (2) Dense concentric water ripple wave rings following the 3D ripple surface
-      const RING_SEGS = 120;
-      // Dense ripples every ~2.3 units from center to pool perimeter
-      const rippleRadii: number[] = [];
-      for (let r = 3.5; r <= 24.5; r += 2.3) {
-        rippleRadii.push(r);
-      }
-
-      for (const rad of rippleRadii) {
-        // High-contrast alpha for prominent crest visibility
-        const ringAlpha = clamp(0.65 * Math.exp(-rad * 0.035), 0.22, 0.65);
-        for (let s = 0; s < RING_SEGS; s++) {
-          const th0 = (s / RING_SEGS) * Math.PI * 2;
-          const th1 = ((s + 1) / RING_SEGS) * Math.PI * 2;
-          const x0 = Math.cos(th0) * (rad * 1.25);
-          const z0 = Math.sin(th0) * rad;
-          const x1 = Math.cos(th1) * (rad * 1.25);
-          const z1 = Math.sin(th1) * rad;
-          const y0 = getAlt(x0, z0) + 0.02;
-          const y1 = getAlt(x1, z1) + 0.02;
-          baseGridVerts.push(x0, y0, z0, ringAlpha, x1, y1, z1, ringAlpha);
-        }
-      }
-
-      // (3) Radial ripple rays / ribs radiating outward from the water drop epicenter
-      const RAY_COUNT = 16;
-      for (let i = 0; i < RAY_COUNT; i++) {
-        const th = (i / RAY_COUNT) * Math.PI * 2;
-        const dirX = Math.cos(th) * 1.25;
-        const dirZ = Math.sin(th);
-        let inRay = false;
-        let lastPt: [number, number, number] = [0, 0, 0];
-
-        for (let rad = 3.5; rad <= 24.0; rad += 0.5) {
-          const rx = dirX * rad;
-          const rz = dirZ * rad;
-          const inCore = Math.abs(rx) <= RECT_HX && Math.abs(rz) <= RECT_HZ;
-          const outside = getBaseDistNorm(rx, rz) <= 1.0;
-          if (outside && !inCore) {
-            const ry = getAlt(rx, rz) + 0.015;
-            if (!inRay) {
-              inRay = true;
-              lastPt = [rx, ry, rz];
-            } else {
-              baseGridVerts.push(lastPt[0], lastPt[1], lastPt[2], 0.16, rx, ry, rz, 0.16);
-              lastPt = [rx, ry, rz];
-            }
-          } else {
-            inRay = false;
-          }
-        }
-      }
-
-      // (4) Subtle outer pool boundary
-      const pA = 0.28;
-      baseGridVerts.push(-WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA, WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA);
-      baseGridVerts.push(WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA, WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA);
-      baseGridVerts.push(WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA, -WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA);
-      baseGridVerts.push(-WAVE_EXT_HX, 0.02, WAVE_EXT_HZ, pA, -WAVE_EXT_HX, 0.02, -WAVE_EXT_HZ, pA);
     } else {
-      // Glowing Island Shoreline Coastline Perimeter with irregular fractal edges
-      const COAST_SEGS = 240;
-      for (let i = 0; i < COAST_SEGS; i++) {
-        const th0 = (i / COAST_SEGS) * Math.PI * 2;
-        const th1 = ((i + 1) / COAST_SEGS) * Math.PI * 2;
-        const r0 = getIslandRadius(th0);
-        const r1 = getIslandRadius(th1);
-        const x0 = Math.cos(th0) * r0 * ISLAND_HX;
-        const z0 = Math.sin(th0) * r0 * ISLAND_HZ;
-        const x1 = Math.cos(th1) * r1 * ISLAND_HX;
-        const z1 = Math.sin(th1) * r1 * ISLAND_HZ;
-        baseGridVerts.push(x0, 0.02, z0, 0.75, x1, 0.02, z1, 0.75);
+      // GLOBE mode: Big circular spherical equator boundary rim
+      const GLOBE_SEGS = 240;
+      for (let i = 0; i < GLOBE_SEGS; i++) {
+        const th0 = (i / GLOBE_SEGS) * Math.PI * 2;
+        const th1 = ((i + 1) / GLOBE_SEGS) * Math.PI * 2;
+        const x0 = Math.cos(th0) * GLOBE_RADIUS;
+        const z0 = Math.sin(th0) * GLOBE_RADIUS;
+        const x1 = Math.cos(th1) * GLOBE_RADIUS;
+        const z1 = Math.sin(th1) * GLOBE_RADIUS;
+        baseGridVerts.push(x0, 0.02, z0, 0.85, x1, 0.02, z1, 0.85);
+      }
+
+      // Concentric latitude rings at 0.33R and 0.66R
+      for (const frac of [0.35, 0.70]) {
+        const rSub = GLOBE_RADIUS * frac;
+        for (let i = 0; i < 120; i++) {
+          const th0 = (i / 120) * Math.PI * 2;
+          const th1 = ((i + 1) / 120) * Math.PI * 2;
+          const x0 = Math.cos(th0) * rSub;
+          const z0 = Math.sin(th0) * rSub;
+          const x1 = Math.cos(th1) * rSub;
+          const z1 = Math.sin(th1) * rSub;
+          baseGridVerts.push(x0, 0.015, z0, 0.18, x1, 0.015, z1, 0.18);
+        }
       }
     }
 
@@ -994,11 +868,11 @@ export default function TerrainViewport({
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
 
-      // Upward radar sweep starting strictly at Y=0, sweeping up to 3.0, looping smoothly
+      // Upward radar sweep starting strictly at Y=0, sweeping up to maxAltitude summit, looping smoothly
       // Half-speed scan: ~9.0 seconds per cycle (rotation is independent and never resets)
       const cycleDuration = 9.0;
       const scanPhase = (elapsed / cycleDuration) % 1.0; // 0.0 -> 1.0
-      const scanAltY = scanPhase * 3.0; // starts strictly at 0.0, climbs to 3.0 summit
+      const scanAltY = scanPhase * maxAltitude; // starts strictly at 0.0, climbs to summit
       // Smooth fade out at the top 8% and fade in at bottom
       const scanFade = smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
 
@@ -1155,10 +1029,10 @@ export default function TerrainViewport({
         hud.globalAlpha = 1.0;
       }
 
-      // (D) Left Y-Axis Altitude Ruler (VALUE AXIS)
+      // (D) Left Y-Axis Altitude Ruler (VALUE AXIS) - Dynamic Scaling
       const rulerTop = 70;
       const rulerBottom = rect.height - 50;
-      const rY = (val: number) => rulerBottom - (val / 3.0) * (rulerBottom - rulerTop);
+      const rY = (val: number) => rulerBottom - (val / maxAltitude) * (rulerBottom - rulerTop);
 
       hud.strokeStyle = "rgba(255, 255, 255, 0.3)";
       hud.fillStyle = "rgba(255, 255, 255, 0.35)";
@@ -1166,22 +1040,29 @@ export default function TerrainViewport({
       hud.beginPath();
       hud.moveTo(14, rulerTop);
       hud.lineTo(14, rulerBottom);
-      for (let v = 0; v <= 3.0; v += 0.5) {
+
+      // Major step on ruler based on maxAltitude
+      const rStep = maxAltitude <= 5.0 ? 1.0 : 2.0;
+      for (let v = 0; v <= maxAltitude + 0.1; v += rStep / 2) {
         const y = rY(v);
         hud.moveTo(14, y);
-        hud.lineTo(v % 1.0 === 0 ? 24 : 18, y);
+        hud.lineTo(Math.abs(v % rStep) < 0.1 ? 24 : 18, y);
       }
       hud.stroke();
 
       hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
       hud.textAlign = 'left';
       hud.fillText("VALUE ▲", 14, rulerTop - 8);
-      for (let v = 0; v <= 3.0; v += 1.0) {
-        hud.fillText(`${Math.round(v * 10)}`, 28, rY(v));
+
+      // Value label numbers dynamically scaled to reflect true metric units
+      const topMetricVal = Math.round(maxMetric);
+      for (let v = 0; v <= maxAltitude + 0.1; v += rStep) {
+        const metricEquivalent = Math.round((v / maxAltitude) * topMetricVal);
+        hud.fillText(`${metricEquivalent}`, 28, rY(v));
       }
 
       // Active scan cursor on ruler (starts strictly at 0 at bottom, sweeps to top)
-      const cursorY = rY(clamp(scanAltY, 0, 3.0));
+      const cursorY = rY(clamp(scanAltY, 0, maxAltitude));
       hud.fillStyle = `rgba(255, 255, 255, ${0.40 + 0.60 * scanFade})`;
       hud.beginPath();
       hud.moveTo(14, cursorY);
@@ -1349,25 +1230,17 @@ export default function TerrainViewport({
             type="button"
             className={baseShape === "rect" ? "on" : ""}
             onClick={() => setBaseShape("rect")}
-            title="Rectangular matrix base"
+            title="Rectangular Cartesian matrix base"
           >
             RECT
           </button>
           <button
             type="button"
-            className={baseShape === "wave" ? "on" : ""}
-            onClick={() => setBaseShape("wave")}
-            title="Rectangular core with ripple waves extending across pool background"
+            className={baseShape === "globe" ? "on" : ""}
+            onClick={() => setBaseShape("globe")}
+            title="Circular planetary dome base"
           >
-            WAVE
-          </button>
-          <button
-            type="button"
-            className={baseShape === "island" ? "on" : ""}
-            onClick={() => setBaseShape("island")}
-            title="Organic irregular island landmass"
-          >
-            ISLAND
+            GLOBE
           </button>
         </div>
 
