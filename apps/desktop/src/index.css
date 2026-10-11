@@ -1638,23 +1638,28 @@ code {
 
 /* Radar & KPIs Panel */
 .telemetry {
-  flex: 0 0 144px;
+  flex: 0 0 164px;
 }
 .telemetry .body {
   display: grid;
-  grid-template-columns: 104px 1fr;
+  grid-template-columns: 124px 1fr;
   gap: 12px;
   align-items: center;
 }
 .radar {
-  width: 100px;
-  height: 100px;
+  width: 120px;
+  height: 120px;
   position: relative;
+  cursor: grab;
+}
+.radar:active {
+  cursor: grabbing;
 }
 .scifi-radar-canvas {
   display: block;
-  width: 100px;
-  height: 100px;
+  width: 120px;
+  height: 120px;
+  border-radius: 4px;
 }
 
 .kpis {

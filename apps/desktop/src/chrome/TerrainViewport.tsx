@@ -114,11 +114,12 @@ void main() {
   gl_PointSize = size * uDpr;
   float energy = (base * base) / (size * size);
   float twinkle = 0.84 + 0.16 * sin(uTime * (0.8 + aSeed * 2.2) + aSeed * 53.0);
-  float scan = 1.0 + 2.4 * exp(-pow((aPos.y - uScan) * 4.5, 2.0)) * step(0.04, aPos.y);
+  float scan = 1.0 + 3.2 * exp(-pow((aPos.y - uScan) * 4.2, 2.0)) * step(0.04, aPos.y);
   float fog = exp(-max(c.w - 38.0, 0.0) * 0.035);
   vA = aPos.w * energy * twinkle * scan * fog * uGain;
   vRing = smoothstep(5.0, 15.0, coc);
-  vCol = mix(vec3(1.0), aCol, uReal);
+  // Maintain vivid saturated chromaticity across the entire heightmap and scan pass
+  vCol = mix(vec3(1.0), aCol * 1.25, uReal);
 }
 `;
 
@@ -484,36 +485,36 @@ export default function TerrainViewport({
       const nx = dx / len, ny = dy / len, nz = dz / len;
       const slopeShade = 0.32 + 0.68 * Math.max(0, nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2]);
 
-      // Category color interpolation along Z
+      // Category color interpolation along Z - High-contrast vivid fluorescent hues
       let r = 0.2, g = 0.8, b = 0.7;
       if (rz < -4.5) {
-        // USER lane: Amber / Gold
-        r = 1.0; g = 0.62; b = 0.24;
+        // USER lane: Vivid Electric Amber / Coral
+        r = 1.0; g = 0.58; b = 0.12;
       } else if (rz < 0.0) {
-        // THINK lane: Purple / Magenta
-        r = 0.75; g = 0.52; b = 0.98;
+        // THINK lane: High-Chroma Cyber Purple / Neon Magenta
+        r = 0.82; g = 0.38; b = 1.0;
       } else if (rz < 4.5) {
-        // REPLY lane: Cobalt Blue
-        r = 0.36; g = 0.58; b = 0.95;
+        // REPLY lane: Vivid Cobalt / Electric Blue
+        r = 0.22; g = 0.62; b = 1.0;
       } else {
-        // TOOL lane: Teal / Mint
-        r = 0.18; g = 0.84; b = 0.75;
+        // TOOL lane: Brilliant Radiant Teal / Emerald Mint
+        r = 0.10; g = 0.95; b = 0.82;
       }
 
-      // Coastal / perimeter glow along outer edge
-      if (distNorm > 0.88) {
-        const coastMix = (distNorm - 0.88) / 0.12;
-        r = r * (1 - coastMix) + (baseShape === "globe" ? 0.35 : 0.22) * coastMix;
-        g = g * (1 - coastMix) + (baseShape === "globe" ? 0.65 : 0.85) * coastMix;
-        b = b * (1 - coastMix) + 0.95 * coastMix;
+      // Coastal / perimeter subtle neon rim glow
+      if (distNorm > 0.90) {
+        const coastMix = (distNorm - 0.90) / 0.10;
+        r = r * (1 - coastMix) + 0.35 * coastMix;
+        g = g * (1 - coastMix) + 0.75 * coastMix;
+        b = b * (1 - coastMix) + 1.00 * coastMix;
       }
 
-      // High mountain summit amber / golden glow
-      if (alt > maxAltitude * 0.7) {
-        const summitMix = clamp((alt - maxAltitude * 0.7) / (maxAltitude * 0.3), 0, 1);
-        r = r * (1 - summitMix) + 1.0 * summitMix;
-        g = g * (1 - summitMix) + 0.88 * summitMix;
-        b = b * (1 - summitMix) + 0.38 * summitMix;
+      // Summit highlight: boost brightness & glow without washing out the vivid category hue
+      if (alt > maxAltitude * 0.65) {
+        const summitMix = clamp((alt - maxAltitude * 0.65) / (maxAltitude * 0.35), 0, 1);
+        r = Math.min(1.0, r * (1.0 + 0.55 * summitMix));
+        g = Math.min(1.0, g * (1.0 + 0.55 * summitMix));
+        b = Math.min(1.0, b * (1.0 + 0.55 * summitMix));
       }
 
       posData[pIdx * 4] = rx;
