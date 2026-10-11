@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   allowanceWatchKey,
   amountLeft,
+  parseAgyUsageScreen,
   usageChips,
   usageTone,
   type LlmUsage,
@@ -163,6 +164,52 @@ test("antigravity shows each group and the tighter window", () => {
   );
   assert.equal(tighter[0].text, "Gemini 40% left · in 3h 55m");
   assert.equal(tighter[0].tone, "warn");
+});
+
+test("antigravity usage screen becomes the footer chips", () => {
+  const screen = `
+Models & Quota
+GEMINI MODELS
+  Weekly Limit Remaining
+    [bar] 76.23%
+    Refreshes in 134h 57m
+  Five Hour Limit Remaining
+    [bar] 96.10%
+    Refreshes in 4h 50m
+CLAUDE AND GPT MODELS
+  Weekly Limit Remaining
+    [bar] 48.91%
+    Refreshes in 134h 54m
+  Five Hour Limit Remaining
+    [bar] 100.00%
+    Quota available
+`;
+  const parsed = parseAgyUsageScreen(screen, NOW);
+  assert.equal(parsed?.cli, "antigravity");
+  assert.equal(parsed?.fetched_at_ms, NOW);
+  const chips = usageChips(parsed, NOW);
+  assert.deepEqual(
+    chips.map((item) => item.text),
+    ["Gemini 76% left · 135h", "Claude 49% left · 135h"],
+  );
+  assert.equal(chips[0].fill, 76.23);
+  assert.equal(chips[0].tone, "ok");
+  assert.equal(chips[1].tone, "warn");
+
+  const tighter = parseAgyUsageScreen(
+    `
+GEMINI MODELS
+  Weekly Limit Remaining
+    84%
+    Refreshes in 149h
+  Five Hour Limit Remaining
+    40%
+    Refreshes in 3h 55m
+`,
+    NOW,
+  );
+  assert.equal(usageChips(tighter, NOW)[0].text, "Gemini 40% left · in 3h 55m");
+  assert.equal(parseAgyUsageScreen("just a shell prompt\n%", NOW), null);
 });
 
 test("the poll key ignores a changing agent title", () => {

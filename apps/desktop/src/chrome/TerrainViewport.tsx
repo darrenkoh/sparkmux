@@ -73,7 +73,7 @@ function projectPoint(vp: Float32Array, p: [number, number, number], width: numb
   const y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13];
   const w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
   if (w <= 0.01) return null;
-  return [(x / w * 0.5 + 0.5) * width, (0.5 - y / w * 0.5) * height, w];
+  return [((x / w) * 0.5 + 0.5) * width, (0.5 - (y / w) * 0.5) * height, w];
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -174,6 +174,14 @@ const CHANNELS = [
   { key: "tool", label: "TOOL RUNTIME", color: [0.18, 0.84, 0.75], hex: "#2dd4bf", zIndex: 3 },
 ] as const;
 
+const zLanes = [-6.75, -2.25, 2.25, 6.75]; // USER, THINK, REPLY, TOOL
+const TIME_SPAN = 28; // X extent: -14 to +14
+const RECT_HX = 14.0;
+const RECT_HZ = 9.0;
+const GLOBE_RADIUS = 18.0;
+const POINT_COUNT = 50000;
+const LIGHT_DIR = [-0.45, 0.8, 0.4];
+
 // Persistent camera viewing angle across re-renders and view switches
 const persistentCam = {
   azimuth: 0.38,
@@ -211,6 +219,171 @@ function getInitialScanSpeed(): ScanSpeed {
 let persistentBaseShape: BaseShape = getInitialBaseShape();
 let persistentScanSpeed: ScanSpeed = getInitialScanSpeed();
 
+interface BaseParticle {
+  rx: number;
+  rz: number;
+  distNorm: number;
+  r: number;
+  g: number;
+  b: number;
+  jitterY: number;
+  shadeRand: number;
+  seed: number;
+}
+
+function getBaseDistNorm(x: number, z: number, shape: BaseShape): number {
+  if (shape === "rect") {
+    return Math.max(Math.abs(x) / RECT_HX, Math.abs(z) / RECT_HZ);
+  } else {
+    return Math.hypot(x, z) / GLOBE_RADIUS;
+  }
+}
+
+function generateBaseParticles(shape: BaseShape): BaseParticle[] {
+  const particles: BaseParticle[] = [];
+  const rng = makeRng(2077);
+  let attempts = 0;
+  const maxAttempts = POINT_COUNT * 3;
+  const sampleExtentX = shape === "globe" ? GLOBE_RADIUS : RECT_HX;
+  const sampleExtentZ = shape === "globe" ? GLOBE_RADIUS : RECT_HZ;
+
+  while (particles.length < POINT_COUNT && attempts < maxAttempts) {
+    attempts++;
+    const rx = (rng() * 2 - 1) * sampleExtentX;
+    const rz = (rng() * 2 - 1) * sampleExtentZ;
+    const distNorm = getBaseDistNorm(rx, rz, shape);
+    if (distNorm > 1.0) continue;
+
+    let r = 0.2, g = 0.8, b = 0.7;
+    if (rz < -4.5) {
+      r = 1.0; g = 0.58; b = 0.12;
+    } else if (rz < 0.0) {
+      r = 0.82; g = 0.38; b = 1.0;
+    } else if (rz < 4.5) {
+      r = 0.22; g = 0.62; b = 1.0;
+    } else {
+      r = 0.10; g = 0.95; b = 0.82;
+    }
+
+    if (distNorm > 0.90) {
+      const coastMix = (distNorm - 0.90) / 0.10;
+      r = r * (1 - coastMix) + 0.35 * coastMix;
+      g = g * (1 - coastMix) + 0.75 * coastMix;
+      b = b * (1 - coastMix) + 1.00 * coastMix;
+    }
+
+    const jitterY = (rng() - 0.5) * 0.03;
+    const shadeRand = 0.5 + 0.5 * rng();
+    const seed = rng();
+
+    particles.push({ rx, rz, distNorm, r, g, b, jitterY, shadeRand, seed });
+  }
+
+  return particles;
+}
+
+function generateBaseGridVerts(shape: BaseShape): Float32Array {
+  const verts: number[] = [];
+  const gridExtentX = shape === "globe" ? GLOBE_RADIUS : RECT_HX;
+  const gridExtentZ = shape === "globe" ? GLOBE_RADIUS : RECT_HZ;
+  const GRID_STEP = 0.35;
+  const gridLimitX = Math.round(gridExtentX);
+  const gridLimitZ = Math.round(gridExtentZ);
+
+  for (let gx = -gridLimitX; gx <= gridLimitX; gx += 2) {
+    const a = gx === 0 ? 0.35 : gx % 4 === 0 ? 0.18 : 0.07;
+    let inSeg = false;
+    let segStart = 0;
+    for (let z = -gridLimitZ; z <= gridLimitZ + 0.001; z += GRID_STEP) {
+      const inside = getBaseDistNorm(gx, z, shape) <= 1.0;
+      if (inside && !inSeg) {
+        inSeg = true;
+        segStart = z;
+      } else if (!inside && inSeg) {
+        inSeg = false;
+        verts.push(gx, 0, segStart, a, gx, 0, z - GRID_STEP, a);
+      }
+    }
+    if (inSeg) {
+      verts.push(gx, 0, segStart, a, gx, 0, gridLimitZ, a);
+    }
+  }
+
+  for (let gz = -gridLimitZ; gz <= gridLimitZ; gz += 2) {
+    const a = gz === 0 ? 0.35 : gz % 4 === 0 ? 0.18 : 0.07;
+    let inSeg = false;
+    let segStart = 0;
+    for (let x = -gridLimitX; x <= gridLimitX + 0.001; x += GRID_STEP) {
+      const inside = getBaseDistNorm(x, gz, shape) <= 1.0;
+      if (inside && !inSeg) {
+        inSeg = true;
+        segStart = x;
+      } else if (!inside && inSeg) {
+        inSeg = false;
+        verts.push(segStart, 0, gz, a, x - GRID_STEP, 0, gz, a);
+      }
+    }
+    if (inSeg) {
+      verts.push(segStart, 0, gz, a, gridLimitX, 0, gz, a);
+    }
+  }
+
+  if (shape === "rect") {
+    const rA = 0.75;
+    verts.push(-RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, -RECT_HZ, rA);
+    verts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
+    verts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
+    verts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
+  } else {
+    const GLOBE_SEGS = 240;
+    for (let i = 0; i < GLOBE_SEGS; i++) {
+      const th0 = (i / GLOBE_SEGS) * Math.PI * 2;
+      const th1 = ((i + 1) / GLOBE_SEGS) * Math.PI * 2;
+      const x0 = Math.cos(th0) * GLOBE_RADIUS;
+      const z0 = Math.sin(th0) * GLOBE_RADIUS;
+      const x1 = Math.cos(th1) * GLOBE_RADIUS;
+      const z1 = Math.sin(th1) * GLOBE_RADIUS;
+      verts.push(x0, 0.02, z0, 0.85, x1, 0.02, z1, 0.85);
+    }
+
+    for (const frac of [0.35, 0.70]) {
+      const rSub = GLOBE_RADIUS * frac;
+      for (let i = 0; i < 120; i++) {
+        const th0 = (i / 120) * Math.PI * 2;
+        const th1 = ((i + 1) / 120) * Math.PI * 2;
+        const x0 = Math.cos(th0) * rSub;
+        const z0 = Math.sin(th0) * rSub;
+        const x1 = Math.cos(th1) * rSub;
+        const z1 = Math.sin(th1) * rSub;
+        verts.push(x0, 0.015, z0, 0.18, x1, 0.015, z1, 0.18);
+      }
+    }
+  }
+
+  return new Float32Array(verts);
+}
+
+interface TerrainMeta {
+  maxAltitude: number;
+  maxMetric: number;
+  keyMilestones: Array<{
+    x: number;
+    z: number;
+    y: number;
+    label: string;
+    cat: string;
+    hex: string;
+  }>;
+  curvedSlopeTrail: Array<[number, number, number]>;
+  channelWaypoints: Array<{
+    code: string;
+    name: string;
+    color: readonly [number, number, number];
+    pos: [number, number, number];
+    val: string;
+  }>;
+}
+
 export default function TerrainViewport({
   timeline,
   activeModel,
@@ -224,14 +397,22 @@ export default function TerrainViewport({
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
   const [realism, setRealism] = useState<"mono" | "color">("color");
+  const realismRef = useRef<"mono" | "color">("color");
+  realismRef.current = realism;
+
   const [baseShape, setBaseShapeState] = useState<BaseShape>(persistentBaseShape);
+  const baseShapeRef = useRef<BaseShape>(persistentBaseShape);
+  baseShapeRef.current = baseShape;
+
   const [scanSpeed, setScanSpeedState] = useState<ScanSpeed>(persistentScanSpeed);
   const scanSpeedRef = useRef<ScanSpeed>(persistentScanSpeed);
+
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
 
   const setBaseShape = (next: BaseShape) => {
     persistentBaseShape = next;
+    baseShapeRef.current = next;
     setBaseShapeState(next);
     try {
       localStorage.setItem(STORAGE_KEY_BASE_SHAPE, next);
@@ -262,6 +443,39 @@ export default function TerrainViewport({
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
 
+  const terrainMetaRef = useRef<TerrainMeta>({
+    maxAltitude: 4.0,
+    maxMetric: 1,
+    keyMilestones: [],
+    curvedSlopeTrail: [],
+    channelWaypoints: [],
+  });
+
+  // Cached base particles for active baseShape
+  const baseParticlesRef = useRef<BaseParticle[]>(generateBaseParticles(baseShape));
+  const baseParticlesShapeRef = useRef<BaseShape>(baseShape);
+
+  // WebGL handle refs
+  const glRef = useRef<WebGL2RenderingContext | null>(null);
+  const vaoTerrainRef = useRef<WebGLVertexArrayObject | null>(null);
+  const bufTerrainPosRef = useRef<WebGLBuffer | null>(null);
+  const bufTerrainColRef = useRef<WebGLBuffer | null>(null);
+  const bufTerrainSeedRef = useRef<WebGLBuffer | null>(null);
+
+  const vaoContoursRef = useRef<WebGLVertexArrayObject | null>(null);
+  const bufContoursRef = useRef<WebGLBuffer | null>(null);
+  const contoursCountRef = useRef<number>(0);
+
+  const vaoBaseGridRef = useRef<WebGLVertexArrayObject | null>(null);
+  const bufBaseGridRef = useRef<WebGLBuffer | null>(null);
+  const baseGridCountRef = useRef<number>(0);
+
+  const progTerrainRef = useRef<WebGLProgram | null>(null);
+  const progContourRef = useRef<WebGLProgram | null>(null);
+
+  const uTRef = useRef<Record<string, WebGLUniformLocation | null>>({});
+  const uCRef = useRef<Record<string, WebGLUniformLocation | null>>({});
+
   useEffect(() => {
     if (docked) {
       autoRotateRef.current = true;
@@ -271,73 +485,41 @@ export default function TerrainViewport({
     }
   }, [autoRotate, docked]);
 
-  // Fingerprint data structure so routine polling doesn't restart WebGL or loop
-  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${realism}:${baseShape}:${docked ? "1" : "0"}`;
+  // Compute and update terrain geometry in WebGL buffers without freezing or restarting the render loop
+  const updateGeometry = () => {
+    const gl = glRef.current;
+    if (!gl) return;
 
-  useEffect(() => {
-    const glCanvas = glCanvasRef.current;
-    const hudCanvas = hudCanvasRef.current;
-    if (!glCanvas || !hudCanvas) return;
+    const currentShape = baseShapeRef.current;
+    if (baseParticlesShapeRef.current !== currentShape || baseParticlesRef.current.length === 0) {
+      baseParticlesRef.current = generateBaseParticles(currentShape);
+      baseParticlesShapeRef.current = currentShape;
 
-    const gl = glCanvas.getContext("webgl2", { antialias: true, alpha: false });
-    const hud = hudCanvas.getContext("2d");
-    if (!gl || !hud) return;
-
-    const compile = (type: number, src: string) => {
-      const s = gl.createShader(type)!;
-      gl.shaderSource(s, src);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        console.error(gl.getShaderInfoLog(s));
+      // Update seed buffer when base shape changes
+      if (bufTerrainSeedRef.current) {
+        const seedData = new Float32Array(baseParticlesRef.current.map((p) => p.seed));
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufTerrainSeedRef.current);
+        gl.bufferData(gl.ARRAY_BUFFER, seedData, gl.STATIC_DRAW);
       }
-      return s;
-    };
 
-    const link = (vs: string, fs: string) => {
-      const p = gl.createProgram()!;
-      gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
-      gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
-      gl.linkProgram(p);
-      return p;
-    };
+      // Update base grid buffer
+      if (bufBaseGridRef.current) {
+        const gridVerts = generateBaseGridVerts(currentShape);
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufBaseGridRef.current);
+        gl.bufferData(gl.ARRAY_BUFFER, gridVerts, gl.STATIC_DRAW);
+        baseGridCountRef.current = gridVerts.length / 4;
+      }
+    }
 
-    const progTerrain = link(VS_TERRAIN, FS_TERRAIN);
-    const progContour = link(VS_CONTOUR, FS_CONTOUR);
-
-    const uT = {
-      uVP: gl.getUniformLocation(progTerrain, "uVP"),
-      uTime: gl.getUniformLocation(progTerrain, "uTime"),
-      uFocus: gl.getUniformLocation(progTerrain, "uFocus"),
-      uAperture: gl.getUniformLocation(progTerrain, "uAperture"),
-      uDpr: gl.getUniformLocation(progTerrain, "uDpr"),
-      uGain: gl.getUniformLocation(progTerrain, "uGain"),
-      uScan: gl.getUniformLocation(progTerrain, "uScan"),
-      uReal: gl.getUniformLocation(progTerrain, "uReal"),
-    };
-
-    const uC = {
-      uVP: gl.getUniformLocation(progContour, "uVP"),
-      uCam: gl.getUniformLocation(progContour, "uCam"),
-      uScan: gl.getUniformLocation(progContour, "uScan"),
-      uScanAmount: gl.getUniformLocation(progContour, "uScanAmount"),
-      uColor: gl.getUniformLocation(progContour, "uColor"),
-    };
-
-    // -------------------------------------------------------------------------
-    // 3D True Axes Construction:
-    // X-Axis = Time (Session start -> end)
-    // Z-Axis = Category Label (USER -> THINK -> REPLY -> TOOL)
-    // Y-Axis = Value (Event frequency, volume, token weight)
-    // -------------------------------------------------------------------------
-    const TIME_SPAN = 28;  // X extent: -14 to +14
-    const rng = makeRng(2077);
+    const currentTimeline = timelineRef.current;
+    const currentStats = statsRef.current;
 
     // Normalize timeline points or generate structured history
     const dataPoints: Array<{ tNorm: number; user: number; think: number; reply: number; tool: number }> = [];
-    if (timeline && timeline.length > 0) {
-      timeline.forEach((pt, i) => {
+    if (currentTimeline && currentTimeline.length > 0) {
+      currentTimeline.forEach((pt, i) => {
         dataPoints.push({
-          tNorm: (i / Math.max(1, timeline.length - 1)) * 2 - 1, // -1 to +1
+          tNorm: (i / Math.max(1, currentTimeline.length - 1)) * 2 - 1, // -1 to +1
           user: pt.user_count,
           think: pt.think_count,
           reply: pt.reply_count,
@@ -345,228 +527,92 @@ export default function TerrainViewport({
         });
       });
     } else {
-      // Seed default dynamic distribution based on stats totals
       const count = 16;
       for (let i = 0; i < count; i++) {
         const t = (i / (count - 1)) * 2 - 1;
         const wave = Math.sin(i * 0.8) * 0.5 + 0.5;
         dataPoints.push({
           tNorm: t,
-          user: (stats?.user_prompts ?? 1) * (0.3 + 0.7 * wave),
-          think: (stats?.thinking_blocks ?? 2) * (0.4 + 0.6 * (1 - wave)),
-          reply: (stats?.assistant_replies ?? 1) * (0.3 + 0.5 * wave),
-          tool: (stats?.tool_calls ?? 3) * (0.2 + 0.8 * wave),
+          user: (currentStats?.user_prompts ?? 1) * (0.3 + 0.7 * wave),
+          think: (currentStats?.thinking_blocks ?? 2) * (0.4 + 0.6 * (1 - wave)),
+          reply: (currentStats?.assistant_replies ?? 1) * (0.3 + 0.5 * wave),
+          tool: (currentStats?.tool_calls ?? 3) * (0.2 + 0.8 * wave),
         });
       }
     }
 
-    // Channel lane positions along Z
-    const zLanes = [-6.75, -2.25, 2.25, 6.75]; // USER, THINK, REPLY, TOOL
-
-    // Dynamic Summit Metric Scaling:
-    // Scale mountain ridges dynamically with session activity volume.
-    // Calculate the summit height directly from peak metric volume so the mountain summit is never clipped!
     let maxMetric = 1;
     for (const pt of dataPoints) {
       maxMetric = Math.max(maxMetric, pt.user, pt.think, pt.reply, pt.tool);
     }
-    // Dynamic max ceiling: scales from 4.0 up to 8.5 with high token/turn volumes
     const maxAltitude = Math.min(8.5, Math.max(4.0, 3.2 + Math.log10(Math.max(1, maxMetric)) * 1.5));
-    // Base shelf + ripples max ~0.35 + dome (up to 1.6 on globe)
-    // Scale Gaussian peaks so that maximum peak altitude (shelf + gaussian sum) reaches maxAltitude
-    const maxGaussianHeight = Math.max(1.0, maxAltitude - (baseShape === "globe" ? 1.7 : 0.35));
+    const maxGaussianHeight = Math.max(1.0, maxAltitude - (currentShape === "globe" ? 1.7 : 0.35));
     const heightScale = (maxGaussianHeight * 0.96) / (Math.log1p(Math.max(1, maxMetric)) * 1.1);
 
-    // -------------------------------------------------------------------------
-    // Base Boundary Definitions & Geometry:
-    // 1. "rect" : Clean rectangular coordinate matrix ([-14, 14] x [-9, 9])
-    // 2. "globe": Big circular spherical dome base with radial planetoid coordinates (Radius = 18.0)
-    // -------------------------------------------------------------------------
-    const RECT_HX = 14.0;
-    const RECT_HZ = 9.0;
-    const GLOBE_RADIUS = 18.0;
+    // Precompute Gaussian peak heights and positions across all 4 channels
+    const prePeaks: Array<{
+      x: number;
+      h0: number;
+      h1: number;
+      h2: number;
+      h3: number;
+    }> = [];
+    for (const pt of dataPoints) {
+      const ptX = pt.tNorm * (TIME_SPAN / 2 - 1.5);
+      prePeaks.push({
+        x: ptX,
+        h0: Math.log1p(pt.user) * 1.1 * heightScale,
+        h1: Math.log1p(pt.think) * 0.95 * heightScale,
+        h2: Math.log1p(pt.reply) * 1.05 * heightScale,
+        h3: Math.log1p(pt.tool) * 0.85 * heightScale,
+      });
+    }
 
-    // Normalized distance metric where value <= 1.0 indicates inside the base
-    const getBaseDistNorm = (x: number, z: number): number => {
-      if (baseShape === "rect") {
-        const nx = Math.abs(x) / RECT_HX;
-        const nz = Math.abs(z) / RECT_HZ;
-        return Math.max(nx, nz);
-      } else {
-        // Globe mode: Euclidean circular radius
-        return Math.hypot(x, z) / GLOBE_RADIUS;
-      }
-    };
-
-    // Calculate height Y at any 3D coordinate (x = Time, z = Label)
+    // Fast height function with vectorized channel math
     const getAlt = (x: number, z: number): number => {
-      const distNorm = getBaseDistNorm(x, z);
-      if (distNorm >= 1.0) {
-        return 0; // Off-platform / in surrounding space
-      }
+      const distNorm = getBaseDistNorm(x, z, currentShape);
+      if (distNorm >= 1.0) return 0;
 
-      // Base shelf elevation
       let val = 0.12;
-
-      if (baseShape === "globe") {
-        // Planetary dome curvature: convex spherical hemisphere base
-        // Drops smoothly toward zero at the circular perimeter edge
-        const sphericalDome = Math.sqrt(Math.max(0, 1.0 - Math.pow(distNorm, 2))) * 1.6;
-        val += sphericalDome;
-
-        // Subtle planetary longitudinal & latitudinal ripples
+      if (currentShape === "globe") {
+        val += Math.sqrt(Math.max(0, 1.0 - distNorm * distNorm)) * 1.6;
         val += 0.08 * Math.sin(x * 0.6) * Math.cos(z * 0.7);
       } else {
-        // Rectangular terrain ripples
         val += 0.14 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
         val += 0.07 * Math.sin(x * 1.8 - z * 1.2);
       }
 
-      // Accumulate Gaussian mountain ridges per channel along the Time axis
-      for (let c = 0; c < 4; c++) {
-        const laneZ = zLanes[c];
-        const distZ = Math.abs(z - laneZ);
-        const zWeight = Math.exp(-Math.pow(distZ / 2.2, 2));
+      const zw0 = Math.exp(-((z - zLanes[0]) * (z - zLanes[0])) / 4.84);
+      const zw1 = Math.exp(-((z - zLanes[1]) * (z - zLanes[1])) / 4.84);
+      const zw2 = Math.exp(-((z - zLanes[2]) * (z - zLanes[2])) / 4.84);
+      const zw3 = Math.exp(-((z - zLanes[3]) * (z - zLanes[3])) / 4.84);
 
-        for (const pt of dataPoints) {
-          const ptX = pt.tNorm * (TIME_SPAN / 2 - 1.5);
-          const distX = Math.abs(x - ptX);
-          if (distX > 5.0) continue;
-
-          let rawH = 0;
-          if (c === 0) rawH = Math.log1p(pt.user) * 1.1;
-          else if (c === 1) rawH = Math.log1p(pt.think) * 0.95;
-          else if (c === 2) rawH = Math.log1p(pt.reply) * 1.05;
-          else if (c === 3) rawH = Math.log1p(pt.tool) * 0.85;
-
-          const hContrib = rawH * heightScale * Math.exp(-Math.pow(distX / 1.6, 2)) * zWeight;
-          val += hContrib;
-        }
+      for (let p = 0; p < prePeaks.length; p++) {
+        const peak = prePeaks[p];
+        const dx = x - peak.x;
+        const dx2 = dx * dx;
+        if (dx2 > 25.0) continue;
+        const xw = Math.exp(-dx2 / 2.56);
+        val += xw * (peak.h0 * zw0 + peak.h1 * zw1 + peak.h2 * zw2 + peak.h3 * zw3);
       }
 
-      // Smooth falloff down to base level near the boundary edges
       const edgeFalloff = smoothstep(1.0, 0.82, distNorm);
       return Math.max(0, val * edgeFalloff);
     };
 
-    // Reference directional light vector [-0.45, 0.8, 0.4]
-    const lightDir = [-0.45, 0.8, 0.4];
-
-    // -------------------------------------------------------------------------
-    // 1. High-Density 50,000 Particle Field on Active Base Platform
-    // -------------------------------------------------------------------------
-    const pointCount = 50000;
-    const posData = new Float32Array(pointCount * 4);
-    const colData = new Float32Array(pointCount * 3);
-    const seedData = new Float32Array(pointCount);
-
-    let pIdx = 0;
-    let attempts = 0;
-    const maxAttempts = pointCount * 3;
-    const sampleExtentX = baseShape === "globe" ? GLOBE_RADIUS : RECT_HX;
-    const sampleExtentZ = baseShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
-
-    while (pIdx < pointCount && attempts < maxAttempts) {
-      attempts++;
-      const rx = (rng() * 2 - 1) * sampleExtentX;
-      const rz = (rng() * 2 - 1) * sampleExtentZ;
-      const distNorm = getBaseDistNorm(rx, rz);
-      if (distNorm > 1.0) {
-        continue; // Keep particles strictly inside selected boundary
-      }
-      const alt = getAlt(rx, rz);
-
-      // Light normal calculation
-      const delta = 0.08;
-      const dx = getAlt(rx - delta, rz) - getAlt(rx + delta, rz);
-      const dz = getAlt(rx, rz - delta) - getAlt(rx, rz + delta);
-      const dy = 2 * delta;
-      const len = Math.hypot(dx, dy, dz) || 1;
-      const nx = dx / len, ny = dy / len, nz = dz / len;
-      const slopeShade = 0.32 + 0.68 * Math.max(0, nx * lightDir[0] + ny * lightDir[1] + nz * lightDir[2]);
-
-      // Category color interpolation along Z - High-contrast vivid fluorescent hues
-      let r = 0.2, g = 0.8, b = 0.7;
-      if (rz < -4.5) {
-        // USER lane: Vivid Electric Amber / Coral
-        r = 1.0; g = 0.58; b = 0.12;
-      } else if (rz < 0.0) {
-        // THINK lane: High-Chroma Cyber Purple / Neon Magenta
-        r = 0.82; g = 0.38; b = 1.0;
-      } else if (rz < 4.5) {
-        // REPLY lane: Vivid Cobalt / Electric Blue
-        r = 0.22; g = 0.62; b = 1.0;
-      } else {
-        // TOOL lane: Brilliant Radiant Teal / Emerald Mint
-        r = 0.10; g = 0.95; b = 0.82;
-      }
-
-      // Coastal / perimeter subtle neon rim glow
-      if (distNorm > 0.90) {
-        const coastMix = (distNorm - 0.90) / 0.10;
-        r = r * (1 - coastMix) + 0.35 * coastMix;
-        g = g * (1 - coastMix) + 0.75 * coastMix;
-        b = b * (1 - coastMix) + 1.00 * coastMix;
-      }
-
-      // Summit highlight: boost brightness & glow without washing out the vivid category hue
-      if (alt > maxAltitude * 0.65) {
-        const summitMix = clamp((alt - maxAltitude * 0.65) / (maxAltitude * 0.35), 0, 1);
-        r = Math.min(1.0, r * (1.0 + 0.55 * summitMix));
-        g = Math.min(1.0, g * (1.0 + 0.55 * summitMix));
-        b = Math.min(1.0, b * (1.0 + 0.55 * summitMix));
-      }
-
-      posData[pIdx * 4] = rx;
-      posData[pIdx * 4 + 1] = alt + (rng() - 0.5) * 0.03;
-      posData[pIdx * 4 + 2] = rz;
-      posData[pIdx * 4 + 3] = (0.5 + 0.5 * rng()) * slopeShade;
-
-      colData[pIdx * 3] = r * slopeShade;
-      colData[pIdx * 3 + 1] = g * slopeShade;
-      colData[pIdx * 3 + 2] = b * slopeShade;
-
-      seedData[pIdx] = rng();
-      pIdx++;
-    }
-
-    const vaoTerrain = gl.createVertexArray()!;
-    gl.bindVertexArray(vaoTerrain);
-
-    const bPos = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, bPos);
-    gl.bufferData(gl.ARRAY_BUFFER, posData.subarray(0, pIdx * 4), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0);
-
-    const bCol = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, bCol);
-    gl.bufferData(gl.ARRAY_BUFFER, colData.subarray(0, pIdx * 3), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
-
-    const bSeed = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, bSeed);
-    gl.bufferData(gl.ARRAY_BUFFER, seedData.subarray(0, pIdx), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(2);
-    gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 0, 0);
-
-    gl.bindVertexArray(null);
-
-    // -------------------------------------------------------------------------
-    // 2. High-Density Marching Squares Contours across the 3D Grid
-    // -------------------------------------------------------------------------
-    const contourVerts: number[] = [];
-    const baseGridVerts: number[] = [];
-
-    const gridExtentX = baseShape === "globe" ? GLOBE_RADIUS : RECT_HX;
-    const gridExtentZ = baseShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
-    const GRID_X = baseShape === "globe" ? 190 : 180;
-    const GRID_Z = baseShape === "globe" ? 190 : 120;
+    // 1. Grid Elevation Map
+    const gridExtentX = currentShape === "globe" ? GLOBE_RADIUS : RECT_HX;
+    const gridExtentZ = currentShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
+    const GRID_X = currentShape === "globe" ? 190 : 180;
+    const GRID_Z = currentShape === "globe" ? 190 : 120;
     const stepX = (gridExtentX * 2) / (GRID_X - 1);
     const stepZ = (gridExtentZ * 2) / (GRID_Z - 1);
-    const elevMap = new Float32Array(GRID_X * GRID_Z);
+    const invStepX = 1 / stepX;
+    const invStepZ = 1 / stepZ;
+    const minX = -gridExtentX;
+    const minZ = -gridExtentZ;
 
+    const elevMap = new Float32Array(GRID_X * GRID_Z);
     for (let gz = 0; gz < GRID_Z; gz++) {
       const cz = -gridExtentZ + gz * stepZ;
       for (let gx = 0; gx < GRID_X; gx++) {
@@ -575,12 +621,67 @@ export default function TerrainViewport({
       }
     }
 
-    // Dynamic contour thresholds scaling with the mountain altitude ceiling (Ultra-Dense 96 tiers)
-    const cLevels: number[] = [];
-    const contourStep = maxAltitude / 96; // 96 ultra-dense contour levels across full altitude
-    for (let l = 0.08; l <= maxAltitude + 1.0; l += contourStep) {
-      cLevels.push(l);
+    // 2. High-Speed Particle Evaluation from elevMap
+    const baseParticles = baseParticlesRef.current;
+    const pCount = baseParticles.length;
+    const posData = new Float32Array(pCount * 4);
+    const colData = new Float32Array(pCount * 3);
+    const summitThreshold = maxAltitude * 0.65;
+    const summitRangeInv = 1 / Math.max(0.01, maxAltitude * 0.35);
+
+    for (let i = 0; i < pCount; i++) {
+      const p = baseParticles[i];
+      const fx = (p.rx - minX) * invStepX;
+      const fz = (p.rz - minZ) * invStepZ;
+      const gx0 = clamp(Math.floor(fx), 0, GRID_X - 2);
+      const gz0 = clamp(Math.floor(fz), 0, GRID_Z - 2);
+      const tx = fx - gx0;
+      const tz = fz - gz0;
+
+      const i00 = gz0 * GRID_X + gx0;
+      const i10 = i00 + 1;
+      const i01 = i00 + GRID_X;
+      const i11 = i01 + 1;
+
+      const h00 = elevMap[i00];
+      const h10 = elevMap[i10];
+      const h01 = elevMap[i01];
+      const h11 = elevMap[i11];
+
+      const alt = (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+      const dx = (h00 - h10) * (1 - tz) + (h01 - h11) * tz;
+      const dz = (h00 - h01) * (1 - tx) + (h10 - h11) * tx;
+      const dy = stepX * 2;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      const slopeShade = 0.32 + 0.68 * Math.max(0, (dx * LIGHT_DIR[0] + dy * LIGHT_DIR[1] + dz * LIGHT_DIR[2]) / len);
+
+      let pr = p.r, pg = p.g, pb = p.b;
+      if (alt > summitThreshold) {
+        const summitMix = clamp((alt - summitThreshold) * summitRangeInv, 0, 1);
+        const boost = 1.0 + 0.55 * summitMix;
+        pr = Math.min(1.0, pr * boost);
+        pg = Math.min(1.0, pg * boost);
+        pb = Math.min(1.0, pb * boost);
+      }
+
+      const p4 = i * 4;
+      posData[p4] = p.rx;
+      posData[p4 + 1] = alt + p.jitterY;
+      posData[p4 + 2] = p.rz;
+      posData[p4 + 3] = p.shadeRand * slopeShade;
+
+      const p3 = i * 3;
+      colData[p3] = pr * slopeShade;
+      colData[p3 + 1] = pg * slopeShade;
+      colData[p3 + 2] = pb * slopeShade;
     }
+
+    // 3. Fast Marching Squares with Range-Bounded Tier Scanning
+    const contourVerts: number[] = [];
+    const contourStep = maxAltitude / 96;
+    const invContourStep = 1 / contourStep;
+    const maxLvl = maxAltitude + 1.0;
+    const cLevelsCount = Math.floor((maxLvl - 0.08) * invContourStep) + 1;
 
     for (let gz = 0; gz < GRID_Z - 1; gz++) {
       const z0 = -gridExtentZ + gz * stepZ;
@@ -595,10 +696,13 @@ export default function TerrainViewport({
 
         const minC = Math.min(c0, c1, c2, c3);
         const maxC = Math.max(c0, c1, c2, c3);
-        if (maxC < 0.08 || minC > maxAltitude + 1.0) continue;
+        if (maxC < 0.08 || minC > maxLvl) continue;
 
-        for (const lvl of cLevels) {
-          if (lvl < minC || lvl >= maxC) continue;
+        const startLvlIdx = Math.max(0, Math.ceil((minC - 0.08) * invContourStep));
+        const endLvlIdx = Math.min(cLevelsCount - 1, Math.floor((maxC - 0.08) * invContourStep));
+
+        for (let lIdx = startLvlIdx; lIdx <= endLvlIdx; lIdx++) {
+          const lvl = 0.08 + lIdx * contourStep;
           const yLvl = lvl + 0.015;
           const segs: Array<[number, number]> = [];
 
@@ -632,106 +736,7 @@ export default function TerrainViewport({
       }
     }
 
-    // Coordinate Grid along Base Plane (Clipped to selected base boundary)
-    const GRID_STEP = 0.35;
-    const gridLimitX = Math.round(gridExtentX);
-    const gridLimitZ = Math.round(gridExtentZ);
-
-    for (let gx = -gridLimitX; gx <= gridLimitX; gx += 2) {
-      const a = gx === 0 ? 0.35 : gx % 4 === 0 ? 0.18 : 0.07;
-      let inSeg = false;
-      let segStart = 0;
-      for (let z = -gridLimitZ; z <= gridLimitZ + 0.001; z += GRID_STEP) {
-        const inside = getBaseDistNorm(gx, z) <= 1.0;
-        if (inside && !inSeg) {
-          inSeg = true;
-          segStart = z;
-        } else if (!inside && inSeg) {
-          inSeg = false;
-          baseGridVerts.push(gx, 0, segStart, a, gx, 0, z - GRID_STEP, a);
-        }
-      }
-      if (inSeg) {
-        baseGridVerts.push(gx, 0, segStart, a, gx, 0, gridLimitZ, a);
-      }
-    }
-
-    for (let gz = -gridLimitZ; gz <= gridLimitZ; gz += 2) {
-      const a = gz === 0 ? 0.35 : gz % 4 === 0 ? 0.18 : 0.07;
-      let inSeg = false;
-      let segStart = 0;
-      for (let x = -gridLimitX; x <= gridLimitX + 0.001; x += GRID_STEP) {
-        const inside = getBaseDistNorm(x, gz) <= 1.0;
-        if (inside && !inSeg) {
-          inSeg = true;
-          segStart = x;
-        } else if (!inside && inSeg) {
-          inSeg = false;
-          baseGridVerts.push(segStart, 0, gz, a, x - GRID_STEP, 0, gz, a);
-        }
-      }
-      if (inSeg) {
-        baseGridVerts.push(segStart, 0, gz, a, gridLimitX, 0, gz, a);
-      }
-    }
-
-    // High-intensity Base Perimeter Loop
-    if (baseShape === "rect") {
-      // 4-sided boundary loop
-      const rA = 0.75;
-      baseGridVerts.push(-RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, -RECT_HZ, rA);
-      baseGridVerts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
-      baseGridVerts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
-      baseGridVerts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
-    } else {
-      // GLOBE mode: Big circular spherical equator boundary rim
-      const GLOBE_SEGS = 240;
-      for (let i = 0; i < GLOBE_SEGS; i++) {
-        const th0 = (i / GLOBE_SEGS) * Math.PI * 2;
-        const th1 = ((i + 1) / GLOBE_SEGS) * Math.PI * 2;
-        const x0 = Math.cos(th0) * GLOBE_RADIUS;
-        const z0 = Math.sin(th0) * GLOBE_RADIUS;
-        const x1 = Math.cos(th1) * GLOBE_RADIUS;
-        const z1 = Math.sin(th1) * GLOBE_RADIUS;
-        baseGridVerts.push(x0, 0.02, z0, 0.85, x1, 0.02, z1, 0.85);
-      }
-
-      // Concentric latitude rings at 0.33R and 0.66R
-      for (const frac of [0.35, 0.70]) {
-        const rSub = GLOBE_RADIUS * frac;
-        for (let i = 0; i < 120; i++) {
-          const th0 = (i / 120) * Math.PI * 2;
-          const th1 = ((i + 1) / 120) * Math.PI * 2;
-          const x0 = Math.cos(th0) * rSub;
-          const z0 = Math.sin(th0) * rSub;
-          const x1 = Math.cos(th1) * rSub;
-          const z1 = Math.sin(th1) * rSub;
-          baseGridVerts.push(x0, 0.015, z0, 0.18, x1, 0.015, z1, 0.18);
-        }
-      }
-    }
-
-    const createLineVAO = (verts: number[]) => {
-      const f32 = new Float32Array(verts);
-      const vao = gl.createVertexArray()!;
-      gl.bindVertexArray(vao);
-      const buf = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-      gl.bufferData(gl.ARRAY_BUFFER, f32, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
-      gl.bindVertexArray(null);
-      return { vao, count: verts.length / 4 };
-    };
-
-    const vaoContours = createLineVAO(contourVerts);
-    const vaoBaseGrid = createLineVAO(baseGridVerts);
-
-    // -------------------------------------------------------------------------
-    // 3. Trajectory Trail Across Peaks & Slopes (Following the Curving Slope)
-    // -------------------------------------------------------------------------
+    // 4. Milestone Waypoints and Catmull-Rom Spline Trail
     const keyMilestones: Array<{
       x: number;
       z: number;
@@ -743,7 +748,6 @@ export default function TerrainViewport({
 
     dataPoints.forEach((pt, i) => {
       const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
-      // Determine dominant category for this turn
       const maxVal = Math.max(pt.user, pt.think, pt.reply, pt.tool, 0.1);
       let catIdx = 0;
       if (pt.tool === maxVal) catIdx = 3;
@@ -762,7 +766,6 @@ export default function TerrainViewport({
       });
     });
 
-    // Generate dense points following the curving slope of the terrain heightmap
     const curvedSlopeTrail: Array<[number, number, number]> = [];
     if (keyMilestones.length === 1) {
       const p = keyMilestones[0];
@@ -776,7 +779,6 @@ export default function TerrainViewport({
         const p3 = keyMilestones[Math.min(n - 1, i + 2)];
 
         const dist = Math.hypot(p2.x - p1.x, p2.z - p1.z);
-        // Dense sampling along the segment so it hugs every contour and slope
         const steps = Math.max(16, Math.ceil(dist * 8));
 
         for (let s = 0; s < steps; s++) {
@@ -784,7 +786,6 @@ export default function TerrainViewport({
           const t2 = t * t;
           const t3 = t2 * t;
 
-          // Catmull-Rom spline in the X-Z plane for smooth horizontal curving
           const cx = 0.5 * (
             (2 * p1.x) +
             (-p0.x + p2.x) * t +
@@ -798,8 +799,6 @@ export default function TerrainViewport({
             (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3
           );
 
-          // Crucial: Sample the exact terrain altitude at this coordinate so the
-          // yellow line follows the 3D curving slope instead of a straight line
           const cy = getAlt(cx, cz) + 0.06;
           curvedSlopeTrail.push([cx, cy, cz]);
         }
@@ -808,10 +807,8 @@ export default function TerrainViewport({
       curvedSlopeTrail.push([last.x, last.y, last.z]);
     }
 
-    // Landmark waypoint pins for each Channel Lane
     const channelWaypoints = CHANNELS.map((ch, idx) => {
       const zPos = zLanes[idx];
-      // Find peak along this lane
       let bestX = 0, bestY = 0;
       for (let x = -12; x <= 12; x += 0.5) {
         const y = getAlt(x, zPos);
@@ -823,18 +820,185 @@ export default function TerrainViewport({
       return {
         code: ch.key.toUpperCase(),
         name: ch.label,
-        color: ch.hex,
+        color: ch.color,
         pos: [bestX, bestY, zPos] as [number, number, number],
-        val: idx === 0 ? `${stats?.user_prompts ?? 1} PROMPTS`
-           : idx === 1 ? `${stats?.thinking_blocks ?? 2} TURNS`
-           : idx === 2 ? `${stats?.assistant_replies ?? 1} REPLIES`
-           : `${stats?.tool_calls ?? 3} CALLS`,
+        val: idx === 0 ? `${currentStats?.user_prompts ?? 1} PROMPTS`
+           : idx === 1 ? `${currentStats?.thinking_blocks ?? 2} TURNS`
+           : idx === 2 ? `${currentStats?.assistant_replies ?? 1} REPLIES`
+           : `${currentStats?.tool_calls ?? 3} CALLS`,
       };
     });
 
-    // -------------------------------------------------------------------------
-    // 4. Render Loop with 3D Axis HUD and Pin Lines
-    // -------------------------------------------------------------------------
+    // Upload newly calculated data to existing WebGL buffers
+    if (bufTerrainPosRef.current) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufTerrainPosRef.current);
+      gl.bufferData(gl.ARRAY_BUFFER, posData, gl.DYNAMIC_DRAW);
+    }
+    if (bufTerrainColRef.current) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufTerrainColRef.current);
+      gl.bufferData(gl.ARRAY_BUFFER, colData, gl.DYNAMIC_DRAW);
+    }
+    if (bufContoursRef.current) {
+      const f32Contours = new Float32Array(contourVerts);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufContoursRef.current);
+      gl.bufferData(gl.ARRAY_BUFFER, f32Contours, gl.DYNAMIC_DRAW);
+      contoursCountRef.current = contourVerts.length / 4;
+    }
+
+    terrainMetaRef.current = {
+      maxAltitude,
+      maxMetric,
+      keyMilestones,
+      curvedSlopeTrail,
+      channelWaypoints,
+    };
+  };
+
+  // Coalesce and throttle geometry recalculation so streaming events don't stutter
+  const pendingUpdateRef = useRef<number | null>(null);
+  const lastUpdateTimeRef = useRef<number>(0);
+
+  const scheduleGeometryUpdate = () => {
+    const now = performance.now();
+    const elapsed = now - lastUpdateTimeRef.current;
+    if (elapsed > 120) {
+      if (pendingUpdateRef.current !== null) {
+        window.clearTimeout(pendingUpdateRef.current);
+        pendingUpdateRef.current = null;
+      }
+      lastUpdateTimeRef.current = now;
+      updateGeometry();
+    } else if (pendingUpdateRef.current === null) {
+      pendingUpdateRef.current = window.setTimeout(() => {
+        pendingUpdateRef.current = null;
+        lastUpdateTimeRef.current = performance.now();
+        updateGeometry();
+      }, 120 - elapsed);
+    }
+  };
+
+  // Trigger geometry update when timeline, stats, or base shape changes
+  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${baseShape}`;
+  useEffect(() => {
+    scheduleGeometryUpdate();
+  }, [dataSignature]);
+
+  // Main WebGL & Render Loop Lifecycle (mounts once and stays continuous)
+  useEffect(() => {
+    const glCanvas = glCanvasRef.current;
+    const hudCanvas = hudCanvasRef.current;
+    if (!glCanvas || !hudCanvas) return;
+
+    const gl = glCanvas.getContext("webgl2", { antialias: true, alpha: false });
+    const hud = hudCanvas.getContext("2d");
+    if (!gl || !hud) return;
+    glRef.current = gl;
+
+    const compile = (type: number, src: string) => {
+      const s = gl.createShader(type)!;
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s));
+      }
+      return s;
+    };
+
+    const link = (vs: string, fs: string) => {
+      const p = gl.createProgram()!;
+      gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+      gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(p);
+      return p;
+    };
+
+    const progTerrain = link(VS_TERRAIN, FS_TERRAIN);
+    const progContour = link(VS_CONTOUR, FS_CONTOUR);
+    progTerrainRef.current = progTerrain;
+    progContourRef.current = progContour;
+
+    const uT = {
+      uVP: gl.getUniformLocation(progTerrain, "uVP"),
+      uTime: gl.getUniformLocation(progTerrain, "uTime"),
+      uFocus: gl.getUniformLocation(progTerrain, "uFocus"),
+      uAperture: gl.getUniformLocation(progTerrain, "uAperture"),
+      uDpr: gl.getUniformLocation(progTerrain, "uDpr"),
+      uGain: gl.getUniformLocation(progTerrain, "uGain"),
+      uScan: gl.getUniformLocation(progTerrain, "uScan"),
+      uReal: gl.getUniformLocation(progTerrain, "uReal"),
+    };
+    uTRef.current = uT;
+
+    const uC = {
+      uVP: gl.getUniformLocation(progContour, "uVP"),
+      uCam: gl.getUniformLocation(progContour, "uCam"),
+      uScan: gl.getUniformLocation(progContour, "uScan"),
+      uScanAmount: gl.getUniformLocation(progContour, "uScanAmount"),
+      uColor: gl.getUniformLocation(progContour, "uColor"),
+    };
+    uCRef.current = uC;
+
+    // Initialize Terrain VAO & Buffers
+    const vaoTerrain = gl.createVertexArray()!;
+    gl.bindVertexArray(vaoTerrain);
+    vaoTerrainRef.current = vaoTerrain;
+
+    const bPos = gl.createBuffer()!;
+    bufTerrainPosRef.current = bPos;
+    gl.bindBuffer(gl.ARRAY_BUFFER, bPos);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0);
+
+    const bCol = gl.createBuffer()!;
+    bufTerrainColRef.current = bCol;
+    gl.bindBuffer(gl.ARRAY_BUFFER, bCol);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+
+    const bSeed = gl.createBuffer()!;
+    bufTerrainSeedRef.current = bSeed;
+    gl.bindBuffer(gl.ARRAY_BUFFER, bSeed);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 0, 0);
+
+    const seedData = new Float32Array(baseParticlesRef.current.map((p) => p.seed));
+    gl.bufferData(gl.ARRAY_BUFFER, seedData, gl.STATIC_DRAW);
+
+    gl.bindVertexArray(null);
+
+    // Initialize Contours VAO & Buffer
+    const vaoContours = gl.createVertexArray()!;
+    const bufContours = gl.createBuffer()!;
+    vaoContoursRef.current = vaoContours;
+    bufContoursRef.current = bufContours;
+    gl.bindVertexArray(vaoContours);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufContours);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
+    gl.bindVertexArray(null);
+
+    // Initialize Base Grid VAO & Buffer
+    const vaoBaseGrid = gl.createVertexArray()!;
+    const bufBaseGrid = gl.createBuffer()!;
+    vaoBaseGridRef.current = vaoBaseGrid;
+    bufBaseGridRef.current = bufBaseGrid;
+    gl.bindVertexArray(vaoBaseGrid);
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufBaseGrid);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
+    const initialGrid = generateBaseGridVerts(baseShapeRef.current);
+    gl.bufferData(gl.ARRAY_BUFFER, initialGrid, gl.STATIC_DRAW);
+    baseGridCountRef.current = initialGrid.length / 4;
+    gl.bindVertexArray(null);
+
+    // Generate initial geometry
+    updateGeometry();
+
+    // Continuous 60 FPS Render Loop
     let animId: number;
     let fps = 60;
     let lastFpsTime = performance.now();
@@ -844,10 +1008,9 @@ export default function TerrainViewport({
       animId = requestAnimationFrame(render);
 
       const now = performance.now();
-      const interval = 1000 / 60; // 60 FPS cap
+      const interval = 1000 / 60;
       const delta = now - clockRef.current.lastRenderTime;
 
-      // Allow slight timing tolerance (2.0ms) for 60Hz display alignment
       if (delta < interval - 2.0) {
         return;
       }
@@ -864,7 +1027,6 @@ export default function TerrainViewport({
         lastFpsTime = now;
       }
 
-      // Auto-rotate continuously when enabled and not actively dragging
       if (autoRotateRef.current && !isDraggingRef.current) {
         cam.azimuth += 0.08 * Math.min(dt, 0.1);
       }
@@ -888,7 +1050,6 @@ export default function TerrainViewport({
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
 
-      // Camera view projection
       const eyeX = cam.target[0] + cam.radius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
       const eyeY = cam.target[1] + cam.radius * Math.sin(cam.elevation);
       const eyeZ = cam.target[2] + cam.radius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
@@ -897,17 +1058,18 @@ export default function TerrainViewport({
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
 
-      // Dynamic Upward radar sweep using selectable speed
-      // Base cycle duration is 9.0s for 1x
       const speedSetting = scanSpeedRef.current;
       const speedMultiplier = speedSetting === "paused" ? 0 : speedSetting === "0.25x" ? 0.25 : speedSetting === "0.5x" ? 0.5 : speedSetting === "2x" ? 2.0 : 1.0;
       if (speedMultiplier > 0) {
         clockRef.current.scanProgress = (clockRef.current.scanProgress + (dt * speedMultiplier) / 9.0) % 1.0;
       }
-      const scanPhase = clockRef.current.scanProgress; // 0.0 -> 1.0
-      const scanAltY = scanPhase * maxAltitude; // starts strictly at 0.0, climbs to summit
-      // Smooth fade out at the top 8% and fade in at bottom
+      const scanPhase = clockRef.current.scanProgress;
+      const meta = terrainMetaRef.current;
+      const maxAltitude = meta.maxAltitude;
+      const scanAltY = scanPhase * maxAltitude;
       const scanFade = speedMultiplier === 0 ? 0.8 : smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
+
+      const isMono = realismRef.current === "mono";
 
       // Draw Grid Lines
       gl.useProgram(progContour);
@@ -916,14 +1078,16 @@ export default function TerrainViewport({
       gl.uniform1f(uC.uScan, scanAltY);
       gl.uniform1f(uC.uScanAmount, 0);
       gl.uniform3f(uC.uColor, 1.0, 1.0, 1.0);
-      gl.bindVertexArray(vaoBaseGrid.vao);
-      gl.drawArrays(gl.LINES, 0, vaoBaseGrid.count);
+      gl.bindVertexArray(vaoBaseGrid);
+      gl.drawArrays(gl.LINES, 0, baseGridCountRef.current);
 
       // Draw Marching Squares Contours
-      gl.uniform1f(uC.uScanAmount, 3.0 * scanFade);
-      gl.uniform3f(uC.uColor, realism === "mono" ? 1.0 : 0.78, realism === "mono" ? 1.0 : 1.0, realism === "mono" ? 1.0 : 0.94);
-      gl.bindVertexArray(vaoContours.vao);
-      gl.drawArrays(gl.LINES, 0, vaoContours.count);
+      if (contoursCountRef.current > 0) {
+        gl.uniform1f(uC.uScanAmount, 3.0 * scanFade);
+        gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.78, isMono ? 1.0 : 1.0, isMono ? 1.0 : 0.94);
+        gl.bindVertexArray(vaoContours);
+        gl.drawArrays(gl.LINES, 0, contoursCountRef.current);
+      }
 
       // Draw 50k Particles
       gl.useProgram(progTerrain);
@@ -934,15 +1098,13 @@ export default function TerrainViewport({
       gl.uniform1f(uT.uDpr, dpr);
       gl.uniform1f(uT.uGain, 0.44);
       gl.uniform1f(uT.uScan, scanAltY);
-      gl.uniform1f(uT.uReal, realism === "mono" ? 0.0 : 1.0);
+      gl.uniform1f(uT.uReal, isMono ? 0.0 : 1.0);
 
       gl.bindVertexArray(vaoTerrain);
-      gl.drawArrays(gl.POINTS, 0, pIdx);
+      gl.drawArrays(gl.POINTS, 0, POINT_COUNT);
       gl.bindVertexArray(null);
 
-      // -----------------------------------------------------------------------
-      // 5. 2D HUD Canvas Overlay matching reference
-      // -----------------------------------------------------------------------
+      // 2D HUD Canvas Overlay
       hud.setTransform(dpr, 0, 0, dpr, 0, 0);
       hud.clearRect(0, 0, rect.width, rect.height);
 
@@ -952,12 +1114,11 @@ export default function TerrainViewport({
       hud.lineJoin = "round";
       hud.lineCap = "round";
 
-      // Soft glow (dialed down width: 2.8px instead of 6.0px)
       hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
       hud.lineWidth = 2.8;
       hud.beginPath();
       let first = true;
-      for (const pos of curvedSlopeTrail) {
+      for (const pos of meta.curvedSlopeTrail) {
         const sc = project(pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
@@ -965,12 +1126,11 @@ export default function TerrainViewport({
       }
       hud.stroke();
 
-      // Sharp neon core (dialed down width: 0.9px instead of 1.6px)
       hud.strokeStyle = "rgba(255, 195, 55, 0.95)";
       hud.lineWidth = 0.9;
       hud.beginPath();
       first = true;
-      for (const pos of curvedSlopeTrail) {
+      for (const pos of meta.curvedSlopeTrail) {
         const sc = project(pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
@@ -978,8 +1138,7 @@ export default function TerrainViewport({
       }
       hud.stroke();
 
-      // Milestone waypoint dots along the slope
-      for (const m of keyMilestones) {
+      for (const m of meta.keyMilestones) {
         const sc = project([m.x, m.y, m.z]);
         if (!sc) continue;
         hud.fillStyle = "rgba(255, 215, 75, 0.95)";
@@ -992,7 +1151,6 @@ export default function TerrainViewport({
       hud.save();
       hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
 
-      // X-Axis: TIME
       const tStart = project([-13, 0, -10.5]);
       const tEnd = project([13, 0, -10.5]);
       if (tStart && tEnd) {
@@ -1003,7 +1161,6 @@ export default function TerrainViewport({
         hud.fillText("SESSION LATEST ►", tEnd[0], tEnd[1]);
       }
 
-      // Z-Axis: Channel Category Names along the front margin
       CHANNELS.forEach((ch, idx) => {
         const sc = project([-14.5, 0, zLanes[idx]]);
         if (sc) {
@@ -1014,15 +1171,15 @@ export default function TerrainViewport({
       });
       hud.restore();
 
-      // (C) Waypoint Target Pins with Leader Lines rising to labels
-      for (const node of channelWaypoints) {
+      // (C) Waypoint Target Pins with Leader Lines
+      for (const node of meta.channelWaypoints) {
         const groundPt = project(node.pos);
-        // Elevate pin higher (2.6 units) so text hovers safely above mountain peaks
         const pinPt = project([node.pos[0], node.pos[1] + 2.6, node.pos[2]]);
         if (!groundPt || !pinPt) continue;
 
-        // Ground 3D target ring
-        hud.strokeStyle = node.color;
+        const rgbStr = `rgb(${Math.round(node.color[0] * 255)}, ${Math.round(node.color[1] * 255)}, ${Math.round(node.color[2] * 255)})`;
+
+        hud.strokeStyle = rgbStr;
         hud.globalAlpha = 0.50;
         hud.lineWidth = 1;
         hud.beginPath();
@@ -1036,24 +1193,21 @@ export default function TerrainViewport({
         }
         hud.stroke();
 
-        // Vertical pin leader line
         hud.globalAlpha = 0.95;
         hud.beginPath();
         hud.moveTo(groundPt[0], groundPt[1]);
         hud.lineTo(pinPt[0], pinPt[1] + 6);
         hud.stroke();
 
-        // Concentric pin head
         hud.beginPath();
         hud.arc(pinPt[0], pinPt[1], 6, 0, Math.PI * 2);
         hud.stroke();
 
-        hud.fillStyle = node.color;
+        hud.fillStyle = rgbStr;
         hud.beginPath();
         hud.arc(pinPt[0], pinPt[1], 1.8, 0, Math.PI * 2);
         hud.fill();
 
-        // Callout text label box with dark high-contrast frosted badge
         hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
         hud.textAlign = 'left';
         hud.textBaseline = 'alphabetic';
@@ -1065,22 +1219,20 @@ export default function TerrainViewport({
         const badgeX = pinPt[0] + 8 + badgeW > rect.width - 10 ? pinPt[0] - badgeW - 8 : pinPt[0] + 8;
         const badgeY = pinPt[1] - 14;
 
-        // Dark background plate preventing radar sweep / mountain lines from washing out text
         hud.fillStyle = "rgba(8, 10, 14, 0.88)";
         hud.fillRect(badgeX, badgeY, badgeW, badgeH);
         hud.strokeStyle = "rgba(255, 255, 255, 0.18)";
         hud.lineWidth = 1;
         hud.strokeRect(badgeX, badgeY, badgeW, badgeH);
 
-        // Crisp luminous text
-        hud.fillStyle = node.color;
+        hud.fillStyle = rgbStr;
         hud.fillText(titleText, badgeX + 6, badgeY + 10);
 
         hud.fillStyle = "rgba(255, 255, 255, 0.85)";
         hud.fillText(valText, badgeX + 6, badgeY + 21);
       }
 
-      // (D) Left Y-Axis Altitude Ruler (VALUE AXIS) - Dynamic Scaling
+      // (D) Left Y-Axis Altitude Ruler (VALUE AXIS)
       const rulerTop = 70;
       const rulerBottom = rect.height - 50;
       const rY = (val: number) => rulerBottom - (val / maxAltitude) * (rulerBottom - rulerTop);
@@ -1092,7 +1244,6 @@ export default function TerrainViewport({
       hud.moveTo(14, rulerTop);
       hud.lineTo(14, rulerBottom);
 
-      // Major step on ruler based on maxAltitude
       const rStep = maxAltitude <= 5.0 ? 1.0 : 2.0;
       for (let v = 0; v <= maxAltitude + 0.1; v += rStep / 2) {
         const y = rY(v);
@@ -1105,14 +1256,12 @@ export default function TerrainViewport({
       hud.textAlign = 'left';
       hud.fillText("VALUE ▲", 14, rulerTop - 8);
 
-      // Value label numbers dynamically scaled to reflect true metric units
-      const topMetricVal = Math.round(maxMetric);
+      const topMetricVal = Math.round(meta.maxMetric);
       for (let v = 0; v <= maxAltitude + 0.1; v += rStep) {
         const metricEquivalent = Math.round((v / maxAltitude) * topMetricVal);
         hud.fillText(`${metricEquivalent}`, 28, rY(v));
       }
 
-      // Active scan cursor on ruler (starts strictly at 0 at bottom, sweeps to top)
       const cursorY = rY(clamp(scanAltY, 0, maxAltitude));
       hud.fillStyle = `rgba(255, 255, 255, ${0.40 + 0.60 * scanFade})`;
       hud.beginPath();
@@ -1122,14 +1271,13 @@ export default function TerrainViewport({
       hud.closePath();
       hud.fill();
 
-      // (F) Bottom Right Telemetry Readout (left instructions handled cleanly by DOM hint)
+      // (F) Bottom Right Telemetry Readout
       if (rect.width >= 550) {
         hud.textAlign = 'right';
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
         hud.fillStyle = 'rgba(255, 255, 255, 0.40)';
         hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 12);
       }
-
     };
 
     animId = requestAnimationFrame(render);
@@ -1178,13 +1326,38 @@ export default function TerrainViewport({
 
     return () => {
       cancelAnimationFrame(animId);
+      if (pendingUpdateRef.current !== null) {
+        window.clearTimeout(pendingUpdateRef.current);
+        pendingUpdateRef.current = null;
+      }
       glCanvas.removeEventListener("pointerdown", handleDown);
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
       glCanvas.removeEventListener("wheel", handleWheel);
       glCanvas.removeEventListener("dblclick", handleDblClick);
+
+      gl.deleteProgram(progTerrain);
+      gl.deleteProgram(progContour);
+      gl.deleteVertexArray(vaoTerrain);
+      gl.deleteVertexArray(vaoContours);
+      gl.deleteVertexArray(vaoBaseGrid);
+      gl.deleteBuffer(bPos);
+      gl.deleteBuffer(bCol);
+      gl.deleteBuffer(bSeed);
+      gl.deleteBuffer(bufContours);
+      gl.deleteBuffer(bufBaseGrid);
+
+      glRef.current = null;
+      vaoTerrainRef.current = null;
+      bufTerrainPosRef.current = null;
+      bufTerrainColRef.current = null;
+      bufTerrainSeedRef.current = null;
+      vaoContoursRef.current = null;
+      bufContoursRef.current = null;
+      vaoBaseGridRef.current = null;
+      bufBaseGridRef.current = null;
     };
-  }, [dataSignature, docked]);
+  }, []);
 
   if (docked) {
     return (

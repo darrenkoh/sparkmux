@@ -46,7 +46,7 @@ import {
   DOCK_DEFAULT_WIDTH,
 } from "./chrome/DockSplitters";
 import { outputPaneForTab } from "./chrome/artifactModel";
-import { allowanceWatchKey } from "./chrome/llmUsage";
+import { allowanceWatchKey, parseAgyUsageScreen } from "./chrome/llmUsage";
 import ErrorPanel from "./chrome/ErrorPanel";
 import Splitter, {
   SIDEBAR_DEFAULT,
@@ -107,6 +107,18 @@ type Dialog =
 function namedSession(name: string | null | undefined): string | null {
   const trimmed = name?.trim() ?? "";
   return trimmed ? trimmed : null;
+}
+
+/** Lines currently painted in the pane. Antigravity quota lives on this screen. */
+function agyUsageFromTerminal(paneId: string, now: number): LlmUsage | null {
+  const term = getTerm(paneId);
+  if (!term) return null;
+  const buf = term.buffer.active;
+  const lines: string[] = [];
+  for (let row = 0; row < buf.length; row += 1) {
+    lines.push(buf.getLine(row)?.translateToString(true) ?? "");
+  }
+  return parseAgyUsageScreen(lines.join("\n"), now);
 }
 
 const FONT_MIN = 11;
@@ -946,10 +958,14 @@ export default function App() {
   const outputPane = outputPaneForTab(visibleWin, focusedPane);
   const usageCommand = outputPane?.command ?? "";
   const usageTitle = outputPane?.title ?? "";
+  const usagePaneId = outputPane?.id ?? "";
   const usageCommandRef = useRef(usageCommand);
   const usageTitleRef = useRef(usageTitle);
+  const usagePaneRef = useRef(usagePaneId);
+  const agyScreenRef = useRef<LlmUsage | null>(null);
   usageCommandRef.current = usageCommand;
   usageTitleRef.current = usageTitle;
+  usagePaneRef.current = usagePaneId;
   const allowanceKey = allowanceWatchKey(usageCommand, usageTitle);
 
   useEffect(() => {
@@ -961,16 +977,25 @@ export default function App() {
     const load = () => {
       void llmUsage(usageCommandRef.current, usageTitleRef.current)
         .then((next) => {
-          if (!cancel) setAllowance(next);
+          if (cancel) return;
+          if (next.cli === "antigravity" && next.bars.length === 0) {
+            const seen = agyUsageFromTerminal(usagePaneRef.current, Date.now());
+            if (seen) agyScreenRef.current = seen;
+            setAllowance(seen ?? agyScreenRef.current ?? next);
+            return;
+          }
+          setAllowance(next);
         })
         .catch(() => {
           if (!cancel) setAllowance(null);
         });
     };
     load();
+    const soon = window.setTimeout(load, 1_000);
     const id = window.setInterval(load, 15_000);
     return () => {
       cancel = true;
+      window.clearTimeout(soon);
       window.clearInterval(id);
     };
   }, [attachedSession, allowanceKey]);

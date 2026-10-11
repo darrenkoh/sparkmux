@@ -1,14 +1,19 @@
 //! Account allowance for the focused pane's CLI.
 //!
 //! Grok writes the weekly used percent to `~/.grok/logs/unified.jsonl`.
-//! Claude and Antigravity keep their reset meters inside the CLI process,
-//! so those bars stay empty until a local payload is handed to the parser.
-//! This module only reads. It does not open credential files or call a vendor.
+//! Claude keeps its reset meter inside the CLI process, so those bars stay
+//! empty until a local payload is handed to the parser.
+//! Antigravity prints the same table as `/usage` from `agy --print /usage`.
+//! While an agy pane is focused, that command runs at most once a minute.
+//! Its log goes to a temp file. This module does not open credential files.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::sync::{Condvar, LazyLock, Mutex};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -18,6 +23,40 @@ use crate::artifacts::{cli_kind, CliKind};
 const GROK_MARKER: &str = "billing: fetched credits config";
 const CHUNK: u64 = 256 * 1024;
 const MAX_SCAN: u64 = 8 * 1024 * 1024;
+const AGY_REFRESH_MS: i64 = 60_000;
+const AGY_PRINT_TIMEOUT: Duration = Duration::from_secs(15);
+const AGY_PRINT_STDOUT_CAP: u64 = 64 * 1024;
+
+struct AgyPrintState {
+    usage: Option<LlmUsage>,
+    attempted_at_ms: i64,
+    inflight: bool,
+}
+
+static AGY_PRINT: LazyLock<(Mutex<AgyPrintState>, Condvar)> = LazyLock::new(|| {
+    (
+        Mutex::new(AgyPrintState {
+            usage: None,
+            attempted_at_ms: 0,
+            inflight: false,
+        }),
+        Condvar::new(),
+    )
+});
+
+/// Clears the in-flight flag if a print is cancelled or panics.
+struct AgyPrintFinish<'a> {
+    lock: &'a Mutex<AgyPrintState>,
+    cv: &'a Condvar,
+}
+
+impl Drop for AgyPrintFinish<'_> {
+    fn drop(&mut self) {
+        let mut guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
+        guard.inflight = false;
+        self.cv.notify_all();
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,7 +113,12 @@ struct UsagePaths {
 
 #[tauri::command]
 pub fn llm_usage(command: String, title: String) -> LlmUsage {
-    usage_for(&command, &title, &default_paths(), now_ms())
+    let now = now_ms();
+    let usage = usage_for(&command, &title, &default_paths(), now);
+    if usage.cli.as_deref() == Some("antigravity") && usage.bars.is_empty() {
+        return agy_print_cached(now);
+    }
+    usage
 }
 
 fn default_paths() -> UsagePaths {
@@ -145,6 +189,94 @@ fn read_agy(path: Option<&Path>, now: i64) -> LlmUsage {
         usage = parsed;
     }
     usage
+}
+
+/// Last successful `agy --print /usage` table, refreshed at most once a minute.
+fn agy_print_cached(now: i64) -> LlmUsage {
+    let (lock, cv) = &*AGY_PRINT;
+    {
+        let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+        while guard.inflight {
+            guard = cv.wait(guard).unwrap_or_else(|err| err.into_inner());
+        }
+        if now.saturating_sub(guard.attempted_at_ms) < AGY_REFRESH_MS {
+            return guard
+                .usage
+                .clone()
+                .unwrap_or_else(|| LlmUsage::recognized("antigravity"));
+        }
+        guard.inflight = true;
+        guard.attempted_at_ms = now;
+    }
+    let _finish = AgyPrintFinish { lock, cv };
+    let fetched = run_agy_print(now).unwrap_or_else(|| LlmUsage::recognized("antigravity"));
+    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+    if !fetched.bars.is_empty() {
+        guard.usage = Some(fetched.clone());
+        return fetched;
+    }
+    guard.usage.clone().unwrap_or(fetched)
+}
+
+fn run_agy_print(now: i64) -> Option<LlmUsage> {
+    let bin = agy_binary()?;
+    let dir = std::env::temp_dir();
+    let log_path = dir.join("sparkmux-agy-usage.log");
+    let _ = File::create(&log_path);
+    let mut command = Command::new(bin);
+    command
+        .arg("--log-file")
+        .arg(&log_path)
+        .arg("--print")
+        .arg("/usage")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if dir.is_dir() {
+        command.current_dir(&dir);
+    }
+    let mut child = command.spawn().ok()?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= AGY_PRINT_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(_) => return None,
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    let stdout = child.stdout.take()?;
+    let mut buf = Vec::new();
+    stdout
+        .take(AGY_PRINT_STDOUT_CAP)
+        .read_to_end(&mut buf)
+        .ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut usage = parse_agy_print(&text)?;
+    usage.fetched_at_ms = Some(now);
+    Some(usage)
+}
+
+fn agy_binary() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("agy");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    let home = directories::UserDirs::new()?
+        .home_dir()
+        .join(".local/bin/agy");
+    home.is_file().then_some(home)
 }
 
 fn read_small(path: &Path) -> Option<String> {
@@ -393,6 +525,121 @@ fn bucket_label(kind: &str) -> Option<&'static str> {
         return Some("Weekly");
     }
     None
+}
+
+/// `agy --print /usage` table. A pipe prints tab-separated UTC timestamps.
+/// A terminal prints aligned columns and a local clock such as `02:32 PDT`.
+fn parse_agy_print(text: &str) -> Option<LlmUsage> {
+    let mut bars = Vec::new();
+    for line in text.lines() {
+        if let Some(bar) = parse_agy_print_line(line) {
+            bars.push(bar);
+        }
+    }
+    if bars.is_empty() {
+        return None;
+    }
+    Some(LlmUsage {
+        cli: Some("antigravity".to_string()),
+        bars,
+        fetched_at_ms: None,
+        plan: None,
+        credits_usd: None,
+    })
+}
+
+fn parse_agy_print_line(line: &str) -> Option<UsageBar> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    if line.contains('\t') {
+        let parts: Vec<&str> = line
+            .split('\t')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect();
+        if parts.len() < 3 {
+            return None;
+        }
+        let label = bucket_label(parts[1])?;
+        let percent = parse_percent_token(parts[2])?;
+        let resets_at_ms = parts.get(3).and_then(|stamp| parse_agy_stamp(stamp));
+        return Some(print_bar(parts[0], label, percent, resets_at_ms));
+    }
+    let lower = line.to_ascii_lowercase();
+    let (idx, label_len, label) = if let Some(idx) = lower.find("five hour limit remaining") {
+        (idx, "five hour limit remaining".len(), "5 hour")
+    } else {
+        let idx = lower.find("weekly limit remaining")?;
+        (idx, "weekly limit remaining".len(), "Weekly")
+    };
+    let rest = line.get(idx + label_len..)?.trim();
+    let (percent_token, stamp) = split_percent(rest)?;
+    let percent = parse_percent_token(percent_token)?;
+    Some(print_bar(
+        line.get(..idx)?.trim(),
+        label,
+        percent,
+        parse_agy_stamp(stamp),
+    ))
+}
+
+fn print_bar(group: &str, label: &str, percent: f64, resets_at_ms: Option<i64>) -> UsageBar {
+    let group = short_group(group);
+    UsageBar {
+        group: if group.is_empty() { None } else { Some(group) },
+        label: label.to_string(),
+        percent,
+        direction: UsageDirection::Remaining,
+        resets_at_ms,
+    }
+}
+
+fn split_percent(rest: &str) -> Option<(&str, &str)> {
+    let idx = rest.find('%')?;
+    Some((rest.get(..idx)?.trim(), rest.get(idx + 1..)?.trim()))
+}
+
+fn parse_percent_token(token: &str) -> Option<f64> {
+    let number = token.trim().trim_end_matches('%').trim();
+    clamp_percent(number.parse().ok()?)
+}
+
+fn parse_agy_stamp(stamp: &str) -> Option<i64> {
+    let stamp = stamp.trim();
+    if let Some(ms) = parse_rfc3339_ms(stamp) {
+        return Some(ms);
+    }
+    let mut parts = stamp.split_whitespace();
+    let date = parts.next()?;
+    let time = parts.next()?;
+    let zone = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let offset = zone_offset_min(zone)?;
+    let mut clock = time.split(':');
+    let hour: u32 = clock.next()?.parse().ok()?;
+    let minute: u32 = clock.next()?.parse().ok()?;
+    let second: u32 = match clock.next() {
+        Some(value) => value.parse().ok()?,
+        None => 0,
+    };
+    if clock.next().is_some() || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let utc = parse_rfc3339_ms(&format!("{date}T{hour:02}:{minute:02}:{second:02}Z"))?;
+    Some(utc - i64::from(offset) * 60_000)
+}
+
+fn zone_offset_min(zone: &str) -> Option<i32> {
+    match zone.trim().to_ascii_lowercase().as_str() {
+        "z" | "utc" | "gmt" => Some(0),
+        "pdt" => Some(-7 * 60),
+        "pst" => Some(-8 * 60),
+        _ => None,
+    }
 }
 
 fn bucket_reset(bucket: &Value, now: i64) -> Option<i64> {
@@ -678,6 +925,60 @@ mod tests {
         assert_eq!(agy.cli.as_deref(), Some("antigravity"));
         assert!(agy.bars.is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_print_table_is_remaining_quota() {
+        let piped = "\
+Gemini Models\tWeekly Limit Remaining\t75%\t2026-10-17T09:32:43Z
+Gemini Models\tFive Hour Limit Remaining\t86%\t2026-10-11T23:25:06Z
+Claude and GPT models\tWeekly Limit Remaining\t49%\t2026-10-17T09:29:22Z
+Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-10-11T23:53:32Z
+";
+        let usage = parse_agy_print(piped).unwrap();
+        assert_eq!(usage.cli.as_deref(), Some("antigravity"));
+        assert_eq!(usage.bars.len(), 4);
+        assert_eq!(usage.bars[0].group.as_deref(), Some("Gemini"));
+        assert_eq!(usage.bars[0].label, "Weekly");
+        assert_eq!(usage.bars[0].percent, 75.0);
+        assert_eq!(usage.bars[0].direction, UsageDirection::Remaining);
+        assert_eq!(
+            usage.bars[0].resets_at_ms,
+            parse_rfc3339_ms("2026-10-17T09:32:43Z")
+        );
+        assert_eq!(usage.bars[1].label, "5 hour");
+        assert_eq!(usage.bars[1].percent, 86.0);
+        assert_eq!(usage.bars[3].group.as_deref(), Some("Claude"));
+        assert_eq!(usage.bars[3].percent, 100.0);
+
+        let pretty = "\
+Quota:
+Gemini Models          Weekly Limit Remaining     75%   2026-10-17 02:32 PDT
+Gemini Models          Five Hour Limit Remaining  86%   2026-10-11 16:25 PDT
+Claude and GPT models  Weekly Limit Remaining     49%   2026-10-17 02:29 PDT
+Claude and GPT models  Five Hour Limit Remaining  100%  2026-10-11 16:48 PDT
+";
+        let usage = parse_agy_print(pretty).unwrap();
+        assert_eq!(usage.bars[0].percent, 75.0);
+        assert_eq!(
+            usage.bars[0].resets_at_ms,
+            parse_rfc3339_ms("2026-10-17T09:32:00Z")
+        );
+        assert_eq!(
+            usage.bars[1].resets_at_ms,
+            parse_rfc3339_ms("2026-10-11T23:25:00Z")
+        );
+        assert_eq!(usage.bars[2].group.as_deref(), Some("Claude"));
+        assert_eq!(usage.bars[2].percent, 49.0);
+        assert_eq!(
+            usage.bars[2].resets_at_ms,
+            parse_rfc3339_ms("2026-10-17T09:29:00Z")
+        );
+        assert_eq!(
+            usage.bars[3].resets_at_ms,
+            parse_rfc3339_ms("2026-10-11T23:48:00Z")
+        );
+        assert!(parse_agy_print("just a shell prompt\n%").is_none());
     }
 
     #[test]

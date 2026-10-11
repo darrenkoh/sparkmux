@@ -237,3 +237,98 @@ function clamp(percent: number): number {
   if (!Number.isFinite(percent)) return 0;
   return Math.min(100, Math.max(0, percent));
 }
+
+/**
+ * Antigravity paints quota only on its usage view. The CLI does not write
+ * that payload to disk, so the footer reads the screen text.
+ * A chat transcript returns null.
+ */
+export function parseAgyUsageScreen(text: string, now: number): LlmUsage | null {
+  const bars: UsageBar[] = [];
+  let group: string | null = null;
+  let label: string | null = null;
+  let percent: number | null = null;
+
+  const dropPending = () => {
+    label = null;
+    percent = null;
+  };
+  const push = (resetsAt: number | null) => {
+    if (label == null || percent == null) {
+      dropPending();
+      return;
+    }
+    bars.push({
+      group,
+      label,
+      percent: Math.round(percent * 100) / 100,
+      direction: "remaining",
+      resets_at_ms: resetsAt,
+    });
+    dropPending();
+  };
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (isAgyGroupHeader(line)) {
+      dropPending();
+      group = shortAgyGroup(line);
+      continue;
+    }
+    if (/^weekly limit remaining$/i.test(line)) {
+      label = "Weekly";
+      percent = null;
+      continue;
+    }
+    if (/^five hour limit remaining$/i.test(line)) {
+      label = "5 hour";
+      percent = null;
+      continue;
+    }
+    if (label && percent == null) {
+      const match = /(\d+(?:\.\d+)?)%/.exec(line);
+      if (match) {
+        percent = Number(match[1]);
+        continue;
+      }
+    }
+    if (label && percent != null && /refreshes in/i.test(line)) {
+      push(parseRefresh(line, now));
+      continue;
+    }
+    if (label && percent != null && /quota available/i.test(line)) {
+      push(null);
+    }
+  }
+
+  if (bars.length === 0) return null;
+  return {
+    cli: "antigravity",
+    bars,
+    fetched_at_ms: now,
+    plan: null,
+    credits_usd: null,
+  };
+}
+
+function isAgyGroupHeader(line: string): boolean {
+  return line.length < 48 && /models$/i.test(line) && line === line.toUpperCase();
+}
+
+function shortAgyGroup(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.includes("gemini")) return "Gemini";
+  if (lower.includes("claude")) return "Claude";
+  return (name.split(/\s+/)[0] ?? name).slice(0, 16);
+}
+
+/** `Refreshes in 134h 57m` measured from `now`. */
+function parseRefresh(line: string, now: number): number | null {
+  const match = /refreshes in\s+(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?/i.exec(line);
+  if (!match || (match[1] == null && match[2] == null)) return null;
+  const hours = match[1] ? Number(match[1]) : 0;
+  const minutes = match[2] ? Number(match[2]) : 0;
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return now + (hours * 60 + minutes) * 60_000;
+}
