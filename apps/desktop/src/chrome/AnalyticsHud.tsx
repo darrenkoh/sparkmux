@@ -243,6 +243,7 @@ export default function AnalyticsHud({
   const brainCamRef = useRef({
     rotY: 0.65,
     rotX: 0.22,
+    zoom: 1.0, // default max zoom to fill the space
     isDragging: false,
     lastX: 0,
     lastY: 0,
@@ -377,10 +378,24 @@ export default function AnalyticsHud({
       } catch {}
     };
 
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const nextZoom = brainCamRef.current.zoom * Math.exp(-e.deltaY * 0.002);
+      brainCamRef.current.zoom = Math.max(0.5, Math.min(3.5, nextZoom));
+    };
+
+    const onDblClick = () => {
+      brainCamRef.current.rotY = 0.65;
+      brainCamRef.current.rotX = 0.22;
+      brainCamRef.current.zoom = 1.0;
+    };
+
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointercancel", onPointerUp);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("dblclick", onDblClick);
 
     const render = (time: number) => {
       const ctx = canvas.getContext("2d");
@@ -401,7 +416,9 @@ export default function AnalyticsHud({
 
         const cx = cssW / 2;
         const cy = cssH / 2;
-        const radiusScale = Math.min(cssW, cssH) * 0.44;
+        // Default max zoom (0.70 factor) fills ~92% of the available viewport dimension
+        const currentZoom = brainCamRef.current.zoom ?? 1.0;
+        const radiusScale = Math.min(cssW, cssH) * 0.70 * currentZoom;
 
         const st = statsRef.current;
         const recentEvents = st?.recent_events ?? [];
@@ -526,6 +543,8 @@ export default function AnalyticsHud({
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("dblclick", onDblClick);
     };
   }, []);
 
@@ -724,7 +743,7 @@ export default function AnalyticsHud({
                     ref={radarCanvasRef}
                     className="scifi-radar-canvas"
                   />
-                  <div className="radar-hint">DRAG · ORBIT</div>
+                  <div className="radar-hint">DRAG · ORBIT &nbsp;&nbsp; WHEEL · ZOOM &nbsp;&nbsp; DBL-CLICK · RESET</div>
                 </div>
                 <div className="kpis">
                   <div>
