@@ -1793,6 +1793,33 @@ code {
   text-shadow: 0 0 6px rgba(255, 154, 60, 0.4);
 }
 
+.scifi-select {
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: #ff9a3c;
+  background: rgba(10, 10, 14, 0.95);
+  border: 1px solid rgba(255, 154, 60, 0.5);
+  padding: 3px 6px;
+  cursor: pointer;
+  outline: none;
+  border-radius: 0;
+  transition: all 0.15s ease;
+}
+.scifi-select:hover,
+.scifi-select:focus {
+  border-color: #ff9a3c;
+  background: rgba(255, 154, 60, 0.12);
+  color: #fff;
+}
+.scifi-select option {
+  background: #0d0f14;
+  color: #e9e9e9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+}
+
 /* Token Arc Gauge */
 .token-body {
   display: grid;

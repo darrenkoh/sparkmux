@@ -182,8 +182,10 @@ const persistentCam = {
 };
 
 export type BaseShape = "rect" | "globe";
+export type ScanSpeed = "0.25x" | "0.5x" | "1x" | "2x" | "paused";
 
 const STORAGE_KEY_BASE_SHAPE = "sparkmux_area_map_base_shape";
+const STORAGE_KEY_SCAN_SPEED = "sparkmux_area_map_scan_speed";
 
 function getInitialBaseShape(): BaseShape {
   try {
@@ -195,7 +197,18 @@ function getInitialBaseShape(): BaseShape {
   return "rect";
 }
 
+function getInitialScanSpeed(): ScanSpeed {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_SCAN_SPEED);
+    if (saved === "0.25x" || saved === "0.5x" || saved === "1x" || saved === "2x" || saved === "paused") {
+      return saved;
+    }
+  } catch {}
+  return "1x";
+}
+
 let persistentBaseShape: BaseShape = getInitialBaseShape();
+let persistentScanSpeed: ScanSpeed = getInitialScanSpeed();
 
 export default function TerrainViewport({
   timeline,
@@ -211,6 +224,8 @@ export default function TerrainViewport({
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
   const [realism, setRealism] = useState<"mono" | "color">("color");
   const [baseShape, setBaseShapeState] = useState<BaseShape>(persistentBaseShape);
+  const [scanSpeed, setScanSpeedState] = useState<ScanSpeed>(persistentScanSpeed);
+  const scanSpeedRef = useRef<ScanSpeed>(persistentScanSpeed);
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
 
@@ -222,10 +237,20 @@ export default function TerrainViewport({
     } catch {}
   };
 
+  const setScanSpeed = (next: ScanSpeed) => {
+    persistentScanSpeed = next;
+    scanSpeedRef.current = next;
+    setScanSpeedState(next);
+    try {
+      localStorage.setItem(STORAGE_KEY_SCAN_SPEED, next);
+    } catch {}
+  };
+
   // Per-instance clock and pointer tracking to prevent clock starvation
   const clockRef = useRef({
     startTime: performance.now(),
     lastRenderTime: performance.now(),
+    scanProgress: 0.0,
   });
   const isDraggingRef = useRef<boolean>(false);
   const lastXRef = useRef<number>(0);
@@ -546,10 +571,10 @@ export default function TerrainViewport({
       }
     }
 
-    // Dynamic contour thresholds scaling with the mountain altitude ceiling
+    // Dynamic contour thresholds scaling with the mountain altitude ceiling (Ultra-Dense 42 tiers)
     const cLevels: number[] = [];
-    const contourStep = maxAltitude / 20; // 20 contour levels across full altitude
-    for (let l = 0.25; l <= maxAltitude + 0.5; l += contourStep) {
+    const contourStep = maxAltitude / 42; // 42 dense contour levels across full altitude
+    for (let l = 0.16; l <= maxAltitude + 0.5; l += contourStep) {
       cLevels.push(l);
     }
 
@@ -566,7 +591,7 @@ export default function TerrainViewport({
 
         const minC = Math.min(c0, c1, c2, c3);
         const maxC = Math.max(c0, c1, c2, c3);
-        if (maxC < 0.25 || minC > maxAltitude + 0.5) continue;
+        if (maxC < 0.16 || minC > maxAltitude + 0.5) continue;
 
         for (const lvl of cLevels) {
           if (lvl < minC || lvl >= maxC) continue;
@@ -590,8 +615,8 @@ export default function TerrainViewport({
             segs.push([x0, z0 + f * stepZ]);
           }
 
-          const isMajor = Math.abs((lvl / contourStep) % 4) < 0.5;
-          const alpha = isMajor ? 0.44 : 0.16;
+          const isMajor = Math.abs((lvl / contourStep) % 5) < 0.5;
+          const alpha = isMajor ? 0.48 : 0.22;
 
           for (let s = 0; s + 1 < segs.length; s += 2) {
             contourVerts.push(
@@ -868,13 +893,17 @@ export default function TerrainViewport({
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
 
-      // Upward radar sweep starting strictly at Y=0, sweeping up to maxAltitude summit, looping smoothly
-      // Half-speed scan: ~9.0 seconds per cycle (rotation is independent and never resets)
-      const cycleDuration = 9.0;
-      const scanPhase = (elapsed / cycleDuration) % 1.0; // 0.0 -> 1.0
+      // Dynamic Upward radar sweep using selectable speed
+      // Base cycle duration is 9.0s for 1x
+      const speedSetting = scanSpeedRef.current;
+      const speedMultiplier = speedSetting === "paused" ? 0 : speedSetting === "0.25x" ? 0.25 : speedSetting === "0.5x" ? 0.5 : speedSetting === "2x" ? 2.0 : 1.0;
+      if (speedMultiplier > 0) {
+        clockRef.current.scanProgress = (clockRef.current.scanProgress + (dt * speedMultiplier) / 9.0) % 1.0;
+      }
+      const scanPhase = clockRef.current.scanProgress; // 0.0 -> 1.0
       const scanAltY = scanPhase * maxAltitude; // starts strictly at 0.0, climbs to summit
       // Smooth fade out at the top 8% and fade in at bottom
-      const scanFade = smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
+      const scanFade = speedMultiplier === 0 ? 0.8 : smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
 
       // Draw Grid Lines
       gl.useProgram(progContour);
@@ -984,7 +1013,8 @@ export default function TerrainViewport({
       // (C) Waypoint Target Pins with Leader Lines rising to labels
       for (const node of channelWaypoints) {
         const groundPt = project(node.pos);
-        const pinPt = project([node.pos[0], node.pos[1] + 1.8, node.pos[2]]);
+        // Elevate pin higher (2.6 units) so text hovers safely above mountain peaks
+        const pinPt = project([node.pos[0], node.pos[1] + 2.6, node.pos[2]]);
         if (!groundPt || !pinPt) continue;
 
         // Ground 3D target ring
@@ -1019,14 +1049,29 @@ export default function TerrainViewport({
         hud.arc(pinPt[0], pinPt[1], 1.8, 0, Math.PI * 2);
         hud.fill();
 
-        // Callout text label box
-        hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.fillStyle = node.color;
-        hud.fillText(`[${node.code}] ${node.name}`, pinPt[0] + 10, pinPt[1] - 4);
+        // Callout text label box with dark high-contrast frosted badge
+        hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+        const titleText = `[${node.code}] ${node.name}`;
+        const valText = `${node.val}`;
+        const textWidth = Math.max(hud.measureText(titleText).width, hud.measureText(valText).width);
+        const badgeX = pinPt[0] + 8;
+        const badgeY = pinPt[1] - 14;
+        const badgeW = textWidth + 12;
+        const badgeH = 26;
 
-        hud.globalAlpha = 0.60;
-        hud.fillText(`${node.val}`, pinPt[0] + 10, pinPt[1] + 6);
-        hud.globalAlpha = 1.0;
+        // Dark background plate preventing radar sweep / mountain lines from washing out text
+        hud.fillStyle = "rgba(8, 10, 14, 0.88)";
+        hud.fillRect(badgeX, badgeY, badgeW, badgeH);
+        hud.strokeStyle = "rgba(255, 255, 255, 0.18)";
+        hud.lineWidth = 1;
+        hud.strokeRect(badgeX, badgeY, badgeW, badgeH);
+
+        // Crisp luminous text
+        hud.fillStyle = node.color;
+        hud.fillText(titleText, badgeX + 6, badgeY + 10);
+
+        hud.fillStyle = "rgba(255, 255, 255, 0.85)";
+        hud.fillText(valText, badgeX + 6, badgeY + 21);
       }
 
       // (D) Left Y-Axis Altitude Ruler (VALUE AXIS) - Dynamic Scaling
@@ -1243,6 +1288,20 @@ export default function TerrainViewport({
             GLOBE
           </button>
         </div>
+
+        <select
+          className="scifi-select"
+          value={scanSpeed}
+          onChange={(e) => setScanSpeed(e.target.value as ScanSpeed)}
+          title="Y-Axis Vertical Scanning Speed"
+          aria-label="Y-Axis Vertical Scanning Speed"
+        >
+          <option value="0.25x">SCAN: 0.25x</option>
+          <option value="0.5x">SCAN: 0.5x</option>
+          <option value="1x">SCAN: 1x (NORM)</option>
+          <option value="2x">SCAN: 2x (FAST)</option>
+          <option value="paused">SCAN: PAUSED</option>
+        </select>
 
         <button
           type="button"
