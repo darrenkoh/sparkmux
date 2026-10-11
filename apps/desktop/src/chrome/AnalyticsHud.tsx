@@ -58,12 +58,7 @@ function generateAnatomicalBrain(): {
   };
 
   // 1. Bilateral Cerebral Hemispheres (Left & Right)
-  // Lobes mapped to categories:
-  // - Anterior / Frontal Lobe (Z > 0.15, Y > -0.15): USER (Amber #ff9a3c)
-  // - Superior / Parietal Lobe (Y > 0.22, -0.2 < Z < 0.25): THINK (Purple #c084fc)
-  // - Lateral & Posterior / Temporal & Occipital (Z < -0.05): REPLY (Blue #5b8def)
-  // - Inferior-Posterior / Cerebellum & Brainstem (Y < -0.20): TOOL (Teal #2dd4bf)
-  
+  // Generates smooth rounded cranial proportions matching human anatomy
   const CEREBRUM_COUNT = 320;
   for (let i = 0; i < CEREBRUM_COUNT; i++) {
     // Hemispherical coordinates
@@ -71,33 +66,28 @@ function generateAnatomicalBrain(): {
     const u = rnd();
     const v = rnd();
     const theta = u * Math.PI; // 0 to PI (curving over the hemisphere)
-    const phi = (v * 0.95 - 0.45) * Math.PI; // -0.45*PI to 0.5*PI
+    const phi = (v * 0.90 - 0.40) * Math.PI; // -0.40*PI to 0.50*PI
 
-    // Base anatomical ellipsoid radii for cerebrum
-    const aX = 0.48; // Half-width per hemisphere
+    // Rounded anatomical ellipsoid radii for cerebrum
+    const aX = 0.52; // Half-width per hemisphere
     const aY = 0.52; // Height
-    const aZ = 0.72; // Length (anterior to posterior)
+    const aZ = 0.60; // Length (anterior to posterior)
 
-    let bx = Math.sin(theta) * Math.cos(phi) * aX;
-    let by = Math.sin(phi) * aY + 0.12;
-    let bz = Math.cos(theta) * aZ;
+    const cosPhi = Math.cos(phi);
+    let bx = Math.sin(theta) * cosPhi * aX;
+    let by = Math.sin(phi) * aY + 0.08;
+    let bz = Math.cos(theta) * cosPhi * aZ;
 
-    // Separate hemispheres along the longitudinal fissure
-    bx = (Math.abs(bx) + 0.05) * side;
+    // Longitudinal cerebral fissure separation
+    bx = (Math.abs(bx) + 0.04) * side;
 
     // Organic Gyri & Sulci convolutions (cortical folding wrinkles)
     const sulcus =
-      0.035 * Math.sin(bx * 14.0 + bz * 10.0) * Math.cos(by * 12.0) +
-      0.025 * Math.sin(bz * 18.0) * Math.cos(bx * 10.0);
-    bx += sulcus * 0.5;
-    by += sulcus;
-    bz += sulcus * 0.5;
-
-    // Temporal lobe lower dip
-    if (bz > -0.2 && bz < 0.3 && by < 0.1) {
-      by -= 0.08;
-      bx *= 1.08;
-    }
+      0.025 * Math.sin(bx * 14.0 + bz * 10.0) * Math.cos(by * 12.0) +
+      0.020 * Math.sin(bz * 16.0) * Math.cos(bx * 10.0);
+    bx += sulcus * 0.4;
+    by += sulcus * 0.6;
+    bz += sulcus * 0.4;
 
     // Determine category based on anatomical region
     let cat: "user" | "think" | "reply" | "tool" = "reply";
@@ -106,10 +96,10 @@ function generateAnatomicalBrain(): {
     if (by < -0.15) {
       cat = "tool";
       color = "#2dd4bf";
-    } else if (bz > 0.18) {
+    } else if (bz > 0.12) {
       cat = "user";
       color = "#ff9a3c";
-    } else if (by > 0.22) {
+    } else if (by > 0.20) {
       cat = "think";
       color = "#c084fc";
     } else {
@@ -124,11 +114,11 @@ function generateAnatomicalBrain(): {
   const CEREBELLUM_COUNT = 60;
   for (let i = 0; i < CEREBELLUM_COUNT; i++) {
     const side = i % 2 === 0 ? 1 : -1;
-    const r = Math.pow(rnd(), 0.6) * 0.28;
+    const r = Math.pow(rnd(), 0.6) * 0.22;
     const ang = rnd() * Math.PI * 2;
     const cx = (0.16 + r * Math.cos(ang) * 0.7) * side;
-    const cy = -0.32 + (rnd() - 0.5) * 0.18;
-    const cz = -0.42 + r * Math.sin(ang) * 0.9;
+    const cy = -0.26 + (rnd() - 0.5) * 0.12;
+    const cz = -0.28 + r * Math.sin(ang) * 0.8;
     nodes.push({ x: cx, y: cy, z: cz, cat: "tool", color: "#2dd4bf", isCortical: false });
   }
 
@@ -136,10 +126,27 @@ function generateAnatomicalBrain(): {
   const BRAINSTEM_COUNT = 24;
   for (let i = 0; i < BRAINSTEM_COUNT; i++) {
     const t = i / (BRAINSTEM_COUNT - 1); // 0 at top, 1 at bottom
-    const sy = -0.18 - t * 0.42;
-    const sx = (rnd() - 0.5) * (0.10 - t * 0.04);
-    const sz = -0.12 - t * 0.10 + (rnd() - 0.5) * 0.06;
+    const sy = -0.20 - t * 0.24;
+    const sx = (rnd() - 0.5) * (0.08 - t * 0.03);
+    const sz = -0.10 - t * 0.08 + (rnd() - 0.5) * 0.04;
     nodes.push({ x: sx, y: sy, z: sz, cat: "tool", color: "#2dd4bf", isCortical: false });
+  }
+
+  // Center the entire neural mesh strictly at the origin (0, 0, 0)
+  // This guarantees smooth, concentric rotation without eccentric orbit or wobble
+  let sumX = 0, sumY = 0, sumZ = 0;
+  for (const n of nodes) {
+    sumX += n.x;
+    sumY += n.y;
+    sumZ += n.z;
+  }
+  const cX = sumX / nodes.length;
+  const cY = sumY / nodes.length;
+  const cZ = sumZ / nodes.length;
+  for (const n of nodes) {
+    n.x -= cX;
+    n.y -= cY;
+    n.z -= cZ;
   }
 
   // 4. Generate Dense Connectome Fiber Tracts (axon pathways)
@@ -296,7 +303,7 @@ export default function AnalyticsHud({
 
         const cx = cssW / 2;
         const cy = cssH / 2;
-        const radiusScale = (cssW / 2) * 0.92;
+        const radiusScale = (cssW / 2) * 0.88;
 
         const st = statsRef.current;
         const recentEvents = st?.recent_events ?? [];
@@ -329,7 +336,7 @@ export default function AnalyticsHud({
           const y2 = y * cosX - z1 * sinX;
           const z2 = y * sinX + z1 * cosX;
 
-          const perspective = 2.4 / (2.4 + z2);
+          const perspective = 3.6 / (3.6 + z2);
           const sx = cx + x1 * radiusScale * perspective;
           const sy = cy - y2 * radiusScale * perspective;
           return { sx, sy, sz: z2, perspective };

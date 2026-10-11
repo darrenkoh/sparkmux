@@ -1055,13 +1055,15 @@ export default function TerrainViewport({
 
         // Callout text label box with dark high-contrast frosted badge
         hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+        hud.textAlign = 'left';
+        hud.textBaseline = 'alphabetic';
         const titleText = `[${node.code}] ${node.name}`;
         const valText = `${node.val}`;
         const textWidth = Math.max(hud.measureText(titleText).width, hud.measureText(valText).width);
-        const badgeX = pinPt[0] + 8;
-        const badgeY = pinPt[1] - 14;
         const badgeW = textWidth + 12;
         const badgeH = 26;
+        const badgeX = pinPt[0] + 8 + badgeW > rect.width - 10 ? pinPt[0] - badgeW - 8 : pinPt[0] + 8;
+        const badgeY = pinPt[1] - 14;
 
         // Dark background plate preventing radar sweep / mountain lines from washing out text
         hud.fillStyle = "rgba(8, 10, 14, 0.88)";
@@ -1119,28 +1121,6 @@ export default function TerrainViewport({
       hud.lineTo(8, cursorY + 4);
       hud.closePath();
       hud.fill();
-
-      // (E) Right Matrix of Recent Events
-      if (rect.width >= 700) {
-        hud.textAlign = 'right';
-        hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
-        const recentEvs = statsRef.current?.recent_events ?? [];
-        if (recentEvs.length > 0) {
-          const sliceEvs = recentEvs.slice(0, 25);
-          sliceEvs.forEach((ev, i) => {
-            const lineY = rect.height / 2 + (i - Math.floor(sliceEvs.length / 2)) * 15;
-            const isLatest = i === 0;
-            const tagCol = ev.k === "user" ? "#ff9a3c" : ev.k === "think" ? "#c084fc" : ev.k === "reply" ? "#5b8def" : "#2dd4bf";
-            hud.fillStyle = isLatest ? tagCol : `rgba(255, 255, 255, ${0.32 - i * 0.01})`;
-            const preview = ev.n || ev.a || ev.b || `${ev.k.toUpperCase()}`;
-            hud.fillText(
-              `${new Date(ev.t).toLocaleTimeString()}  [${ev.k.toUpperCase()}]  ${preview.slice(0, 18)}  ${ev.ms ? `${ev.ms}ms` : ""}`,
-              rect.width - 16,
-              lineY
-            );
-          });
-        }
-      }
 
       // (F) Bottom Right Telemetry Readout (left instructions handled cleanly by DOM hint)
       if (rect.width >= 550) {

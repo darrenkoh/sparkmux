@@ -1788,6 +1788,7 @@ code {
 }
 .scifi-viewport-mode button,
 .scifi-btn-toggle {
+  position: relative;
   font: inherit;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 8px;
@@ -1800,12 +1801,13 @@ code {
   transition: all 0.15s ease;
 }
 .scifi-viewport-mode button + button {
-  border-left: none;
+  margin-left: -1px;
 }
 .scifi-viewport-mode button:hover,
 .scifi-btn-toggle:hover {
   color: #fff;
   border-color: rgba(255, 255, 255, 0.4);
+  z-index: 1;
 }
 .scifi-viewport-mode button.on,
 .scifi-btn-toggle.on {
@@ -1813,6 +1815,7 @@ code {
   border-color: #ff9a3c;
   background: rgba(255, 154, 60, 0.15);
   text-shadow: 0 0 6px rgba(255, 154, 60, 0.4);
+  z-index: 2;
 }
 
 .scifi-select {
