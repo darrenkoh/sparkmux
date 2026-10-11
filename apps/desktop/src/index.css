@@ -1543,13 +1543,72 @@ code {
   color: #ff9a3c;
 }
 
-/* 3-Column Grid */
+/* 3-Column Grid with Draggable Left Splitter */
 .scifi-content {
   display: grid;
-  grid-template-columns: 310px 1fr 340px;
-  gap: 12px;
+  grid-template-columns: 340px 8px 1fr 340px;
+  gap: 6px;
   min-height: 0;
   height: 100%;
+}
+
+.scifi-splitter-v {
+  width: 8px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.scifi-splitter-v:hover,
+.scifi-splitter-v.dragging {
+  background: rgba(255, 154, 60, 0.14);
+}
+.scifi-splitter-v::after {
+  content: "";
+  width: 1px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.14);
+  transition: all 0.15s ease;
+}
+.scifi-splitter-v:hover::after,
+.scifi-splitter-v.dragging::after {
+  background: #ff9a3c;
+  box-shadow: 0 0 8px rgba(255, 154, 60, 0.7);
+}
+
+.scifi-splitter-h {
+  height: 8px;
+  cursor: row-resize;
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+.scifi-splitter-h:hover,
+.scifi-splitter-h.dragging {
+  background: rgba(255, 154, 60, 0.14);
+}
+.scifi-splitter-h::after {
+  content: "";
+  height: 1px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.14);
+  transition: all 0.15s ease;
+}
+.scifi-splitter-h:hover::after,
+.scifi-splitter-h.dragging::after {
+  background: #ff9a3c;
+  box-shadow: 0 0 8px rgba(255, 154, 60, 0.7);
 }
 
 .scifi-col {
@@ -1636,41 +1695,45 @@ code {
   padding: 8px 10px;
 }
 
-/* Radar & KPIs Panel (fills 70% of left side container) */
+/* Radar & KPIs Panel (takes 25% of left side vertical space) */
 .telemetry {
-  flex: 7;
   min-height: 0;
+  overflow: hidden;
 }
 .telemetry .body {
-  display: flex;
-  flex-direction: column;
-  padding: 8px 10px;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(130px, 1.15fr) 1fr;
+  gap: 12px;
+  align-items: center;
   min-height: 0;
-  height: 100%;
+  height: calc(100% - 28px);
+  padding: 6px 10px;
 }
 .radar {
-  flex: 1;
+  height: 100%;
   width: 100%;
   min-height: 0;
   position: relative;
   cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .radar:active {
   cursor: grabbing;
 }
 .scifi-radar-canvas {
   display: block;
-  width: 100%;
-  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   border-radius: 4px;
 }
 .radar-hint {
   position: absolute;
-  bottom: 6px;
+  bottom: 2px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 8px;
+  font-size: 7.5px;
   letter-spacing: 0.12em;
   color: rgba(255, 255, 255, 0.35);
   pointer-events: none;
@@ -1680,15 +1743,11 @@ code {
 .kpis {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 12px;
-  padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.25);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  flex-shrink: 0;
+  gap: 6px 10px;
 }
 .kpis small {
   display: block;
-  font-size: 8px;
+  font-size: 7.5px;
   letter-spacing: 0.12em;
   color: rgba(255, 255, 255, 0.45);
 }
@@ -1700,9 +1759,9 @@ code {
   color: #fff;
 }
 
-/* Tools Table (takes remaining 30% of left column with increased font size) */
+/* Tools Table (takes remaining 75% of left column with increased font size) */
 .tools-table-panel {
-  flex: 3;
+  flex: 1;
   min-height: 0;
 }
 .table-scroll {

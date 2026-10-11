@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   tabAnalytics,
   setAnalyticsEnabled,
@@ -22,6 +22,31 @@ export interface AnalyticsHudProps {
 }
 
 export { formatBytes, formatNum, formatMs };
+
+const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
+const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
+
+function getInitialLeftWidth(): number {
+  try {
+    const val = localStorage.getItem(STORAGE_KEY_HUD_LEFT_WIDTH);
+    if (val) {
+      const num = parseInt(val, 10);
+      if (!isNaN(num) && num >= 240 && num <= 600) return num;
+    }
+  } catch {}
+  return 340;
+}
+
+function getInitialTelemetryPercent(): number {
+  try {
+    const val = localStorage.getItem(STORAGE_KEY_HUD_TELEMETRY_SPLIT);
+    if (val) {
+      const num = parseFloat(val);
+      if (!isNaN(num) && num >= 15 && num <= 50) return num;
+    }
+  } catch {}
+  return 25;
+}
 
 // ---------------------------------------------------------------------------
 // 3D Anatomical Human Brain Connectome Mesh
@@ -222,6 +247,77 @@ export default function AnalyticsHud({
     lastX: 0,
     lastY: 0,
   });
+
+  // Resizable splitters for Left Panel Width and Telemetry / Tools vertical ratio
+  const [leftWidth, setLeftWidth] = useState<number>(getInitialLeftWidth);
+  const [telemetryPercent, setTelemetryPercent] = useState<number>(getInitialTelemetryPercent);
+  const [isDraggingV, setIsDraggingV] = useState(false);
+  const [isDraggingH, setIsDraggingH] = useState(false);
+
+  const onStartDragV = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingV(true);
+    const startX = e.clientX;
+    const startWidth = leftWidth;
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMove = (ev: MouseEvent) => {
+      const delta = ev.clientX - startX;
+      const next = Math.max(240, Math.min(580, startWidth + delta));
+      setLeftWidth(next);
+      try {
+        localStorage.setItem(STORAGE_KEY_HUD_LEFT_WIDTH, String(next));
+      } catch {}
+    };
+
+    const onUp = () => {
+      setIsDraggingV(false);
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [leftWidth]);
+
+  const onStartDragH = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingH(true);
+    const startY = e.clientY;
+    const leftCol = document.querySelector(".scifi-col.left") as HTMLElement | null;
+    const totalHeight = leftCol ? leftCol.clientHeight : 600;
+    const startPercent = telemetryPercent;
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "row-resize";
+
+    const onMove = (ev: MouseEvent) => {
+      const deltaY = ev.clientY - startY;
+      const deltaPercent = (deltaY / Math.max(1, totalHeight)) * 100;
+      const next = Math.max(16, Math.min(50, Math.round(startPercent + deltaPercent)));
+      setTelemetryPercent(next);
+      try {
+        localStorage.setItem(STORAGE_KEY_HUD_TELEMETRY_SPLIT, String(next));
+      } catch {}
+    };
+
+    const onUp = () => {
+      setIsDraggingH(false);
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [telemetryPercent]);
 
   const fetchData = () => {
     tabAnalytics(sessionName, tabId, command, cwd, title, pid)
@@ -601,10 +697,19 @@ export default function AnalyticsHud({
         </header>
 
         {/* 3-Column Sci-Fi Grid Layout */}
-        <div className="scifi-content">
+        <div
+          className="scifi-content"
+          style={{ gridTemplateColumns: `${leftWidth}px 8px 1fr 340px` }}
+        >
           {/* LEFT COLUMN: Telemetry Radar, KPIs & Tools */}
           <aside className="scifi-col left">
-            <section className="scifi-panel telemetry">
+            <section
+              className="scifi-panel telemetry"
+              style={{
+                flex: `0 0 ${telemetryPercent}%`,
+                maxHeight: `${telemetryPercent}%`,
+              }}
+            >
               <header>
                 <span className="tag">01</span>
                 <span>NEURAL TELEMETRY</span>
@@ -645,6 +750,19 @@ export default function AnalyticsHud({
                 </div>
               </div>
             </section>
+
+            {/* Horizontal resize sash between Telemetry (25%) and Tools Table */}
+            <div
+              className={`scifi-splitter-h ${isDraggingH ? "dragging" : ""}`}
+              onMouseDown={onStartDragH}
+              onDoubleClick={() => {
+                setTelemetryPercent(25);
+                try {
+                  localStorage.setItem(STORAGE_KEY_HUD_TELEMETRY_SPLIT, "25");
+                } catch {}
+              }}
+              title="Drag to resize NEURAL TELEMETRY height (Double-click to reset to 25%)"
+            />
 
             {/* Tools Breakdown Table */}
             <section className="scifi-panel tools-table-panel">
@@ -694,6 +812,19 @@ export default function AnalyticsHud({
               </div>
             </section>
           </aside>
+
+          {/* Vertical resize sash between Left Panel and Center Viewport */}
+          <div
+            className={`scifi-splitter-v ${isDraggingV ? "dragging" : ""}`}
+            onMouseDown={onStartDragV}
+            onDoubleClick={() => {
+              setLeftWidth(340);
+              try {
+                localStorage.setItem(STORAGE_KEY_HUD_LEFT_WIDTH, "340");
+              } catch {}
+            }}
+            title="Drag to resize Left Panel width (Double-click to reset to default)"
+          />
 
           <main className="scifi-center">
             {/* Interactive 3D Hill Terrain Viewport with Real Session Data */}
