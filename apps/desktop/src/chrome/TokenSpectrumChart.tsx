@@ -59,6 +59,8 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 
   const handleModeChange = (newMode: TokenChartMode) => {
     setMode(newMode);
+    setHoverIndex(null);
+    cam3dRef.current.isDragging = false;
     try {
       localStorage.setItem(STORAGE_KEY_MODE, newMode);
     } catch {}
@@ -164,6 +166,11 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
     cam3dRef.current.isDragging = false;
   }, []);
 
+  const onPointerLeave = useCallback(() => {
+    cam3dRef.current.isDragging = false;
+    setHoverIndex(null);
+  }, []);
+
   const onDoubleClick = useCallback(() => {
     if (mode === "perspective") {
       cam3dRef.current.azimuth = -0.42;
@@ -226,7 +233,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}
+          onPointerLeave={onPointerLeave}
           onDoubleClick={onDoubleClick}
         />
 
@@ -605,23 +612,6 @@ function drawPerspectiveMode(
       ctx.fillStyle = "#ffffff";
       ctx.shadowBlur = 0;
       ctx.fill();
-
-      // Waypoint text badge
-      ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-      ctx.fillStyle = "rgba(8, 10, 14, 0.92)";
-      const badgeW = 86;
-      const badgeH = 24;
-      const bx = pinPt[0] + 8;
-      const by = pinPt[1] - 12;
-      ctx.fillRect(bx, by, badgeW, badgeH);
-      ctx.strokeStyle = ch.color;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(bx, by, badgeW, badgeH);
-
-      ctx.fillStyle = ch.color;
-      ctx.fillText(`[${ch.tag}] ${formatNum(topVal)}`, bx + 6, by + 10);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-      ctx.fillText(`${d.timeLabel}`, bx + 6, by + 20);
 
       ctx.restore();
     }
