@@ -194,6 +194,7 @@ export type ScanSpeed = "0.25x" | "0.5x" | "1x" | "2x" | "paused";
 
 const STORAGE_KEY_BASE_SHAPE = "sparkmux_area_map_base_shape";
 const STORAGE_KEY_SCAN_SPEED = "sparkmux_area_map_scan_speed";
+const STORAGE_KEY_SHOW_TRACE = "sparkmux_area_map_show_trace";
 
 function getInitialBaseShape(): BaseShape {
   try {
@@ -215,8 +216,19 @@ function getInitialScanSpeed(): ScanSpeed {
   return "1x";
 }
 
+function getInitialShowTrace(): boolean {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_SHOW_TRACE);
+    if (saved !== null) {
+      return saved === "true";
+    }
+  } catch {}
+  return true;
+}
+
 let persistentBaseShape: BaseShape = getInitialBaseShape();
 let persistentScanSpeed: ScanSpeed = getInitialScanSpeed();
+let persistentShowTrace: boolean = getInitialShowTrace();
 
 // Persistent camera viewing angle across re-renders and view switches
 const persistentCam = {
@@ -423,6 +435,10 @@ export default function TerrainViewport({
   const [scanSpeed, setScanSpeedState] = useState<ScanSpeed>(persistentScanSpeed);
   const scanSpeedRef = useRef<ScanSpeed>(persistentScanSpeed);
 
+  const [showTrace, setShowTraceState] = useState<boolean>(persistentShowTrace);
+  const showTraceRef = useRef<boolean>(persistentShowTrace);
+  showTraceRef.current = showTrace;
+
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
 
@@ -462,6 +478,15 @@ export default function TerrainViewport({
     setScanSpeedState(next);
     try {
       localStorage.setItem(STORAGE_KEY_SCAN_SPEED, next);
+    } catch {}
+  };
+
+  const setShowTrace = (next: boolean) => {
+    persistentShowTrace = next;
+    showTraceRef.current = next;
+    setShowTraceState(next);
+    try {
+      localStorage.setItem(STORAGE_KEY_SHOW_TRACE, String(next));
     } catch {}
   };
 
@@ -1239,36 +1264,56 @@ export default function TerrainViewport({
       const project = (p: [number, number, number]) => projectPoint(matVP, p, rect.width, rect.height);
 
       // (A) Glowing Chronological Agent Journey Trail (Clipped to scrubProgress)
-      hud.lineJoin = "round";
-      hud.lineCap = "round";
+      if (showTraceRef.current) {
+        hud.lineJoin = "round";
+        hud.lineCap = "round";
 
-      // Outer golden aura (subtle, thin glow)
-      hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
-      hud.lineWidth = 2.0;
-      hud.beginPath();
-      let first = true;
-      for (const pos of meta.curvedSlopeTrail) {
-        if (pos[0] > curMaxX + 0.1) break;
-        const sc = project(pos);
-        if (!sc) { first = true; continue; }
-        if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
-        else { hud.lineTo(sc[0], sc[1]); }
-      }
-      hud.stroke();
+        // Outer golden aura (subtle, thin glow)
+        hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
+        hud.lineWidth = 2.0;
+        hud.beginPath();
+        let first = true;
+        for (const pos of meta.curvedSlopeTrail) {
+          if (pos[0] > curMaxX + 0.1) break;
+          const sc = project(pos);
+          if (!sc) { first = true; continue; }
+          if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
+          else { hud.lineTo(sc[0], sc[1]); }
+        }
+        hud.stroke();
 
-      // Sharp bright core (refined, delicate tracing line)
-      hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
-      hud.lineWidth = 0.75;
-      hud.beginPath();
-      first = true;
-      for (const pos of meta.curvedSlopeTrail) {
-        if (pos[0] > curMaxX + 0.1) break;
-        const sc = project(pos);
-        if (!sc) { first = true; continue; }
-        if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
-        else { hud.lineTo(sc[0], sc[1]); }
+        // Sharp bright core (refined, delicate tracing line)
+        hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
+        hud.lineWidth = 0.75;
+        hud.beginPath();
+        first = true;
+        for (const pos of meta.curvedSlopeTrail) {
+          if (pos[0] > curMaxX + 0.1) break;
+          const sc = project(pos);
+          if (!sc) { first = true; continue; }
+          if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
+          else { hud.lineTo(sc[0], sc[1]); }
+        }
+        hud.stroke();
+
+        // Render visible milestones with glowing beacons (clean, uncluttered nodes; hover reveals time card)
+        for (const m of meta.keyMilestones) {
+          if (m.x > curMaxX + 0.2) continue;
+          const sc = project([m.x, m.y, m.z]);
+          if (!sc) continue;
+
+          hud.fillStyle = m.hex;
+          hud.beginPath();
+          hud.arc(sc[0], sc[1], 1.8, 0, Math.PI * 2);
+          hud.fill();
+
+          hud.strokeStyle = "rgba(255, 255, 255, 0.85)";
+          hud.lineWidth = 0.75;
+          hud.beginPath();
+          hud.arc(sc[0], sc[1], 3.2, 0, Math.PI * 2);
+          hud.stroke();
+        }
       }
-      hud.stroke();
 
       // (A.1) Chronological Time Sweep Laser / Playhead line across the terrain
       const pScanTop = project([scanXPos, maxAltitude * 1.05, 0]);
@@ -1279,24 +1324,6 @@ export default function TerrainViewport({
         hud.beginPath();
         hud.moveTo(pScanTop[0], pScanTop[1]);
         hud.lineTo(pScanBottom[0], pScanBottom[1]);
-        hud.stroke();
-      }
-
-      // Render visible milestones with glowing beacons (clean, uncluttered nodes; hover reveals time card)
-      for (const m of meta.keyMilestones) {
-        if (m.x > curMaxX + 0.2) continue;
-        const sc = project([m.x, m.y, m.z]);
-        if (!sc) continue;
-
-        hud.fillStyle = m.hex;
-        hud.beginPath();
-        hud.arc(sc[0], sc[1], 1.8, 0, Math.PI * 2);
-        hud.fill();
-
-        hud.strokeStyle = "rgba(255, 255, 255, 0.85)";
-        hud.lineWidth = 0.75;
-        hud.beginPath();
-        hud.arc(sc[0], sc[1], 3.2, 0, Math.PI * 2);
         hud.stroke();
       }
 
@@ -1488,19 +1515,21 @@ export default function TerrainViewport({
       const matVP = multiply(matProj, matView);
 
       let found: { info: MilestoneInfo; screenX: number; screenY: number } | null = null;
-      const extentX = baseShapeRef.current === "globe" ? GLOBE_RADIUS : RECT_HX;
-      const curMaxX = scrubProgressRef.current >= 0.98
-        ? extentX + 2.0
-        : (scrubProgressRef.current * 2 - 1) * extentX;
+      if (showTraceRef.current) {
+        const extentX = baseShapeRef.current === "globe" ? GLOBE_RADIUS : RECT_HX;
+        const curMaxX = scrubProgressRef.current >= 0.98
+          ? extentX + 2.0
+          : (scrubProgressRef.current * 2 - 1) * extentX;
 
-      for (const m of terrainMetaRef.current.keyMilestones) {
-        if (m.x > curMaxX + 0.2) continue;
-        const pt = projectPoint(matVP, [m.x, m.y, m.z], rect.width, rect.height);
-        if (pt) {
-          const dist = Math.hypot(pt[0] - mouseX, pt[1] - mouseY);
-          if (dist < 18) {
-            found = { info: m, screenX: pt[0], screenY: pt[1] };
-            break;
+        for (const m of terrainMetaRef.current.keyMilestones) {
+          if (m.x > curMaxX + 0.2) continue;
+          const pt = projectPoint(matVP, [m.x, m.y, m.z], rect.width, rect.height);
+          if (pt) {
+            const dist = Math.hypot(pt[0] - mouseX, pt[1] - mouseY);
+            if (dist < 18) {
+              found = { info: m, screenX: pt[0], screenY: pt[1] };
+              break;
+            }
           }
         }
       }
@@ -1678,6 +1707,15 @@ export default function TerrainViewport({
           title={autoRotate ? "Click to pause auto-rotation" : "Click to enable auto-rotation"}
         >
           {autoRotate ? "AUTO-ROTATE: ON" : "AUTO-ROTATE: OFF"}
+        </button>
+
+        <button
+          type="button"
+          className={`scifi-btn-toggle ${showTrace ? "on" : ""}`}
+          onClick={() => setShowTrace(!showTrace)}
+          title={showTrace ? "Click to hide chronological journey trace line & nodes" : "Click to show chronological journey trace line & nodes"}
+        >
+          {showTrace ? "TRACE: ON" : "TRACE: OFF"}
         </button>
       </div>
 
