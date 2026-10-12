@@ -242,3 +242,29 @@ export function projectPoint(
   if (w <= 0.01) return null;
   return [((x / w) * 0.5 + 0.5) * width, (0.5 - (y / w) * 0.5) * height, w];
 }
+
+export const Z_LANES: Record<ChannelKey, number> = {
+  cache: -4.5,
+  input: -1.5,
+  reasoning: 1.5,
+  output: 4.5,
+};
+
+export const X_SPAN = 22.0;
+export const X_MIN = -11.0;
+export const MAX_VISUAL_Y = 6.2;
+
+export function getCameraProjector(
+  w: number,
+  h: number,
+  cam: { azimuth: number; elevation: number; radius: number },
+) {
+  const eyeX = cam.radius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
+  const eyeY = cam.radius * Math.sin(cam.elevation);
+  const eyeZ = cam.radius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
+
+  const matProj = perspective((38 * Math.PI) / 180, w / h, 0.5, 200);
+  const matView = lookAt([eyeX, eyeY, eyeZ], [0, 1.2, 0]);
+  const matVP = multiply(matProj, matView);
+  return (p: [number, number, number]) => projectPoint(matVP, p, w, h);
+}
