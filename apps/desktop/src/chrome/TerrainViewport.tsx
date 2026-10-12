@@ -1271,7 +1271,7 @@ export default function TerrainViewport({
         hud.stroke();
       }
 
-      // Render visible milestones with glowing beacons
+      // Render visible milestones with glowing beacons (clean, uncluttered nodes; hover reveals time card)
       for (const m of meta.keyMilestones) {
         if (m.x > curMaxX + 0.2) continue;
         const sc = project([m.x, m.y, m.z]);
@@ -1287,11 +1287,6 @@ export default function TerrainViewport({
         hud.beginPath();
         hud.arc(sc[0], sc[1], 3.2, 0, Math.PI * 2);
         hud.stroke();
-
-        hud.fillStyle = "rgba(255, 255, 255, 0.75)";
-        hud.font = '7.5px ui-monospace, SFMono-Regular, Menlo, monospace';
-        hud.textAlign = "center";
-        hud.fillText(m.timeStr, sc[0], sc[1] - 5);
       }
 
       // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
