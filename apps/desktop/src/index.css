@@ -2218,12 +2218,12 @@ code {
 .token-chart-modes button {
   position: relative;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 7.5px;
-  letter-spacing: 0.12em;
-  color: rgba(255, 255, 255, 0.45);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.55);
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 3px 8px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -2234,14 +2234,14 @@ code {
 
 .token-chart-modes button:hover {
   color: #fff;
-  border-color: rgba(255, 255, 255, 0.35);
+  border-color: rgba(255, 255, 255, 0.45);
   z-index: 1;
 }
 
 .token-chart-modes button.on {
   color: #fff;
   border-color: #ff9a3c;
-  background: rgba(255, 154, 60, 0.16);
+  background: rgba(255, 154, 60, 0.2);
   text-shadow: 0 0 6px rgba(255, 154, 60, 0.5);
   z-index: 2;
 }
@@ -2249,19 +2249,19 @@ code {
 .token-chart-telemetry-tag {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .token-chart-telemetry-tag .spec-label {
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .token-chart-telemetry-tag .status-blink {
   color: #3dd68c;
   letter-spacing: 0.1em;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .token-chart-viewport {
@@ -2269,7 +2269,7 @@ code {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background: radial-gradient(circle at 50% 100%, rgba(255, 154, 60, 0.03) 0%, transparent 70%);
+  background: radial-gradient(circle at 50% 100%, rgba(255, 154, 60, 0.04) 0%, transparent 70%);
 }
 
 .token-spectrum-canvas {
@@ -2287,12 +2287,12 @@ code {
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 10;
-  background: rgba(8, 10, 14, 0.94);
+  background: rgba(8, 10, 14, 0.95);
   backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 154, 60, 0.45);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.65), 0 0 8px rgba(255, 154, 60, 0.15);
-  padding: 5px 8px;
-  min-width: 126px;
+  border: 1px solid rgba(255, 154, 60, 0.5);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.7), 0 0 10px rgba(255, 154, 60, 0.2);
+  padding: 8px 12px;
+  min-width: 160px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   border-radius: 2px;
 }
@@ -2301,10 +2301,10 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 7.5px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding-bottom: 3px;
-  margin-bottom: 4px;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .hud-tooltip-header .time-tag {
@@ -2314,47 +2314,48 @@ code {
 }
 
 .hud-tooltip-header .total-tag {
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 600;
 }
 
 .hud-tooltip-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 2px 6px;
-  font-size: 7.5px;
+  gap: 3px 10px;
+  font-size: 10.5px;
 }
 
 .hud-tooltip-grid .item {
   display: flex;
   justify-content: space-between;
-  gap: 4px;
+  gap: 6px;
 }
 
 .hud-tooltip-grid .item span {
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 .hud-tooltip-grid .item b {
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .hud-tooltip-footer {
-  margin-top: 4px;
-  padding-top: 3px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
   display: flex;
   justify-content: space-between;
-  font-size: 7px;
-  color: rgba(255, 255, 255, 0.55);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.65);
   letter-spacing: 0.08em;
 }
 
 .token-legend-pills {
   display: flex;
-  gap: 4px;
-  padding: 4px 8px;
+  gap: 6px;
+  padding: 5px 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(8, 10, 14, 0.5);
+  background: rgba(8, 10, 14, 0.6);
   flex: 0 0 auto;
   overflow-x: auto;
 }
@@ -2362,37 +2363,37 @@ code {
 .token-legend-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 2px 6px;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 3px 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 7.5px;
+  font-size: 10px;
   cursor: pointer;
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.85);
   transition: all 0.15s ease;
   white-space: nowrap;
 }
 
 .token-legend-pill:hover {
-  border-color: rgba(255, 255, 255, 0.35);
-  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .token-legend-pill.selected {
   border-color: #ff9a3c;
-  background: rgba(255, 154, 60, 0.18);
+  background: rgba(255, 154, 60, 0.22);
   color: #fff;
-  box-shadow: 0 0 6px rgba(255, 154, 60, 0.3);
+  box-shadow: 0 0 8px rgba(255, 154, 60, 0.35);
 }
 
 .token-legend-pill.faded {
-  opacity: 0.32;
+  opacity: 0.35;
 }
 
 .token-legend-pill .dot {
-  width: 5px;
-  height: 5px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   display: inline-block;
 }
@@ -2400,11 +2401,13 @@ code {
 .token-legend-pill .name {
   letter-spacing: 0.08em;
   font-weight: 500;
+  font-size: 10px;
 }
 
 .token-legend-pill .val {
   color: #fff;
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 12px;
 }
 
 /* Legacy fallback classes */

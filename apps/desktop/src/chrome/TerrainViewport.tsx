@@ -789,55 +789,7 @@ export default function TerrainViewport({
       : 0;
 
     dataPoints.forEach((pt, i) => {
-      const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
       const origPt = currentTimeline && currentTimeline[i];
-
-      let catIdx = 0;
-      let kindStr = "USER PROMPT";
-      let detailStr = `${pt.user} prompts`;
-
-      if (origPt?.top_event_kind) {
-        if (origPt.top_event_kind === "tool") {
-          catIdx = 3;
-          kindStr = `TOOL: ${origPt.top_event_label || "RUNTIME"}`;
-          detailStr = `${pt.tool} calls`;
-        } else if (origPt.top_event_kind === "reply") {
-          catIdx = 2;
-          kindStr = `REPLY: ${origPt.top_event_label || "ASSISTANT"}`;
-          detailStr = `${pt.reply} replies`;
-        } else if (origPt.top_event_kind === "think") {
-          catIdx = 1;
-          kindStr = "REASONING";
-          detailStr = `${pt.think} blocks`;
-        } else {
-          catIdx = 0;
-          kindStr = "USER PROMPT";
-          detailStr = `${pt.user} prompts`;
-        }
-      } else {
-        const maxVal = Math.max(pt.user, pt.think, pt.reply, pt.tool, 0.1);
-        if (pt.tool === maxVal) {
-          catIdx = 3;
-          kindStr = "TOOL RUNTIME";
-          detailStr = `${Math.round(pt.tool)} calls`;
-        } else if (pt.reply === maxVal) {
-          catIdx = 2;
-          kindStr = "ASSISTANT REPLY";
-          detailStr = `${Math.round(pt.reply)} replies`;
-        } else if (pt.think === maxVal) {
-          catIdx = 1;
-          kindStr = "REASONING";
-          detailStr = `${Math.round(pt.think)} blocks`;
-        } else {
-          catIdx = 0;
-          kindStr = "USER PROMPT";
-          detailStr = `${Math.round(pt.user)} prompts`;
-        }
-      }
-
-      const tz = zLanes[catIdx];
-      const ty = getAlt(tx, tz) + 0.08;
-
       let timeStr = `T+${i + 1}`;
       if (origPt && startTime > 0) {
         timeStr = `+${formatElapsed(origPt.timestamp - startTime)}`;
@@ -845,18 +797,66 @@ export default function TerrainViewport({
         timeStr = `+${Math.floor(i * 1.5)}m`;
       }
 
-      keyMilestones.push({
-        x: tx,
-        z: tz,
-        y: ty,
-        label: timeStr,
-        cat: CHANNELS[catIdx].label,
-        hex: CHANNELS[catIdx].hex,
-        tNorm: pt.tNorm,
-        timeStr,
-        kindStr,
-        detailStr,
-      });
+      // Collect all active channels in this time slice (User -> Think -> Tool -> Reply)
+      const activeChannels: Array<{ catIdx: number; count: number; kindStr: string; detailStr: string }> = [];
+      if (pt.user > 0) {
+        activeChannels.push({ catIdx: 0, count: pt.user, kindStr: "USER PROMPT", detailStr: `${Math.round(pt.user)} prompts` });
+      }
+      if (pt.think > 0) {
+        activeChannels.push({ catIdx: 1, count: pt.think, kindStr: "REASONING", detailStr: `${Math.round(pt.think)} blocks` });
+      }
+      if (pt.tool > 0) {
+        const toolLabel = (origPt?.top_event_kind === "tool" ? origPt.top_event_label : "") || "RUNTIME";
+        activeChannels.push({ catIdx: 3, count: pt.tool, kindStr: `TOOL: ${toolLabel}`, detailStr: `${Math.round(pt.tool)} calls` });
+      }
+      if (pt.reply > 0) {
+        const replyLabel = (origPt?.top_event_kind === "reply" ? origPt.top_event_label : "") || "ASSISTANT";
+        activeChannels.push({ catIdx: 2, count: pt.reply, kindStr: `REPLY: ${replyLabel}`, detailStr: `${Math.round(pt.reply)} replies` });
+      }
+
+      // If no events in bucket or fallback, create a single resting point at dominant lane
+      if (activeChannels.length === 0) {
+        const catIdx = origPt?.top_event_kind === "tool" ? 3 : origPt?.top_event_kind === "reply" ? 2 : origPt?.top_event_kind === "think" ? 1 : 0;
+        const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
+        const tz = zLanes[catIdx];
+        const ty = getAlt(tx, tz) + 0.08;
+        keyMilestones.push({
+          x: tx,
+          z: tz,
+          y: ty,
+          label: timeStr,
+          cat: CHANNELS[catIdx].label,
+          hex: CHANNELS[catIdx].hex,
+          tNorm: pt.tNorm,
+          timeStr,
+          kindStr: CHANNELS[catIdx].label,
+          detailStr: "Idle",
+        });
+      } else {
+        const nChannels = activeChannels.length;
+        const bucketSpanX = (TIME_SPAN / Math.max(1, dataPoints.length)) * 0.72;
+        const baseTx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
+
+        activeChannels.forEach((ch, chIdx) => {
+          const xOffset = nChannels > 1 ? ((chIdx / (nChannels - 1)) - 0.5) * bucketSpanX : 0;
+          const tx = baseTx + xOffset;
+          const tz = zLanes[ch.catIdx];
+          const ty = getAlt(tx, tz) + 0.08;
+
+          keyMilestones.push({
+            x: tx,
+            z: tz,
+            y: ty,
+            label: timeStr,
+            cat: CHANNELS[ch.catIdx].label,
+            hex: CHANNELS[ch.catIdx].hex,
+            tNorm: pt.tNorm,
+            timeStr,
+            kindStr: ch.kindStr,
+            detailStr: ch.detailStr,
+          });
+        });
+      }
     });
 
     const curvedSlopeTrail: Array<[number, number, number]> = [];

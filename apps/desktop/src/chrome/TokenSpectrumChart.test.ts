@@ -83,3 +83,16 @@ test("CHANNELS definitions contain all 4 channels with colors", () => {
   const keys = CHANNELS.map((c) => c.key);
   assert.deepEqual(keys, ["cache", "input", "reasoning", "output"]);
 });
+
+test("3D perspective projection projects center point accurately", async () => {
+  const { perspective, lookAt, multiply, projectPoint } = await import("./tokenSpectrumMath.ts");
+  const proj = perspective((45 * Math.PI) / 180, 1.0, 0.1, 100);
+  const view = lookAt([0, 0, 10], [0, 0, 0]);
+  const vp = multiply(proj, view);
+
+  const pt = projectPoint(vp, [0, 0, 0], 400, 400);
+  assert.ok(pt !== null);
+  // Center of 400x400 should be (200, 200)
+  assert.ok(Math.abs(pt[0] - 200) < 0.1);
+  assert.ok(Math.abs(pt[1] - 200) < 0.1);
+});

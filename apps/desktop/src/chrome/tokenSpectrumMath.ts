@@ -1,6 +1,6 @@
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
 
-export type TokenChartMode = "contour" | "burst" | "gauge";
+export type TokenChartMode = "perspective" | "contour" | "burst" | "gauge";
 export type ChannelKey = "cache" | "input" | "reasoning" | "output";
 
 export interface ChannelDef {
@@ -167,4 +167,78 @@ export function processTimelineData(
       cacheHitRate: computeLocalCacheHitRate(cache, input),
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// 3D Matrix & Perspective Projection Math (Matches Area Map)
+// ---------------------------------------------------------------------------
+
+export function perspective(fovy: number, aspect: number, near: number, far: number): Float32Array {
+  const f = 1 / Math.tan(fovy / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, 2 * far * near * nf, 0,
+  ]);
+}
+
+export function lookAt(
+  eye: [number, number, number],
+  target: [number, number, number],
+  up: [number, number, number] = [0, 1, 0],
+): Float32Array {
+  const z0 = eye[0] - target[0];
+  const z1 = eye[1] - target[1];
+  const z2 = eye[2] - target[2];
+  const lenZ = Math.hypot(z0, z1, z2) || 1;
+  const zx = z0 / lenZ, zy = z1 / lenZ, zz = z2 / lenZ;
+
+  const x0 = up[1] * zz - up[2] * zy;
+  const x1 = up[2] * zx - up[0] * zz;
+  const x2 = up[0] * zy - up[1] * zx;
+  const lenX = Math.hypot(x0, x1, x2) || 1;
+  const xx = x0 / lenX, xy = x1 / lenX, xz = x2 / lenX;
+
+  const yx = zy * xz - zz * xy;
+  const yy = zz * xx - zx * xz;
+  const yz = zx * xy - zy * xx;
+
+  return new Float32Array([
+    xx, yx, zx, 0,
+    xy, yy, zy, 0,
+    xz, yz, zz, 0,
+    -(xx * eye[0] + xy * eye[1] + xz * eye[2]),
+    -(yx * eye[0] + yy * eye[1] + yz * eye[2]),
+    -(zx * eye[0] + zy * eye[1] + zz * eye[2]),
+    1,
+  ]);
+}
+
+export function multiply(a: Float32Array, b: Float32Array): Float32Array {
+  const out = new Float32Array(16);
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      out[i * 4 + j] =
+        a[j] * b[i * 4] +
+        a[4 + j] * b[i * 4 + 1] +
+        a[8 + j] * b[i * 4 + 2] +
+        a[12 + j] * b[i * 4 + 3];
+    }
+  }
+  return out;
+}
+
+export function projectPoint(
+  vp: Float32Array,
+  p: [number, number, number],
+  width: number,
+  height: number,
+): [number, number, number] | null {
+  const x = vp[0] * p[0] + vp[4] * p[1] + vp[8] * p[2] + vp[12];
+  const y = vp[1] * p[0] + vp[5] * p[1] + vp[9] * p[2] + vp[13];
+  const w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+  if (w <= 0.01) return null;
+  return [((x / w) * 0.5 + 0.5) * width, (0.5 - (y / w) * 0.5) * height, w];
 }

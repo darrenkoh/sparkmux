@@ -113,9 +113,9 @@ pub fn compute_stats(
 
     let mut turn_durations = Vec::new();
 
-    // Find time bounds for timeline binning
-    let start_t = events.first().map(|e| e.t).unwrap_or(0);
-    let end_t = events.last().map(|e| e.t).unwrap_or(0);
+    // Find time bounds for timeline binning (using min/max to be resilient to out-of-order logs)
+    let start_t = events.iter().map(|e| e.t).min().unwrap_or(0);
+    let end_t = events.iter().map(|e| e.t).max().unwrap_or(0);
     let time_span = (end_t - start_t).max(1);
 
     // Choose bucket size, max 24 buckets
@@ -127,6 +127,7 @@ pub fn compute_stats(
             ..Default::default()
         })
         .collect();
+    let mut bucket_last_tools = vec![String::new(); num_buckets];
 
     for ev in events {
         // Bin into timeline
@@ -141,34 +142,16 @@ pub fn compute_stats(
             USER => {
                 stats.user_prompts += 1;
                 buckets[b_idx].user_count += 1;
-                if buckets[b_idx].top_event_kind.is_empty() {
-                    buckets[b_idx].top_event_kind = "user".into();
-                    buckets[b_idx].top_event_label = "USER PROMPT".into();
-                }
             }
             THINK => {
                 stats.thinking_blocks += 1;
                 buckets[b_idx].think_count += 1;
-                if buckets[b_idx].top_event_kind.is_empty()
-                    || buckets[b_idx].top_event_kind == "user"
-                {
-                    buckets[b_idx].top_event_kind = "think".into();
-                    buckets[b_idx].top_event_label = "REASONING".into();
-                }
             }
             REPLY => {
                 stats.assistant_replies += 1;
                 buckets[b_idx].reply_count += 1;
                 if !ev.n.is_empty() && stats.active_model.is_empty() {
                     stats.active_model.clone_from(&ev.n);
-                }
-                if buckets[b_idx].top_event_kind.is_empty() {
-                    buckets[b_idx].top_event_kind = "reply".into();
-                    buckets[b_idx].top_event_label = if !ev.n.is_empty() {
-                        ev.n.clone()
-                    } else {
-                        "ASSISTANT".into()
-                    };
                 }
             }
             TOOL => {
@@ -177,13 +160,9 @@ pub fn compute_stats(
                 let entry = tool_map.entry(ev.n.clone()).or_insert((0, 0, 0, 0, ev.t));
                 entry.0 += 1;
                 entry.4 = entry.4.max(ev.t);
-                // Tools have high priority for top event label
-                buckets[b_idx].top_event_kind = "tool".into();
-                buckets[b_idx].top_event_label = if !ev.n.is_empty() {
-                    ev.n.clone()
-                } else {
-                    "TOOL".into()
-                };
+                if !ev.n.is_empty() {
+                    bucket_last_tools[b_idx].clone_from(&ev.n);
+                }
             }
             RESULT => {
                 stats.tool_results += 1;
@@ -265,6 +244,26 @@ pub fn compute_stats(
     let mut models: Vec<ModelStat> = model_map.into_values().collect();
     models.sort_by_key(|a| std::cmp::Reverse(a.input_tokens + a.output_tokens));
     stats.models = models;
+
+    for (i, b) in buckets.iter_mut().enumerate() {
+        if b.user_count > 0 {
+            b.top_event_kind = "user".into();
+            b.top_event_label = "USER PROMPT".into();
+        } else if b.reply_count > 0 && b.reply_count >= b.think_count {
+            b.top_event_kind = "reply".into();
+            b.top_event_label = "ASSISTANT".into();
+        } else if b.think_count > 0 {
+            b.top_event_kind = "think".into();
+            b.top_event_label = "REASONING".into();
+        } else if b.tool_count > 0 {
+            b.top_event_kind = "tool".into();
+            b.top_event_label = if !bucket_last_tools[i].is_empty() {
+                bucket_last_tools[i].clone()
+            } else {
+                "TOOL".into()
+            };
+        }
+    }
 
     stats.timeline = buckets;
 
