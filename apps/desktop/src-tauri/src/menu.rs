@@ -82,6 +82,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         "Sparkmux Help",
         Some(if mac { "Cmd+Shift+/" } else { "F1" }),
     )?;
+    let check_update = item(app, "check-update", "Check for Updates…", None)?;
     let enable_helper = item(app, "enable-command-helper", ENABLE_HELPER_LABEL, None)?;
     let agy_usage = agy_usage_submenu(app)?;
 
@@ -125,7 +126,11 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         .item(&stop)
         .build()?;
 
-    let help = SubmenuBuilder::new(app, "Help").item(&help_item).build()?;
+    let help = SubmenuBuilder::new(app, "Help")
+        .item(&help_item)
+        .separator()
+        .item(&check_update)
+        .build()?;
 
     let mut menu = MenuBuilder::new(app);
     if mac {
@@ -147,6 +152,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         let show_all = PredefinedMenuItem::show_all(app, None)?;
         let app_menu = SubmenuBuilder::new(app, "Sparkmux")
             .item(&about)
+            .item(&check_update)
             .separator()
             .item(&enable_helper)
             .item(&agy_usage)

@@ -53,5 +53,21 @@ export function useUpdateNotice() {
       });
   }, []);
 
-  return { phase, start, dismiss };
+  const checkManual = useCallback(async (): Promise<{ found: boolean; version?: string; error?: string }> => {
+    try {
+      const found = await checkForUpdate();
+      if (!found) {
+        return { found: false };
+      }
+      pending.current = found;
+      setPhase(availablePhase(found.version, found.notes));
+      return { found: true, version: found.version };
+    } catch (err) {
+      const msg = errorText(err);
+      setPhase({ status: "error", message: msg });
+      return { found: false, error: msg };
+    }
+  }, []);
+
+  return { phase, start, dismiss, checkManual };
 }

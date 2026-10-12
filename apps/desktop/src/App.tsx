@@ -680,6 +680,14 @@ export default function App() {
         case "help":
           setDialog({ kind: "help" });
           break;
+        case "check-update": {
+          showToast("Checking for updates…");
+          const res = await updateNotice.checkManual();
+          if (!res.found && !res.error) {
+            showToast("Sparkmux is up to date.");
+          }
+          break;
+        }
         case "enable-command-helper": {
           if (helperBusyRef.current) break;
           if (helperOnRef.current) await turnHelperOff();
