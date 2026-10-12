@@ -1231,9 +1231,9 @@ export default function TerrainViewport({
       hud.lineJoin = "round";
       hud.lineCap = "round";
 
-      // Outer golden aura
-      hud.strokeStyle = "rgba(255, 175, 45, 0.28)";
-      hud.lineWidth = 3.2;
+      // Outer golden aura (subtle, thin glow)
+      hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
+      hud.lineWidth = 2.0;
       hud.beginPath();
       let first = true;
       for (const pos of meta.curvedSlopeTrail) {
@@ -1245,9 +1245,9 @@ export default function TerrainViewport({
       }
       hud.stroke();
 
-      // Sharp bright core
+      // Sharp bright core (refined, delicate tracing line)
       hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
-      hud.lineWidth = 1.2;
+      hud.lineWidth = 0.75;
       hud.beginPath();
       first = true;
       for (const pos of meta.curvedSlopeTrail) {
@@ -1263,8 +1263,8 @@ export default function TerrainViewport({
       const pScanTop = project([scanXPos, maxAltitude * 1.05, 0]);
       const pScanBottom = project([scanXPos, 0, 0]);
       if (pScanTop && pScanBottom) {
-        hud.strokeStyle = `rgba(255, 220, 100, ${0.45 * scanFade})`;
-        hud.lineWidth = 1.0;
+        hud.strokeStyle = `rgba(255, 220, 100, ${0.40 * scanFade})`;
+        hud.lineWidth = 0.75;
         hud.beginPath();
         hud.moveTo(pScanTop[0], pScanTop[1]);
         hud.lineTo(pScanBottom[0], pScanBottom[1]);
@@ -1279,19 +1279,19 @@ export default function TerrainViewport({
 
         hud.fillStyle = m.hex;
         hud.beginPath();
-        hud.arc(sc[0], sc[1], 2.2, 0, Math.PI * 2);
+        hud.arc(sc[0], sc[1], 1.8, 0, Math.PI * 2);
         hud.fill();
 
-        hud.strokeStyle = "rgba(255, 255, 255, 0.9)";
-        hud.lineWidth = 1.0;
+        hud.strokeStyle = "rgba(255, 255, 255, 0.85)";
+        hud.lineWidth = 0.75;
         hud.beginPath();
-        hud.arc(sc[0], sc[1], 4.0, 0, Math.PI * 2);
+        hud.arc(sc[0], sc[1], 3.2, 0, Math.PI * 2);
         hud.stroke();
 
         hud.fillStyle = "rgba(255, 255, 255, 0.75)";
         hud.font = '7.5px ui-monospace, SFMono-Regular, Menlo, monospace';
         hud.textAlign = "center";
-        hud.fillText(m.timeStr, sc[0], sc[1] - 6);
+        hud.fillText(m.timeStr, sc[0], sc[1] - 5);
       }
 
       // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
