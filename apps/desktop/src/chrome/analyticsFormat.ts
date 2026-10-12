@@ -110,7 +110,11 @@ export function getModelPricing(model: string | undefined): ModelPricing {
 
   // Grok
   if (m.includes("grok")) {
-    return { inRate: 2.0, outRate: 10.0, cacheReadRate: 0.2, cacheWriteRate: 2.5 };
+    if (m.includes("4.6") || m.includes("4-6")) {
+      return { inRate: 1.36, outRate: 4.08, cacheReadRate: 0.34, cacheWriteRate: 1.36 };
+    }
+    // Grok 4.7, grok-4.7-build, default grok ($0.68 in, $2.04 out, $0.17 cache read)
+    return { inRate: 0.68, outRate: 2.04, cacheReadRate: 0.17, cacheWriteRate: 0.68 };
   }
 
   // Default / fallback standard pricing (e.g. Sonnet tier 3/15)

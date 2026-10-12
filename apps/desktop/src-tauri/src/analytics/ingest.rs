@@ -393,9 +393,12 @@ fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
 fn ingest_grok(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
     let mut out = Vec::new();
 
-    // Default Grok context window if not already set by signals.json
+    // Default Grok context window and model if not already set
     if cur.ctx_window == 0 {
         cur.ctx_window = 256_000;
+    }
+    if cur.model.is_empty() {
+        cur.model = "grok-4.7".to_string();
     }
 
     // Backfill tool code deltas if cursor has read chat history but lines were not tracked
@@ -433,9 +436,11 @@ fn ingest_grok(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
             }
         }
     }
+    let has_usage = sibling(path, "usage.json").is_some();
     if let Some(updates) = sibling(path, "updates.jsonl") {
-        grok_updates(&updates, cur, now, &mut out);
-    } else if let Some(usage) = sibling(path, "usage.json") {
+        grok_updates(&updates, cur, now, !has_usage, &mut out);
+    }
+    if let Some(usage) = sibling(path, "usage.json") {
         grok_usage(&usage, cur, now, &mut out);
     }
     if let Some(signals) = sibling(path, "signals.json") {
@@ -508,7 +513,7 @@ fn grok_event(obj: &Map<String, Value>, cur: &mut Cursor, out: &mut Vec<Event>) 
     }
 }
 
-fn grok_updates(path: &Path, cur: &mut Cursor, _now: i64, out: &mut Vec<Event>) {
+fn grok_updates(path: &Path, cur: &mut Cursor, _now: i64, emit_usage: bool, out: &mut Vec<Event>) {
     let Some((lines, next)) = read_new_lines(path, cur.updates_offset, MAX_READ) else {
         return;
     };
@@ -534,7 +539,7 @@ fn grok_updates(path: &Path, cur: &mut Cursor, _now: i64, out: &mut Vec<Event>) 
             }
         }
 
-        if cur.model.is_empty() {
+        if cur.model.is_empty() || cur.model == "grok-4.7" {
             let model_id = str_of(meta, "modelId");
             if !model_id.is_empty() {
                 cur.model = model_id.to_string();
@@ -560,48 +565,58 @@ fn grok_updates(path: &Path, cur: &mut Cursor, _now: i64, out: &mut Vec<Event>) 
                 cur.pending_reasoning_tokens = 0;
                 cur.pending_output_tokens = 0;
 
-                let mut ev = Event::new(ss, event::USAGE);
-                ev.ti = non_cached;
-                ev.tc = cached;
-                ev.tw = 0;
-                ev.tr = reasoning;
-                ev.to = output;
-                ev.n = cur.model.clone();
-                ev.c = 1;
+                if emit_usage {
+                    let mut ev = Event::new(ss, event::USAGE);
+                    ev.ti = non_cached;
+                    ev.tc = cached;
+                    ev.tw = 0;
+                    ev.tr = reasoning;
+                    ev.to = output;
+                    ev.n = if !cur.model.is_empty() {
+                        cur.model.clone()
+                    } else {
+                        "grok-4.7".to_string()
+                    };
+                    ev.c = 1;
+                    out.push(ev);
+                }
 
                 cur.last_stream_ms = ss;
                 cur.last_stream_tokens = total_tokens;
-                out.push(ev);
             } else if total_tokens > cur.last_stream_tokens {
                 cur.last_stream_tokens = total_tokens;
             }
         }
 
-        if let Some(update) = params.get("update").and_then(Value::as_object) {
-            let session_update = str_of(update, "sessionUpdate");
-            if session_update == "agent_message_chunk" || session_update == "agent_thought_chunk" {
-                if let Some(content) = update.get("content").and_then(Value::as_object) {
-                    if let Some(text) = content.get("text").and_then(Value::as_str) {
-                        let est = estimate_tokens(text);
-                        if session_update == "agent_thought_chunk" {
-                            cur.pending_reasoning_tokens += est;
-                            if let Some(last_ev) = out
-                                .last_mut()
-                                .filter(|e| e.k == event::USAGE && e.t == cur.last_stream_ms)
-                            {
-                                last_ev.tr += est;
-                                cur.pending_reasoning_tokens =
-                                    cur.pending_reasoning_tokens.saturating_sub(est);
-                            }
-                        } else {
-                            cur.pending_output_tokens += est;
-                            if let Some(last_ev) = out
-                                .last_mut()
-                                .filter(|e| e.k == event::USAGE && e.t == cur.last_stream_ms)
-                            {
-                                last_ev.to += est;
-                                cur.pending_output_tokens =
-                                    cur.pending_output_tokens.saturating_sub(est);
+        if emit_usage {
+            if let Some(update) = params.get("update").and_then(Value::as_object) {
+                let session_update = str_of(update, "sessionUpdate");
+                if session_update == "agent_message_chunk"
+                    || session_update == "agent_thought_chunk"
+                {
+                    if let Some(content) = update.get("content").and_then(Value::as_object) {
+                        if let Some(text) = content.get("text").and_then(Value::as_str) {
+                            let est = estimate_tokens(text);
+                            if session_update == "agent_thought_chunk" {
+                                cur.pending_reasoning_tokens += est;
+                                if let Some(last_ev) = out
+                                    .last_mut()
+                                    .filter(|e| e.k == event::USAGE && e.t == cur.last_stream_ms)
+                                {
+                                    last_ev.tr += est;
+                                    cur.pending_reasoning_tokens =
+                                        cur.pending_reasoning_tokens.saturating_sub(est);
+                                }
+                            } else {
+                                cur.pending_output_tokens += est;
+                                if let Some(last_ev) = out
+                                    .last_mut()
+                                    .filter(|e| e.k == event::USAGE && e.t == cur.last_stream_ms)
+                                {
+                                    last_ev.to += est;
+                                    cur.pending_output_tokens =
+                                        cur.pending_output_tokens.saturating_sub(est);
+                                }
                             }
                         }
                     }
@@ -632,9 +647,11 @@ fn grok_usage(path: &Path, cur: &mut Cursor, now: i64, out: &mut Vec<Event>) {
         };
         let ts = parse_iso_ms(str_of(turn, "endedAt")).unwrap_or(now);
         let mut ev = Event::new(ts, event::USAGE);
-        ev.ti = u64_of(turn, "inputTokens");
+        let input_tokens = u64_of(turn, "inputTokens");
+        let cached_read = u64_of(turn, "cachedReadTokens");
+        ev.ti = input_tokens.saturating_sub(cached_read);
         ev.to = u64_of(turn, "outputTokens");
-        ev.tc = u64_of(turn, "cachedReadTokens");
+        ev.tc = cached_read;
         ev.tw = u64_of(turn, "cacheCreationTokens");
         let rep_reasoning = u64_of(turn, "reasoningTokens");
         if rep_reasoning > 0 {
@@ -644,8 +661,15 @@ fn grok_usage(path: &Path, cur: &mut Cursor, now: i64, out: &mut Vec<Event>) {
             ev.tr = cur.pending_reasoning_tokens;
             cur.pending_reasoning_tokens = 0;
         }
-        ev.n = str_of(turn, "primaryModelId").to_string();
-        ev.c = u64_of(turn, "modelCalls");
+        let model = str_of(turn, "primaryModelId");
+        ev.n = if !model.is_empty() {
+            model.to_string()
+        } else if !cur.model.is_empty() {
+            cur.model.clone()
+        } else {
+            "grok-4.7".to_string()
+        };
+        ev.c = u64_of(turn, "modelCalls").max(1);
         if !ev.n.is_empty() {
             cur.model.clone_from(&ev.n);
         }
@@ -1368,7 +1392,7 @@ mod tests {
         let turn = events.iter().find(|e| e.k == "turn").unwrap();
         assert_eq!(turn.ms, 37_000);
         let usage = events.iter().find(|e| e.k == "usage").unwrap();
-        assert_eq!((usage.ti, usage.to, usage.tc, usage.tr), (900, 30, 500, 20));
+        assert_eq!((usage.ti, usage.to, usage.tc, usage.tr), (400, 30, 500, 20));
         let result = events.iter().find(|e| e.k == "result").unwrap();
         assert_eq!(result.b, "Found 74\nmatching lines");
         assert!(events.iter().all(|e| e.s == "01a12506" && e.cli == "grok"));

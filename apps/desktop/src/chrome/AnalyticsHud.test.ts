@@ -81,3 +81,21 @@ test("estimateTotalCost calculates cost per model breakdown", () => {
   assert.ok(Math.abs(totalCost - 1.950918) < 0.001);
 });
 
+test("estimateCost accurately calculates Grok 4.7 pricing matching /usage ticks", () => {
+  const pricing47 = getModelPricing("grok-4.7-build");
+  assert.equal(pricing47.inRate, 0.68);
+  assert.equal(pricing47.outRate, 2.04);
+  assert.equal(pricing47.cacheReadRate, 0.17);
+  assert.equal(pricing47.cacheWriteRate, 0.68);
+
+  // Exact real Grok session: 275,458 uncached input, 8,007,040 cached read, 104,402 output
+  // costUsdTicks = 17,614,883,200 ($1.76148832)
+  const grokCost = estimateCost("grok-4.7-build", 275_458, 104_402, 8_007_040);
+  assert.ok(Math.abs(grokCost - 1.761488) < 0.0001);
+
+  const pricing46 = getModelPricing("grok-4.6-build");
+  assert.equal(pricing46.inRate, 1.36);
+  assert.equal(pricing46.outRate, 4.08);
+  assert.equal(pricing46.cacheReadRate, 0.34);
+});
+
