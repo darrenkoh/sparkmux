@@ -1770,8 +1770,16 @@ code {
   gap: 12px;
   align-items: center;
   min-height: 0;
-  height: calc(100% - 28px);
+  flex: 1;
+  height: 100%;
   padding: 6px 10px;
+  box-sizing: border-box;
+}
+.telemetry.expanded .body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
 }
 .radar {
   height: 100%;
@@ -1782,12 +1790,17 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
-.radar:active {
-  cursor: grabbing;
+.telemetry.expanded .radar {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
 }
 .scifi-radar-canvas {
   display: block;
+  width: 100% !important;
+  height: 100% !important;
   max-width: 100%;
   max-height: 100%;
   border-radius: 4px;
@@ -1808,6 +1821,13 @@ code {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px 10px;
+}
+.telemetry.expanded .kpis {
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px 6px;
+  flex-shrink: 0;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .kpis small {
   display: block;

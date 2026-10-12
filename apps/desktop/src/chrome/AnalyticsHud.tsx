@@ -42,7 +42,7 @@ function getInitialTelemetryPercent(): number {
     const val = localStorage.getItem(STORAGE_KEY_HUD_TELEMETRY_SPLIT);
     if (val) {
       const num = parseFloat(val);
-      if (!isNaN(num) && num >= 15 && num <= 50) return num;
+      if (!isNaN(num) && num >= 15 && num <= 65) return num;
     }
   } catch {}
   return 25;
@@ -301,7 +301,7 @@ export default function AnalyticsHud({
     const onMove = (ev: MouseEvent) => {
       const deltaY = ev.clientY - startY;
       const deltaPercent = (deltaY / Math.max(1, totalHeight)) * 100;
-      const next = Math.max(16, Math.min(50, Math.round(startPercent + deltaPercent)));
+      const next = Math.max(16, Math.min(65, Math.round(startPercent + deltaPercent)));
       setTelemetryPercent(next);
       try {
         localStorage.setItem(STORAGE_KEY_HUD_TELEMETRY_SPLIT, String(next));
@@ -401,7 +401,8 @@ export default function AnalyticsHud({
       const ctx = canvas.getContext("2d");
       if (ctx) {
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const rect = canvas.getBoundingClientRect();
+        const container = canvas.parentElement || canvas;
+        const rect = container.getBoundingClientRect();
         const cssW = Math.max(1, Math.round(rect.width || canvas.clientWidth || 300));
         const cssH = Math.max(1, Math.round(rect.height || canvas.clientHeight || 300));
         const w = Math.round(cssW * dpr);
@@ -729,7 +730,7 @@ export default function AnalyticsHud({
           {/* LEFT COLUMN: Telemetry Radar, KPIs & Tools */}
           <aside className="scifi-col left">
             <section
-              className="scifi-panel telemetry"
+              className={`scifi-panel telemetry ${telemetryPercent >= 28 ? "expanded" : ""}`}
               style={{
                 flex: `0 0 ${telemetryPercent}%`,
                 maxHeight: `${telemetryPercent}%`,
