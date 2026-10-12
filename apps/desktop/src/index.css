@@ -1543,6 +1543,55 @@ code {
   font-size: 12px;
 }
 
+.scifi-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 500;
+}
+.scifi-badge-pill strong {
+  font-weight: 700;
+  font-size: 11.5px;
+}
+.scifi-badge-pill.events {
+  border-color: rgba(255, 154, 60, 0.45);
+  background: rgba(255, 154, 60, 0.09);
+  color: rgba(255, 255, 255, 0.9);
+}
+.scifi-badge-pill.events strong {
+  color: #ff9a3c;
+}
+.scifi-badge-pill.events .scifi-pill-dot {
+  background: #ff9a3c;
+  box-shadow: 0 0 6px #ff9a3c;
+}
+.scifi-badge-pill.calls {
+  border-color: rgba(45, 212, 191, 0.45);
+  background: rgba(45, 212, 191, 0.09);
+  color: rgba(255, 255, 255, 0.9);
+}
+.scifi-badge-pill.calls strong {
+  color: #2dd4bf;
+}
+.scifi-badge-pill.calls .scifi-pill-dot {
+  background: #2dd4bf;
+  box-shadow: 0 0 6px #2dd4bf;
+}
+.scifi-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
 .scifi-controls {
   margin-left: auto;
   display: flex;
@@ -1842,6 +1891,14 @@ code {
   letter-spacing: 0.03em;
   color: #fff;
 }
+.kpi-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
 
 /* Tools Table (takes remaining 75% of left column with increased font size) */
 .tools-table-panel {
@@ -2071,6 +2128,15 @@ code {
   background: repeating-linear-gradient(90deg, #ff9a3c 0 3px, rgba(255, 154, 60, 0.2) 3px 5px);
   transition: width 0.3s ease;
 }
+.meter-fill.cache-fill {
+  background: linear-gradient(90deg, #0d9488, #2dd4bf, #3dd68c);
+}
+.net-diff-tag {
+  font-size: 10px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.6);
+  margin-left: 5px;
+}
 
 .kpis-sub {
   display: grid;
@@ -2146,7 +2212,7 @@ code {
   border-left-color: #3dd68c;
 }
 .scifi-log-item.usage {
-  border-left-color: #f43f5e;
+  border-left-color: #facc15;
 }
 
 .stream-filters {
@@ -2210,10 +2276,10 @@ code {
   color: #3dd68c;
 }
 .ev-tag.usage {
-  color: #f43f5e;
+  color: #facc15;
 }
 .ev-usage-metric {
-  color: #93c5fd;
+  color: #fde047;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 10.5px;
   font-weight: 500;

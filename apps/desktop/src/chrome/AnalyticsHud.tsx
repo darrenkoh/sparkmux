@@ -6,7 +6,7 @@ import {
   type TabAnalyticsResponse,
 } from "../api";
 import { cliLabel } from "./artifactModel";
-import { formatBytes, formatNum, formatMs } from "./analyticsFormat";
+import { formatBytes, formatNum, formatMs, formatUsd, estimateCost } from "./analyticsFormat";
 import TerrainViewport from "./TerrainViewport";
 
 export interface AnalyticsHudProps {
@@ -21,7 +21,7 @@ export interface AnalyticsHudProps {
   onDock?: () => void;
 }
 
-export { formatBytes, formatNum, formatMs };
+export { formatBytes, formatNum, formatMs, formatUsd, estimateCost };
 
 const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
 const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
@@ -619,6 +619,19 @@ export default function AnalyticsHud({
   const st = data?.stats;
   const storage = data?.storage;
 
+  const promptTokens = (st?.total_input_tokens ?? 0) + (st?.total_cache_read_tokens ?? 0);
+  const cacheHitRate =
+    promptTokens > 0
+      ? ((st?.total_cache_read_tokens ?? 0) / promptTokens) * 100
+      : 0;
+  const estCost = estimateCost(
+    st?.active_model,
+    st?.total_input_tokens ?? 0,
+    st?.total_output_tokens ?? 0,
+    st?.total_cache_read_tokens ?? 0
+  );
+  const netDiff = (st?.lines_added ?? 0) - (st?.lines_removed ?? 0);
+
   return (
     <div className="scifi-hud-overlay" onClick={onClose}>
       <div
@@ -657,10 +670,18 @@ export default function AnalyticsHud({
                 MODEL: <strong>{st.active_model}</strong>
               </span>
             )}
-            <span>
+            <span
+              className="scifi-badge-pill events"
+              title="Total raw telemetry events captured across this session"
+            >
+              <span className="scifi-pill-dot" />
               TOTAL EVENTS: <strong>{st?.total_events ?? 0}</strong>
             </span>
-            <span>
+            <span
+              className="scifi-badge-pill calls"
+              title="Total tool executions registered"
+            >
+              <span className="scifi-pill-dot" />
               TOTAL CALLS: <strong>{st?.tool_calls ?? 0}</strong>
             </span>
           </div>
@@ -739,7 +760,7 @@ export default function AnalyticsHud({
               <header>
                 <span className="tag">01</span>
                 <span>NEURAL TELEMETRY</span>
-                <small>{st?.total_events ?? 0} TOTAL EVENTS</small>
+                <small>SYNAPTIC REGIONS</small>
               </header>
               <div className="body">
                 <div
@@ -753,24 +774,48 @@ export default function AnalyticsHud({
                   <div className="radar-hint">DRAG · ORBIT &nbsp;&nbsp; WHEEL · ZOOM &nbsp;&nbsp; DBL-CLICK · RESET</div>
                 </div>
                 <div className="kpis">
-                  <div>
-                    <small style={{ color: "#ff9a3c" }}>USER PROMPTS</small>
+                  <div title="User prompts (Frontal Lobe · Amber)">
+                    <small style={{ color: "#ff9a3c" }}>
+                      <span
+                        className="kpi-dot"
+                        style={{ backgroundColor: "#ff9a3c", boxShadow: "0 0 6px #ff9a3c" }}
+                      />
+                      USER PROMPTS
+                    </small>
                     <b style={{ color: "#ff9a3c" }}>{st?.user_prompts ?? 0}</b>
                   </div>
-                  <div>
-                    <small style={{ color: "#c084fc" }}>THINK BLOCKS</small>
+                  <div title="Reasoning & thinking blocks (Dorsal Cortex · Purple)">
+                    <small style={{ color: "#c084fc" }}>
+                      <span
+                        className="kpi-dot"
+                        style={{ backgroundColor: "#c084fc", boxShadow: "0 0 6px #c084fc" }}
+                      />
+                      THINK BLOCKS
+                    </small>
                     <b style={{ color: "#c084fc" }}>
                       {st?.thinking_blocks ?? 0}
                     </b>
                   </div>
-                  <div>
-                    <small style={{ color: "#5b8def" }}>MODEL REPLIES</small>
+                  <div title="Model assistant replies (Temporal Cortex · Blue)">
+                    <small style={{ color: "#5b8def" }}>
+                      <span
+                        className="kpi-dot"
+                        style={{ backgroundColor: "#5b8def", boxShadow: "0 0 6px #5b8def" }}
+                      />
+                      MODEL REPLIES
+                    </small>
                     <b style={{ color: "#5b8def" }}>
                       {st?.assistant_replies ?? 0}
                     </b>
                   </div>
-                  <div>
-                    <small style={{ color: "#2dd4bf" }}>TOOL CALLS</small>
+                  <div title="Tool calls executed (Cerebellum & Brainstem · Teal)">
+                    <small style={{ color: "#2dd4bf" }}>
+                      <span
+                        className="kpi-dot"
+                        style={{ backgroundColor: "#2dd4bf", boxShadow: "0 0 6px #2dd4bf" }}
+                      />
+                      TOOL CALLS
+                    </small>
                     <b style={{ color: "#2dd4bf" }}>{st?.tool_calls ?? 0}</b>
                   </div>
                 </div>
@@ -901,46 +946,46 @@ export default function AnalyticsHud({
               <section className="scifi-panel context-panel">
                 <header>
                   <span className="tag">05</span>
-                  <span>CONTEXT BUFFER & LATENCY</span>
-                  <small>SESSION LIMIT</small>
+                  <span>CACHE EFFICIENCY & CODE DELTA</span>
+                  <small>SESSION ECONOMY</small>
                 </header>
                 <div className="body context-body">
-                  <div className="context-meter">
+                  <div
+                    className="context-meter"
+                    title={`Context Utilization: ${formatNum(st?.context_tokens_used ?? 0)} / ${formatNum(st?.context_window_tokens ?? 200_000)} tokens`}
+                  >
                     <div className="meter-label">
-                      <span>CONTEXT UTILIZATION</span>
-                      <span>
-                        {formatNum(st?.context_tokens_used ?? 0)} /{" "}
-                        {formatNum(st?.context_window_tokens ?? 200_000)}
+                      <span>CACHE HIT EFFICIENCY</span>
+                      <span style={{ color: "#3dd68c", fontWeight: 600 }}>
+                        {cacheHitRate.toFixed(1)}% ({formatNum(st?.total_cache_read_tokens ?? 0)} CACHED)
                       </span>
                     </div>
                     <div className="meter-bar">
                       <div
-                        className="meter-fill"
+                        className="meter-fill cache-fill"
                         style={{
-                          width: `${Math.min(
-                            100,
-                            ((st?.context_tokens_used ?? 0) /
-                              Math.max(1, st?.context_window_tokens ?? 200_000)) *
-                              100
-                          )}%`,
+                          width: `${Math.min(100, Math.max(0, cacheHitRate))}%`,
                         }}
                       />
                     </div>
                   </div>
 
                   <div className="kpis-sub">
-                    <div>
+                    <div title="Estimated session cost based on input, output & cached token rates">
+                      <small>EST. COST</small>
+                      <b style={{ color: "#facc15" }}>{formatUsd(estCost)}</b>
+                    </div>
+                    <div title="Average duration per interaction turn">
                       <small>AVG TURN TIME</small>
                       <b>{formatMs(st?.avg_turn_duration_ms ?? 0)}</b>
                     </div>
-                    <div>
-                      <small>TTFT (FIRST TOKEN)</small>
-                      <b>{formatMs(st?.ttft_ms ?? 0)}</b>
-                    </div>
-                    <div>
-                      <small>CODE DELTA</small>
+                    <div title="Lines added & removed across tool file write/patch operations">
+                      <small>TOOL FILE EDITS</small>
                       <b style={{ color: "#3dd68c" }}>
                         +{st?.lines_added ?? 0} / -{st?.lines_removed ?? 0}
+                        <span className="net-diff-tag">
+                          ({netDiff >= 0 ? `+${netDiff}` : netDiff} net)
+                        </span>
                       </b>
                     </div>
                   </div>

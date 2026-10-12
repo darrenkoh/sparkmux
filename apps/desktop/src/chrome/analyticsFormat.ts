@@ -15,3 +15,41 @@ export function formatMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
+
+export function formatUsd(cost: number): string {
+  if (cost <= 0) return "$0.00";
+  if (cost < 0.01) return "< $0.01";
+  return `$${cost.toFixed(2)}`;
+}
+
+export function estimateCost(
+  model: string | undefined,
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+): number {
+  const m = (model || "").toLowerCase();
+  let inRate = 3.0; // USD per 1M tokens
+  let outRate = 15.0;
+  let cacheRate = 0.30;
+
+  if (m.includes("haiku") || m.includes("flash") || m.includes("mini") || m.includes("8b")) {
+    inRate = 0.25;
+    outRate = 1.25;
+    cacheRate = 0.03;
+  } else if (m.includes("opus")) {
+    inRate = 15.0;
+    outRate = 75.0;
+    cacheRate = 1.50;
+  } else if (m.includes("grok")) {
+    inRate = 2.0;
+    outRate = 10.0;
+    cacheRate = 0.20;
+  }
+
+  return (
+    (Math.max(0, inputTokens) / 1_000_000) * inRate +
+    (Math.max(0, outputTokens) / 1_000_000) * outRate +
+    (Math.max(0, cacheReadTokens) / 1_000_000) * cacheRate
+  );
+}
