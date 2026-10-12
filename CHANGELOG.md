@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.26
+
+### Improvements
+
+- Agent Logs and the Event Stream Log open to the full text of each entry. A tool call shows every argument, and a tool result keeps the rest of the output.
+- A Claude turn in the event stream shows how long the turn took and how many messages it contained.
+
+### Fixes
+
+- Claude thinking blocks that have no text no longer appear as empty THINK rows.
+
 ## 0.1.25
 
 ### Improvements
