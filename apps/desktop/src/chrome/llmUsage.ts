@@ -12,7 +12,6 @@ export interface UsageChip {
   tone: UsageTone;
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const MONTHS = [
   "Jan",
   "Feb",
@@ -59,10 +58,10 @@ export function usageChips(
   if (usage.cli === "grok") {
     const bar = usage.bars[0];
     if (!bar) return [];
-    return [chip(grokText(bar, now, timeZone), title, bar)];
+    return [chip(grokText(bar, now), title, bar)];
   }
   if (usage.cli === "claude") {
-    return [chip(claudeText(usage.bars), title, tighter(usage.bars))];
+    return [chip(claudeText(usage.bars, now), title, tighter(usage.bars))];
   }
   if (usage.cli === "antigravity") {
     return groupChips(usage.bars, title, now);
@@ -102,31 +101,28 @@ export function formatAbsolute(ms: number, timeZone?: string): string {
   return `${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function grokText(bar: UsageBar, now: number, timeZone?: string): string {
-  const when = resetPhrase(bar.resets_at_ms, now, timeZone);
-  const head = `Grok ${whole(bar.percent)}% used`;
-  return when ? `${head} · ${when}` : head;
+function grokText(bar: UsageBar, now: number): string {
+  return allowanceText("Grok", bar, now);
 }
 
-function resetPhrase(resetsAt: number | null, now: number, timeZone?: string): string | null {
-  if (resetsAt == null) return null;
-  const delta = resetsAt - now;
-  if (delta <= 60_000) return "resets now";
-  if (delta < DAY_MS) return `resets in ${formatSpan(delta)}`;
-  return `resets ${formatAbsolute(resetsAt, timeZone)}`;
-}
-
-function claudeText(bars: UsageBar[]): string {
+function claudeText(bars: UsageBar[], now: number): string {
   const five = bars.find((bar) => bar.label === "5 hour");
   const week = bars.find((bar) => bar.label === "Week");
   const parts: string[] = [];
-  if (five) parts.push(`5h ${whole(five.percent)}% used`);
-  if (week) parts.push(`wk ${whole(week.percent)}% used`);
+  if (five) parts.push(allowanceText("5h", five, now));
+  if (week) parts.push(allowanceText("wk", week, now));
   if (parts.length === 0) {
     const first = bars[0];
-    parts.push(`${first.label} ${whole(first.percent)}% used`);
+    parts.push(allowanceText(first.label, first, now));
   }
   return `Claude ${parts.join(" · ")}`;
+}
+
+/** `Grok 26% Remaining - Resets:1d 20h 50m 10s` */
+function allowanceText(name: string, bar: UsageBar, now: number): string {
+  const head = `${name} ${whole(amountLeft(bar))}% Remaining`;
+  const left = countdown(bar.resets_at_ms, now);
+  return left ? `${head} - Resets:${left}` : head;
 }
 
 function groupChips(bars: UsageBar[], title: string, now: number): UsageChip[] {
@@ -140,22 +136,29 @@ function groupChips(bars: UsageBar[], title: string, now: number): UsageChip[] {
     const members = bars.filter((bar) => (bar.group ?? "") === name);
     const bar = tighter(members);
     const label = name || bar.label;
-    const when = agyWhen(bar.resets_at_ms, now);
-    const text = when
-      ? `${label} ${whole(bar.percent)}% left · ${when}`
-      : `${label} ${whole(bar.percent)}% left`;
-    chips.push(chip(text, title, bar));
+    chips.push(chip(allowanceText(label, bar, now), title, bar));
   }
   return chips;
 }
 
-function agyWhen(resetsAt: number | null, now: number): string | null {
+/** Remaining time as `1d 20h 50m 10s`, `3h 55m 0s`, or `12s`. */
+function countdown(resetsAt: number | null, now: number): string | null {
   if (resetsAt == null) return null;
-  const delta = resetsAt - now;
-  if (delta <= 60_000) return "now";
-  if (delta < DAY_MS) return `in ${formatSpan(delta)}`;
-  const hours = Math.round(delta / 3_600_000);
-  return `${hours}h`;
+  return formatCountdown(resetsAt - now);
+}
+
+function formatCountdown(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSec / 86_400);
+  const hours = Math.floor((totalSec % 86_400) / 3_600);
+  const minutes = Math.floor((totalSec % 3_600) / 60);
+  const seconds = totalSec % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (days > 0 || hours > 0) parts.push(`${hours}h`);
+  if (days > 0 || hours > 0 || minutes > 0) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+  return parts.join(" ");
 }
 
 function tighter(bars: UsageBar[]): UsageBar {
@@ -180,7 +183,7 @@ function chip(text: string, title: string, bar: UsageBar): UsageChip {
   return {
     text,
     title,
-    fill: clamp(bar.percent),
+    fill: amountLeft(bar),
     tone: usageTone(amountLeft(bar)),
   };
 }
@@ -198,10 +201,9 @@ function tooltip(usage: LlmUsage, now: number, timeZone?: string): string {
 
 function barDetail(bar: UsageBar, timeZone?: string): string {
   const name = [bar.group, bar.label].filter(Boolean).join(" ");
-  const dir = bar.direction === "remaining" ? "left" : "used";
-  const percent = precise(bar.percent);
-  if (bar.resets_at_ms == null) return `${name} ${percent} ${dir}`;
-  return `${name} ${percent} ${dir}, resets ${formatAbsolute(bar.resets_at_ms, timeZone)}`;
+  const percent = precise(amountLeft(bar));
+  if (bar.resets_at_ms == null) return `${name} ${percent} Remaining`;
+  return `${name} ${percent} Remaining, resets ${formatAbsolute(bar.resets_at_ms, timeZone)}`;
 }
 
 function fetchedAge(fetchedAt: number, now: number): string {
@@ -212,15 +214,6 @@ function fetchedAge(fetchedAt: number, now: number): string {
   const hours = Math.floor(min / 60);
   if (hours < 48) return `fetched ${hours}h ago`;
   return `fetched ${Math.floor(hours / 24)}d ago`;
-}
-
-function formatSpan(ms: number): string {
-  const totalMin = Math.max(1, Math.round(ms / 60_000));
-  const hours = Math.floor(totalMin / 60);
-  const minutes = totalMin % 60;
-  if (hours <= 0) return `${minutes}m`;
-  if (minutes === 0) return `${hours}h`;
-  return `${hours}h ${minutes}m`;
 }
 
 function whole(percent: number): number {

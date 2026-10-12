@@ -55,11 +55,11 @@ test("grok shows weekly used percent and the local reset", () => {
     ZONE,
   );
   assert.equal(chips.length, 1);
-  assert.equal(chips[0].text, "Grok 70% used · resets Oct 13, 14:22");
-  assert.equal(chips[0].fill, 70);
+  assert.equal(chips[0].text, "Grok 30% Remaining - Resets:3d 1h 22m 33s");
+  assert.equal(chips[0].fill, 30);
   assert.equal(chips[0].tone, "warn");
   assert.match(chips[0].title, /SuperGrok Plus/);
-  assert.match(chips[0].title, /Weekly 70% used, resets Oct 13, 14:22/);
+  assert.match(chips[0].title, /Weekly 30% Remaining, resets Oct 13, 14:22/);
   assert.match(chips[0].title, /Credits \$10\.00/);
   assert.match(chips[0].title, /fetched 2m ago/);
 });
@@ -78,7 +78,7 @@ test("a grok window inside a day uses a relative reset", () => {
     }),
     NOW,
   );
-  assert.equal(chips[0].text, "Grok 12% used · resets in 3h 55m");
+  assert.equal(chips[0].text, "Grok 88% Remaining - Resets:3h 55m 0s");
   assert.equal(chips[0].tone, "ok");
 });
 
@@ -96,10 +96,13 @@ test("claude shows the five hour and weekly used meters", () => {
     ZONE,
   );
   assert.equal(chips.length, 1);
-  assert.equal(chips[0].text, "Claude 5h 12% used · wk 40% used");
-  assert.equal(chips[0].fill, 40);
+  assert.equal(
+    chips[0].text,
+    "Claude 5h 88% Remaining - Resets:1h 0m 0s · wk 60% Remaining - Resets:3d 1h 22m 33s",
+  );
+  assert.equal(chips[0].fill, 60);
   assert.equal(chips[0].tone, "ok");
-  assert.match(chips[0].title, /Week Sonnet 8% used/);
+  assert.match(chips[0].title, /Week Sonnet 92% Remaining/);
 });
 
 test("antigravity shows each group and the tighter window", () => {
@@ -135,7 +138,10 @@ test("antigravity shows each group and the tighter window", () => {
   );
   assert.deepEqual(
     chips.map((item) => item.text),
-    ["Gemini 84% left · 149h", "Claude 49% left · 149h"],
+    [
+      "Gemini 84% Remaining - Resets:6d 4h 52m 0s",
+      "Claude 49% Remaining - Resets:6d 4h 52m 0s",
+    ],
   );
   assert.equal(chips[0].tone, "ok");
   assert.equal(chips[1].tone, "warn");
@@ -162,7 +168,7 @@ test("antigravity shows each group and the tighter window", () => {
     }),
     NOW,
   );
-  assert.equal(tighter[0].text, "Gemini 40% left · in 3h 55m");
+  assert.equal(tighter[0].text, "Gemini 40% Remaining - Resets:3h 55m 0s");
   assert.equal(tighter[0].tone, "warn");
 });
 
@@ -190,7 +196,10 @@ CLAUDE AND GPT MODELS
   const chips = usageChips(parsed, NOW);
   assert.deepEqual(
     chips.map((item) => item.text),
-    ["Gemini 76% left · 135h", "Claude 49% left · 135h"],
+    [
+      "Gemini 76% Remaining - Resets:5d 14h 57m 0s",
+      "Claude 49% Remaining - Resets:5d 14h 54m 0s",
+    ],
   );
   assert.equal(chips[0].fill, 76.23);
   assert.equal(chips[0].tone, "ok");
@@ -208,7 +217,7 @@ GEMINI MODELS
 `,
     NOW,
   );
-  assert.equal(usageChips(tighter, NOW)[0].text, "Gemini 40% left · in 3h 55m");
+  assert.equal(usageChips(tighter, NOW)[0].text, "Gemini 40% Remaining - Resets:3h 55m 0s");
   assert.equal(parseAgyUsageScreen("just a shell prompt\n%", NOW), null);
 });
 

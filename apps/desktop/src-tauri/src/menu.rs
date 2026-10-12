@@ -243,11 +243,8 @@ fn agy_usage_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::men
         .build(app)?;
         choices.push(item);
     }
-    let mut builder = SubmenuBuilder::new(app, "Antigravity usage");
-    for (index, choice) in choices.iter().enumerate() {
-        if index == 1 {
-            builder = builder.separator();
-        }
+    let mut builder = SubmenuBuilder::new(app, "Antigravity (Usage Refresh)");
+    for choice in &choices {
         builder = builder.item(choice);
     }
     builder.build()
