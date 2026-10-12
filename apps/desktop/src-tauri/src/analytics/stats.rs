@@ -139,6 +139,12 @@ pub fn compute_stats(
             0
         };
 
+        // Claude writes thinking blocks with an empty string when the model
+        // omits the summary. Those rows have no text to count.
+        if ev.k == THINK && ev.b.trim().is_empty() {
+            continue;
+        }
+
         match ev.k.as_str() {
             USER => {
                 stats.user_prompts += 1;
@@ -269,9 +275,16 @@ pub fn compute_stats(
 
     stats.timeline = buckets;
 
-    // Last 60 events for HUD terminal log
-    let tail_len = events.len().min(60);
-    stats.recent_events = events[events.len() - tail_len..].to_vec();
+    // Last 60 events for the HUD log. Blank thinking rows are omitted so they
+    // do not crowd out a prompt, reply, or tool call.
+    stats.recent_events = events
+        .iter()
+        .rev()
+        .filter(|ev| !(ev.k == THINK && ev.b.trim().is_empty()))
+        .take(60)
+        .cloned()
+        .collect();
+    stats.recent_events.reverse();
 
     stats
 }
@@ -293,11 +306,15 @@ mod tests {
         ev4.n = "claude-3".into();
         ev4.ti = 500;
         ev4.to = 100;
+        let blank = Event::new(1500, THINK);
+        let mut filled = Event::new(1600, THINK);
+        filled.b = "look at the layout".into();
 
-        let events = vec![ev1, ev2, ev3, ev4];
+        let events = vec![ev1, blank, filled, ev2, ev3, ev4];
         let stats = compute_stats(&events, 500, 200000, 120, 10, 2, "claude-3");
 
         assert_eq!(stats.user_prompts, 1);
+        assert_eq!(stats.thinking_blocks, 1);
         assert_eq!(stats.tool_calls, 1);
         assert_eq!(stats.total_input_tokens, 500);
         assert_eq!(stats.total_output_tokens, 100);

@@ -24,11 +24,11 @@ use serde_json::Value;
 
 const MAX_TAIL: u64 = 512 * 1024;
 const MAX_ENTRIES: usize = 60;
-const ASSISTANT_CAP: usize = 8_000;
-const USER_CAP: usize = 4_000;
-const REASON_CAP: usize = 1_500;
-const RESULT_CAP: usize = 180;
-const ARG_CAP: usize = 160;
+const ASSISTANT_CAP: usize = 12_000;
+const USER_CAP: usize = 12_000;
+const REASON_CAP: usize = 12_000;
+const RESULT_CAP: usize = 12_000;
+const ARG_CAP: usize = 12_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CliKind {
@@ -1190,21 +1190,14 @@ fn push_grok(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
             if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
                     let name = call.get("name").and_then(Value::as_str).unwrap_or("tool");
-                    let summary = args_summary(call.get("arguments").unwrap_or(&Value::Null));
-                    push_text(entries, offset, "tool", name, &summary, ARG_CAP);
+                    let detail = args_detail(call.get("arguments").unwrap_or(&Value::Null));
+                    push_text(entries, offset, "tool", name, &detail, ARG_CAP);
                 }
             }
         }
         "tool_result" => {
             let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
-            push_text(
-                entries,
-                offset,
-                "tool_result",
-                "Result",
-                &first_line(&raw),
-                RESULT_CAP,
-            );
+            push_text(entries, offset, "tool_result", "Result", &raw, RESULT_CAP);
         }
         "reasoning" => {
             push_text(
@@ -1279,19 +1272,12 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
             }
             "tool_use" => {
                 let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
-                let summary = args_summary(block.get("input").unwrap_or(&Value::Null));
-                tools.push((name.to_string(), summary));
+                let detail = args_detail(block.get("input").unwrap_or(&Value::Null));
+                tools.push((name.to_string(), detail));
             }
             "tool_result" => {
                 let raw = text_from_value(block.get("content").unwrap_or(&Value::Null));
-                push_text(
-                    entries,
-                    offset,
-                    "tool_result",
-                    "Result",
-                    &first_line(&raw),
-                    RESULT_CAP,
-                );
+                push_text(entries, offset, "tool_result", "Result", &raw, RESULT_CAP);
             }
             _ => {}
         }
@@ -1470,8 +1456,8 @@ fn push_agy(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value, full: 
             if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
                     let name = call.get("name").and_then(Value::as_str).unwrap_or("tool");
-                    let summary = args_summary(tool_args(call));
-                    push_text(entries, offset, "tool", name, &summary, ARG_CAP);
+                    let detail = args_detail(tool_args(call));
+                    push_text(entries, offset, "tool", name, &detail, ARG_CAP);
                 }
             }
         }
@@ -1484,14 +1470,7 @@ fn push_agy(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value, full: 
             if history_blob(&raw) {
                 return;
             }
-            push_text(
-                entries,
-                offset,
-                "tool_result",
-                "Result",
-                &first_line(&raw),
-                RESULT_CAP,
-            );
+            push_text(entries, offset, "tool_result", "Result", &raw, RESULT_CAP);
         }
         _ => {}
     }
@@ -1577,6 +1556,65 @@ fn last_tag(text: &str, tag: &str) -> Option<String> {
     last
 }
 
+/// Every argument, one field per line, so a log row can expand past the
+/// single path or command [`args_summary`] keeps.
+pub(crate) fn args_detail(args: &Value) -> String {
+    let parsed;
+    let value = match args {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                parsed = serde_json::from_str::<Value>(trimmed).unwrap_or(Value::Null);
+                if parsed.is_null() {
+                    return text.clone();
+                }
+                &parsed
+            } else {
+                return text.clone();
+            }
+        }
+        other => other,
+    };
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_by(|left, right| arg_rank(left).cmp(&arg_rank(right)).then(left.cmp(right)));
+            let mut lines = Vec::new();
+            for key in keys {
+                let rendered = render_arg_value(&map[key]);
+                if rendered.is_empty() {
+                    continue;
+                }
+                lines.push(format!("{key}: {rendered}"));
+            }
+            lines.join("\n")
+        }
+        Value::Array(_) => serde_json::to_string(value).unwrap_or_default(),
+        Value::String(text) => text.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn arg_rank(key: &str) -> u8 {
+    match key {
+        "file_path" | "target_file" | "path" | "AbsolutePath" | "TargetFile" | "notebook_path" => 0,
+        "command" | "CommandLine" | "cmd" => 1,
+        "pattern" | "query" | "url" | "Url" | "Prompt" => 2,
+        _ => 9,
+    }
+}
+
+fn render_arg_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.trim().to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(flag) => flag.to_string(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
 pub(crate) fn args_summary(args: &Value) -> String {
     let owned;
     let obj = match args {
@@ -1612,14 +1650,6 @@ pub(crate) fn args_summary(args: &Value) -> String {
         }
     }
     String::new()
-}
-
-fn first_line(text: &str) -> String {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("")
-        .to_string()
 }
 
 fn push_text(
@@ -1735,7 +1765,10 @@ mod tests {
         assert!(blob.contains("You build the panel"), "{blob}");
         assert!(blob.contains("Thinking check the layout"), "{blob}");
         assert!(blob.contains("Assistant Done."), "{blob}");
-        assert!(blob.contains("read_file src/App.tsx"), "{blob}");
+        assert!(
+            blob.contains("read_file target_file: src/App.tsx"),
+            "{blob}"
+        );
         assert!(blob.contains("Result fn main()"), "{blob}");
         assert!(!blob.contains("SECRET"), "{blob}");
         assert!(!blob.contains("You are Grok"), "{blob}");
@@ -1767,7 +1800,7 @@ mod tests {
         assert!(blob.contains("user ship the panel"), "{blob}");
         assert!(blob.contains("reasoning look at the layout"), "{blob}");
         assert!(blob.contains("assistant The panel is ready."), "{blob}");
-        assert!(blob.contains("tool src/App.tsx"), "{blob}");
+        assert!(blob.contains("tool file_path: src/App.tsx"), "{blob}");
         assert!(blob.contains("tool_result file starts here"), "{blob}");
         assert!(!blob.contains("hidden system"), "{blob}");
         assert!(!blob.contains("side path"), "{blob}");
@@ -2093,7 +2126,11 @@ mod tests {
             blob.contains("assistant Assistant The grid is fixed."),
             "{blob}"
         );
-        assert!(blob.contains("tool run_command cargo test"), "{blob}");
+        assert!(
+            blob.contains("tool run_command CommandLine: cargo test"),
+            "{blob}"
+        );
+        assert!(blob.contains("Cwd: /tmp/proj-a"), "{blob}");
         assert!(
             blob.contains("tool_result Result untruncated tool line"),
             "{blob}"

@@ -3,13 +3,15 @@ import {
   tabAnalytics,
   setAnalyticsEnabled,
   clearAnalyticsData,
+  type AnalyticsEvent,
   type TabAnalyticsResponse,
 } from "../api";
-import { cliLabel } from "./artifactModel";
+import { cliLabel, previewLine } from "./artifactModel";
 import {
   formatBytes,
   formatNum,
   formatMs,
+  formatDuration,
   formatUsd,
   estimateCost,
   estimateTotalCost,
@@ -239,6 +241,55 @@ function generateAnatomicalBrain(): {
 
 const CONNECTOME_MODEL = generateAnatomicalBrain();
 
+function turnLabel(ev: AnalyticsEvent): string {
+  const parts: string[] = [];
+  if (ev.ms && ev.ms > 0) parts.push(formatDuration(ev.ms));
+  if (ev.b) parts.push(ev.b);
+  if (ev.a) parts.push(ev.a);
+  return parts.join(" · ") || "Turn finished";
+}
+
+function usagePreview(ev: AnalyticsEvent): string {
+  const cached = (ev.tc ?? 0) > 0 ? ` (${formatNum(ev.tc ?? 0)} cached)` : "";
+  const reasoning = (ev.tr ?? 0) > 0 ? ` [${formatNum(ev.tr ?? 0)} reasoning]` : "";
+  return `+${formatNum(ev.ti ?? 0)} in / ${formatNum(ev.to ?? 0)} out${cached}${reasoning}`;
+}
+
+function usageDetail(ev: AnalyticsEvent): string {
+  const lines = [
+    `Input ${formatNum(ev.ti ?? 0)}`,
+    `Output ${formatNum(ev.to ?? 0)}`,
+    `Cache read ${formatNum(ev.tc ?? 0)}`,
+    `Cache write ${formatNum(ev.tw ?? 0)}`,
+    `Reasoning ${formatNum(ev.tr ?? 0)}`,
+  ];
+  return lines.join("\n");
+}
+
+/** Collapsed row. Tool rows keep the short path or command. */
+function eventPreview(ev: AnalyticsEvent): string {
+  if (ev.k === "turn") return turnLabel(ev);
+  if (ev.k === "usage") return usagePreview(ev);
+  if (ev.a) return ev.a;
+  if (ev.b) return previewLine(ev.b);
+  if (ev.ms) return formatDuration(ev.ms);
+  return "";
+}
+
+/** Expanded text. Tool rows show every argument, not only the short label. */
+function eventDetail(ev: AnalyticsEvent): string {
+  if (ev.k === "turn") return turnLabel(ev);
+  if (ev.k === "usage") return usageDetail(ev);
+  if (ev.b) return ev.b;
+  if (ev.a) return ev.a;
+  if (ev.ms) return formatDuration(ev.ms);
+  return "";
+}
+
+function eventKey(ev: AnalyticsEvent): string {
+  return [ev.t, ev.k, ev.n ?? "", ev.ms ?? 0, ev.a ?? "", (ev.b ?? "").slice(0, 48)].join("|");
+}
+
 export default function AnalyticsHud({
   sessionName,
   tabId,
@@ -254,6 +305,7 @@ export default function AnalyticsHud({
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [eventFilter, setEventFilter] = useState<"all" | "turns" | "tools" | "usage">("all");
+  const [openEvents, setOpenEvents] = useState<Set<string>>(() => new Set());
 
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -1057,9 +1109,15 @@ export default function AnalyticsHud({
                   )}
                   {st?.recent_events
                     ?.filter((ev) => {
+                      if (ev.k === "think" && !(ev.b || "").trim()) return false;
                       if (eventFilter === "all") return true;
                       if (eventFilter === "turns")
-                        return ev.k === "user" || ev.k === "reply" || ev.k === "think";
+                        return (
+                          ev.k === "user" ||
+                          ev.k === "reply" ||
+                          ev.k === "think" ||
+                          ev.k === "turn"
+                        );
                       if (eventFilter === "tools")
                         return ev.k === "tool" || ev.k === "result" || ev.k === "done";
                       if (eventFilter === "usage") return ev.k === "usage";
@@ -1068,36 +1126,46 @@ export default function AnalyticsHud({
                     .slice()
                     .reverse()
                     .map((ev, i) => {
-                      const isUsage = ev.k === "usage";
+                      const key = eventKey(ev);
+                      const open = openEvents.has(key);
+                      const detail = eventDetail(ev);
                       return (
-                        <li key={`${ev.t}-${i}`} className={`scifi-log-item ${ev.k}`}>
-                          <span className="ev-time">
-                            {new Date(ev.t).toLocaleTimeString()}
-                          </span>
-                          <span className={`ev-tag ${ev.k}`}>
-                            [{ev.k.toUpperCase()}]
-                          </span>
-                          {isUsage ? (
-                            <span
-                              className="ev-content ev-usage-content"
-                              title={`Token Checkpoint: ${formatNum(ev.ti ?? 0)} in, ${formatNum(ev.to ?? 0)} out, ${formatNum(ev.tc ?? 0)} cached, ${formatNum(ev.tr ?? 0)} reasoning`}
-                            >
-                              {ev.n ? <strong>{ev.n}: </strong> : null}
-                              <span className="ev-usage-metric">
-                                +{formatNum(ev.ti ?? 0)} in / {formatNum(ev.to ?? 0)} out
-                                {(ev.tc ?? 0) > 0 ? ` (${formatNum(ev.tc ?? 0)} cached)` : ""}
-                                {(ev.tr ?? 0) > 0 ? ` [${formatNum(ev.tr ?? 0)} reasoning]` : ""}
+                        <li key={`${key}-${i}`} className={`scifi-log-item ${ev.k}`}>
+                          <details
+                            open={open}
+                            onToggle={(event) => {
+                              const nextOpen = event.currentTarget.open;
+                              setOpenEvents((prev) => {
+                                const next = new Set(prev);
+                                if (nextOpen) next.add(key);
+                                else next.delete(key);
+                                return next;
+                              });
+                            }}
+                          >
+                            <summary>
+                              <span className="ev-time">
+                                {new Date(ev.t).toLocaleTimeString()}
                               </span>
-                            </span>
-                          ) : (
-                            <span
-                              className="ev-content"
-                              title={ev.b || ev.a || ev.n || ""}
-                            >
-                              {ev.n ? <strong>{ev.n}: </strong> : null}
-                              {ev.a || ev.b || (ev.ms ? `${ev.ms}ms` : "")}
-                            </span>
-                          )}
+                              <span className={`ev-tag ${ev.k}`}>
+                                [{ev.k.toUpperCase()}]
+                              </span>
+                              <span className="ev-content" title={detail}>
+                                {ev.n ? <strong>{ev.n}</strong> : null}
+                                {eventPreview(ev) && (
+                                  <span
+                                    className={
+                                      ev.k === "usage" ? "ev-preview ev-usage-metric" : "ev-preview"
+                                    }
+                                  >
+                                    {ev.n ? ": " : ""}
+                                    {eventPreview(ev)}
+                                  </span>
+                                )}
+                              </span>
+                            </summary>
+                            {detail && <div className="ev-full">{detail}</div>}
+                          </details>
                         </li>
                       );
                     })}

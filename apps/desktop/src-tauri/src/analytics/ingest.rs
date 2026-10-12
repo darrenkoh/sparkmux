@@ -16,17 +16,20 @@ use serde_json::{Map, Value};
 
 use super::event::{self, parse_iso_ms, Event};
 use crate::artifacts::{
-    agy_bookkeeping, agy_tool_result, args_summary, extract_user_query, reasoning_text,
-    text_from_value, tool_args, truncate_chars, CliKind,
+    agy_bookkeeping, agy_tool_result, args_detail, args_summary, extract_user_query,
+    reasoning_text, text_from_value, tool_args, truncate_chars, CliKind,
 };
 
 /// Bytes read from one file per tick. A large history imports over a few ticks.
 pub const MAX_READ: u64 = 8 * 1024 * 1024;
-const USER_CAP: usize = 1_200;
-const REPLY_CAP: usize = 1_200;
-const THINK_CAP: usize = 800;
-const RESULT_CAP: usize = 240;
+const USER_CAP: usize = 4_000;
+const REPLY_CAP: usize = 4_000;
+const THINK_CAP: usize = 4_000;
+const RESULT_CAP: usize = 4_000;
+/// Short tool label (a path or command) shown on the collapsed log row.
 const ARG_CAP: usize = 200;
+/// Full tool arguments kept for the expanded log row.
+const DETAIL_CAP: usize = 4_000;
 const PENDING_CAP: usize = 256;
 const QUEUE_CAP: usize = 20_000;
 /// Context window assumed for Claude, which does not record it.
@@ -207,20 +210,10 @@ fn body(text: &str, cap: usize) -> (String, u64) {
     (truncate_chars(trimmed, cap), trimmed.chars().count() as u64)
 }
 
-/// One-line preview for tool output.
-fn one_line(text: &str, cap: usize) -> (String, u64) {
-    let count = text.trim().chars().count() as u64;
-    let mut flat = String::new();
-    for word in text.split_whitespace() {
-        if !flat.is_empty() {
-            flat.push(' ');
-        }
-        flat.push_str(word);
-        if flat.len() > cap * 4 {
-            break;
-        }
-    }
-    (truncate_chars(&flat, cap), count)
+fn fill_tool(ev: &mut Event, args: &Value) {
+    ev.a = truncate_chars(&args_summary(args), ARG_CAP);
+    let detail = args_detail(args);
+    (ev.b, ev.c) = body(&detail, DETAIL_CAP);
 }
 
 fn noise_prompt(text: &str) -> bool {
@@ -538,8 +531,13 @@ fn grok_chat(
             out.push(ev);
         }
         "reasoning" => {
-            let mut ev = Event::new(fallback(cur), event::THINK);
             let text = reasoning_text(obj);
+            // An empty summary leaves only `encrypted_content`, which is not
+            // the reasoning text. Skip it instead of logging a blank think row.
+            if text.trim().is_empty() {
+                return;
+            }
+            let mut ev = Event::new(fallback(cur), event::THINK);
             (ev.b, ev.c) = body(&text, THINK_CAP);
             cur.pending_reasoning_tokens += estimate_tokens(&text);
             out.push(ev);
@@ -568,10 +566,7 @@ fn grok_chat(
                     let mut args_buf = None;
                     let parsed_args = get_args_value(args, &mut args_buf);
                     track_tool_code_delta(&ev.n, parsed_args, cur);
-                    ev.a = truncate_chars(
-                        &args_summary(call.get("arguments").unwrap_or(&Value::Null)),
-                        ARG_CAP,
-                    );
+                    fill_tool(&mut ev, args);
                     tools.push(ev);
                 }
             }
@@ -591,7 +586,7 @@ fn grok_chat(
         "tool_result" => {
             let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
             let mut ev = Event::new(fallback(cur), event::RESULT);
-            (ev.b, ev.c) = one_line(&raw, RESULT_CAP);
+            (ev.b, ev.c) = body(&raw, RESULT_CAP);
             out.push(ev);
         }
         _ => {}
@@ -629,8 +624,17 @@ fn claude_record(obj: &Map<String, Value>, cur: &mut Cursor, fallback: i64, out:
     match str_of(obj, "type") {
         "system" => {
             if str_of(obj, "subtype") == "turn_duration" {
+                // Wall clock for one user turn, including tool calls.
+                // `durationMs` feeds the average. `messageCount` is how many
+                // messages that turn contained.
                 let mut ev = Event::new(ts, event::TURN);
                 ev.ms = u64_of(obj, "durationMs");
+                let messages = u64_of(obj, "messageCount");
+                if messages == 1 {
+                    ev.b = "1 message".into();
+                } else if messages > 1 {
+                    ev.b = format!("{messages} messages");
+                }
                 out.push(ev);
             }
         }
@@ -732,13 +736,39 @@ fn claude_prompt(raw: &str, ts: i64, out: &mut Vec<Event>) {
     out.push(ev);
 }
 
+/// Plain thinking text. An empty string plus a signature is Claude's
+/// omitted-thinking shape. `redacted_thinking` stores ciphertext in `data`.
+fn claude_thinking_text(block: &Value) -> String {
+    if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+        let text = text.trim();
+        if !text.is_empty() {
+            return text.to_string();
+        }
+    }
+    for key in ["summary", "text"] {
+        if let Some(text) = block.get(key).and_then(Value::as_str) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return text.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>) {
     match block.get("type").and_then(Value::as_str).unwrap_or("") {
         "thinking" | "redacted_thinking" => {
-            let text = block.get("thinking").and_then(Value::as_str).unwrap_or("");
+            let text = claude_thinking_text(block);
+            // Newer Claude models persist thinking with an empty string and a
+            // signature (`display: omitted`). The signature is not the text
+            // and cannot be turned back into it. A blank row is noise.
+            if text.is_empty() {
+                return;
+            }
             let mut ev = Event::new(ts, event::THINK);
-            (ev.b, ev.c) = body(text, THINK_CAP);
-            cur.pending_reasoning_tokens += estimate_tokens(text);
+            (ev.b, ev.c) = body(&text, THINK_CAP);
+            cur.pending_reasoning_tokens += estimate_tokens(&text);
             out.push(ev);
         }
         "text" => {
@@ -762,7 +792,7 @@ fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut
             let parsed_args = get_args_value(input, &mut args_buf);
             track_tool_code_delta(&name, parsed_args, cur);
             let mut ev = Event::new(ts, event::TOOL);
-            ev.a = truncate_chars(&args_summary(input), ARG_CAP);
+            fill_tool(&mut ev, input);
             ev.n.clone_from(&name);
             if let Some(id) = block.get("id").and_then(Value::as_str) {
                 if cur.pending.len() >= PENDING_CAP {
@@ -881,7 +911,7 @@ fn agy_step(
                     let parsed_args = get_args_value(args, &mut args_buf);
                     track_tool_code_delta(&name, parsed_args, cur);
                     let mut ev = Event::new(ts, event::TOOL);
-                    ev.a = truncate_chars(&args_summary(args), ARG_CAP);
+                    fill_tool(&mut ev, args);
                     ev.n.clone_from(&name);
                     out.push(ev);
                     remember_agy_tool(cur, ts, name);
@@ -899,7 +929,7 @@ fn agy_step(
             let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
             let failed = agy_failed(obj);
             let mut ev = Event::new(ts, event::RESULT);
-            (ev.b, ev.c) = one_line(&raw, RESULT_CAP);
+            (ev.b, ev.c) = body(&raw, RESULT_CAP);
             ev.err = failed;
             out.push(ev);
             if let Some((start, name)) = take_oldest_pending(cur) {
@@ -1055,7 +1085,7 @@ fn claude_result(block: &Value, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>)
     let raw = text_from_value(block.get("content").unwrap_or(&Value::Null));
     let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
     let mut ev = Event::new(ts, event::RESULT);
-    (ev.b, ev.c) = one_line(&raw, RESULT_CAP);
+    (ev.b, ev.c) = body(&raw, RESULT_CAP);
     ev.err = failed;
     out.push(ev);
     let id = block
@@ -1125,6 +1155,7 @@ mod tests {
                 "{\"type\":\"user\",\"synthetic_reason\":\"mcp\",\"content\":[{\"type\":\"text\",\"text\":\"<system-reminder>x</system-reminder>\"}]}\n",
                 "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<user_query>hide the drop zone</user_query>\"}]}\n",
                 "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"look first\"}],\"encrypted_content\":\"SECRET\"}\n",
+                "{\"type\":\"reasoning\",\"summary\":[],\"encrypted_content\":\"CIPHER\"}\n",
                 "{\"type\":\"assistant\",\"content\":\"Reading.\",\"model_id\":\"grok-4.7-build\",\"tool_calls\":[{\"id\":\"c1\",\"name\":\"grep\",\"arguments\":\"{\\\"pattern\\\":\\\"videoDrop\\\"}\"}]}\n",
                 "{\"type\":\"tool_result\",\"tool_call_id\":\"c1\",\"content\":\"Found 74\\nmatching lines\"}\n",
                 "{\"type\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"c2\",\"name\":\"read_file\",\"arguments\":{\"target_file\":\"app.js\"}}]}\n",
@@ -1135,6 +1166,8 @@ mod tests {
         let events = ingest(CliKind::Grok, &chat, &mut cur, 0);
         let blob = serde_json::to_string(&events).unwrap();
         assert!(!blob.contains("SECRET"), "{blob}");
+        assert!(!blob.contains("CIPHER"), "{blob}");
+        assert_eq!(events.iter().filter(|event| event.k == "think").count(), 1);
         assert!(!blob.contains("system-reminder"), "{blob}");
         let user = events.iter().find(|e| e.k == "user").unwrap();
         assert_eq!(user.b, "hide the drop zone");
@@ -1143,6 +1176,7 @@ mod tests {
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].n, "grep");
         assert_eq!(tools[0].a, "videoDrop");
+        assert_eq!(tools[0].b, "pattern: videoDrop");
         assert_eq!(tools[0].t, parse_iso_ms("2026-10-10T08:55:27Z").unwrap());
         assert_eq!(tools[1].a, "app.js");
         assert_eq!(tools[1].t, parse_iso_ms("2026-10-10T08:55:30Z").unwrap());
@@ -1158,7 +1192,7 @@ mod tests {
         let usage = events.iter().find(|e| e.k == "usage").unwrap();
         assert_eq!((usage.ti, usage.to, usage.tc, usage.tr), (900, 30, 500, 20));
         let result = events.iter().find(|e| e.k == "result").unwrap();
-        assert_eq!(result.b, "Found 74 matching lines");
+        assert_eq!(result.b, "Found 74\nmatching lines");
         assert!(events.iter().all(|e| e.s == "01a12506" && e.cli == "grok"));
         assert_eq!(cur.ctx_used, 20011);
         assert_eq!(cur.ctx_window, 256000);
@@ -1345,26 +1379,26 @@ mod tests {
         assert!(
             failed
                 .iter()
-                .any(|event| event.b == "build failed next line"),
+                .any(|event| event.b == "build failed\nnext line"),
             "{failed:?}"
         );
         assert!(
             failed
                 .iter()
-                .any(|event| event.b == "The search returned nothing rest"),
+                .any(|event| event.b == "The search returned nothing\nrest"),
             "{failed:?}"
         );
         assert!(
             failed
                 .iter()
-                .any(|event| event.b == "Could not apply the edit more"),
+                .any(|event| event.b == "Could not apply the edit\nmore"),
             "{failed:?}"
         );
         let results: Vec<_> = events.iter().filter(|event| event.k == "result").collect();
         for line in [
-            "Opened artifacts.rs line",
-            "Listed the workspace more",
-            "Matched the detector more",
+            "Opened artifacts.rs\nline",
+            "Listed the workspace\nmore",
+            "Matched the detector\nmore",
         ] {
             assert!(
                 results.iter().any(|event| event.b == line),
@@ -1469,6 +1503,33 @@ mod tests {
         assert!(usage.tr > 0, "Reasoning tokens must be > 0: {}", usage.tr);
         assert_eq!(cur.lines_removed, 1);
         assert_eq!(cur.lines_added, 2);
+        let think = events.iter().find(|event| event.k == "think").unwrap();
+        assert_eq!(think.b, "analyzing the root cause here");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claude_skips_omitted_thinking_and_labels_turn_duration() {
+        let dir = scratch("claude_omit");
+        let path = dir.join("proj.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"assistant\",\"timestamp\":\"2026-04-30T22:09:30Z\",\"message\":{\"id\":\"m1\",\"model\":\"claude-opus-4-8\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"EosT\"},{\"type\":\"redacted_thinking\",\"data\":\"abc\"},{\"type\":\"text\",\"text\":\"Done.\"}],\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n",
+                "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-04-30T22:09:40Z\",\"durationMs\":10530,\"messageCount\":4}\n",
+            ),
+        )
+        .unwrap();
+
+        let mut cur = Cursor::default();
+        let events = ingest(CliKind::Claude, &path, &mut cur, 0);
+        assert!(events.iter().all(|event| event.k != "think"), "{events:?}");
+        assert!(events
+            .iter()
+            .any(|event| event.k == "reply" && event.b == "Done."));
+        let turn = events.iter().find(|event| event.k == "turn").unwrap();
+        assert_eq!(turn.ms, 10_530);
+        assert_eq!(turn.b, "4 messages");
         let _ = fs::remove_dir_all(&dir);
     }
 }

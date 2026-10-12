@@ -12,10 +12,16 @@ import {
   outputPaneForTab,
   outputTailKey,
   parseAutoScroll,
+  previewLine,
   visibleEntries,
   type ArtifactFeed,
 } from "./artifactModel.ts";
 import type { Pane } from "../types.ts";
+
+test("previewLine folds newlines and caps a long row", () => {
+  assert.equal(previewLine("file starts here\nrest of the file"), "file starts here rest of the file");
+  assert.equal(previewLine("abcdef", 4), "abc…");
+});
 
 const feed: ArtifactFeed = {
   cli: "grok",

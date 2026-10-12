@@ -5,6 +5,7 @@ import {
   formatBytes,
   formatNum,
   formatMs,
+  formatDuration,
   formatUsd,
   estimateCost,
   estimateTotalCost,
@@ -27,6 +28,13 @@ test("formatNum formats metric counts with suffixes", () => {
 test("formatMs formats milliseconds and seconds", () => {
   assert.equal(formatMs(50), "50ms");
   assert.equal(formatMs(1200), "1.2s");
+});
+
+test("formatDuration reads as a clock span", () => {
+  assert.equal(formatDuration(50), "50ms");
+  assert.equal(formatDuration(10530), "11s");
+  assert.equal(formatDuration(113540), "1m 54s");
+  assert.equal(formatDuration(3_600_000), "1h");
 });
 
 test("formatUsd formats dollar values correctly", () => {

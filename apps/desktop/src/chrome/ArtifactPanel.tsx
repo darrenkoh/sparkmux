@@ -5,6 +5,7 @@ import {
   calculatePreservedScrollTop,
   emptyOutputText,
   hasNewTopContent,
+  previewLine,
   type ArtifactEntry,
   type ArtifactFeed,
 } from "./artifactModel";
@@ -203,32 +204,20 @@ function Entry({
   expanded: boolean;
   onToggle: (open: boolean) => void;
 }) {
-  if (entry.kind === "reasoning") {
-    return (
-      <details
-        className="artifact-item reasoning"
-        open={expanded}
-        onToggle={(event) => {
-          onToggle(event.currentTarget.open);
-        }}
-      >
-        <summary>{entry.label}</summary>
-        <div className="artifact-body">{entry.body}</div>
-      </details>
-    );
-  }
-  if (entry.kind === "tool" || entry.kind === "tool_result") {
-    return (
-      <div className={`artifact-item ${entry.kind}`}>
-        <span className="artifact-label">{entry.label}</span>
-        {entry.body && <span className="artifact-body">{entry.body}</span>}
-      </div>
-    );
-  }
+  const preview = previewLine(entry.body);
   return (
-    <article className={`artifact-item ${entry.kind}`}>
-      <div className="artifact-label">{entry.label}</div>
-      <div className="artifact-body">{entry.body}</div>
-    </article>
+    <details
+      className={`artifact-item ${entry.kind}`}
+      open={expanded}
+      onToggle={(event) => {
+        onToggle(event.currentTarget.open);
+      }}
+    >
+      <summary>
+        <span className="artifact-label">{entry.label}</span>
+        {preview && <span className="artifact-preview">{preview}</span>}
+      </summary>
+      {entry.body && <div className="artifact-body">{entry.body}</div>}
+    </details>
   );
 }

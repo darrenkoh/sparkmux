@@ -832,12 +832,49 @@ body.is-resizing * {
   border-radius: 6px;
 }
 
+.artifact-item summary {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.artifact-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.artifact-item summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.artifact-item[open] summary::before {
+  content: "▾";
+}
+
 .artifact-item .artifact-label {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  margin-bottom: 2px;
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+.artifact-item .artifact-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.artifact-item[open] .artifact-preview {
+  display: none;
 }
 
 .artifact-item .artifact-body {
@@ -845,6 +882,7 @@ body.is-resizing * {
   word-break: break-word;
   line-height: 1.45;
   user-select: text;
+  margin-top: 6px;
 }
 
 .artifact-item.user {
@@ -857,7 +895,8 @@ body.is-resizing * {
   color: #e8a849;
 }
 
-.artifact-item.user .artifact-body {
+.artifact-item.user .artifact-body,
+.artifact-item.user .artifact-preview {
   color: #f6edd8;
 }
 
@@ -871,15 +910,13 @@ body.is-resizing * {
   color: #9ec1ff;
 }
 
-.artifact-item.assistant .artifact-body {
+.artifact-item.assistant .artifact-body,
+.artifact-item.assistant .artifact-preview {
   color: #e7eeff;
 }
 
 .artifact-item.tool,
 .artifact-item.tool_result {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
   margin-bottom: 6px;
   padding: 3px 8px;
   color: var(--muted);
@@ -912,12 +949,12 @@ body.is-resizing * {
   color: #86efac;
 }
 
+.artifact-item.tool .artifact-preview,
+.artifact-item.tool_result .artifact-preview,
 .artifact-item.tool .artifact-body,
 .artifact-item.tool_result .artifact-body {
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--muted);
 }
 
 .artifact-item.reasoning {
@@ -933,6 +970,12 @@ body.is-resizing * {
   color: #d8b4fe;
   font-size: 12px;
   font-weight: 600;
+}
+
+.artifact-item.reasoning .artifact-preview,
+.artifact-item.reasoning .artifact-body {
+  color: #ddd6fe;
+  font-weight: 400;
 }
 
 .tile-split {
@@ -2528,14 +2571,41 @@ code {
   line-height: 1.4;
 }
 .scifi-log-item {
-  display: grid;
-  grid-template-columns: 66px 64px minmax(0, 1fr);
-  gap: 8px;
-  align-items: baseline;
-  padding: 4px 8px;
+  display: block;
+  padding: 0;
   border-left: 2px solid transparent;
   background: rgba(255, 255, 255, 0.02);
   border-radius: 1px;
+}
+.scifi-log-item details > summary {
+  display: grid;
+  grid-template-columns: 12px 66px 72px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.scifi-log-item details > summary::-webkit-details-marker {
+  display: none;
+}
+.scifi-log-item details > summary::before {
+  content: "▸";
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 10px;
+}
+.scifi-log-item details[open] > summary::before {
+  content: "▾";
+}
+.scifi-log-item details[open] .ev-preview {
+  display: none;
+}
+.ev-full {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 0 8px 8px 102px;
+  color: rgba(255, 255, 255, 0.9);
+  user-select: text;
 }
 .scifi-log-item:hover {
   background: rgba(255, 255, 255, 0.04);
@@ -2558,6 +2628,9 @@ code {
 }
 .scifi-log-item.usage {
   border-left-color: #facc15;
+}
+.scifi-log-item.turn {
+  border-left-color: #cbd5e1;
 }
 
 .stream-filters {
@@ -2622,6 +2695,9 @@ code {
 }
 .ev-tag.usage {
   color: #facc15;
+}
+.ev-tag.turn {
+  color: #cbd5e1;
 }
 .ev-usage-metric {
   color: #fde047;

@@ -39,6 +39,13 @@ export function nearOutputBottom(
   return scrollHeight - scrollTop - clientHeight < 48;
 }
 
+/** One line for a collapsed log row. Newlines fold into spaces. */
+export function previewLine(text: string, max = 180): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  return `${flat.slice(0, Math.max(0, max - 1))}…`;
+}
+
 /** Changes when a new entry arrives or the latest entry's text grows. */
 export function outputTailKey(entries: { id: string; body: string }[]): string {
   const last = entries[entries.length - 1];
