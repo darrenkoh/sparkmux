@@ -8,6 +8,7 @@ import {
 import { cliLabel } from "./artifactModel";
 import { formatBytes, formatNum, formatMs, formatUsd, estimateCost } from "./analyticsFormat";
 import TerrainViewport from "./TerrainViewport";
+import TokenSpectrumChart from "./TokenSpectrumChart";
 
 export interface AnalyticsHudProps {
   sessionName: string;
@@ -26,6 +27,18 @@ export { formatBytes, formatNum, formatMs, formatUsd, estimateCost };
 const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
 const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
 const STORAGE_KEY_HUD_VIEW_MODE = "sparkmux_hud_view_mode";
+const STORAGE_KEY_HUD_CENTER_ROW_HEIGHT = "sparkmux_hud_center_row_height";
+
+function getInitialCenterRowHeight(): number {
+  try {
+    const val = localStorage.getItem(STORAGE_KEY_HUD_CENTER_ROW_HEIGHT);
+    if (val) {
+      const num = parseInt(val, 10);
+      if (!isNaN(num) && num >= 140 && num <= 380) return num;
+    }
+  } catch {}
+  return 200;
+}
 
 function getInitialViewMode(): "current" | "lifetime" {
   try {
@@ -236,7 +249,6 @@ export default function AnalyticsHud({
   const [eventFilter, setEventFilter] = useState<"all" | "turns" | "tools" | "usage">("all");
 
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
-  const tokenCanvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
   const statsRef = useRef(data?.stats);
   statsRef.current = data?.stats;
@@ -261,8 +273,10 @@ export default function AnalyticsHud({
   // Resizable splitters for Left Panel Width and Telemetry / Tools vertical ratio
   const [leftWidth, setLeftWidth] = useState<number>(getInitialLeftWidth);
   const [telemetryPercent, setTelemetryPercent] = useState<number>(getInitialTelemetryPercent);
+  const [centerRowHeight, setCenterRowHeight] = useState<number>(getInitialCenterRowHeight);
   const [isDraggingV, setIsDraggingV] = useState(false);
   const [isDraggingH, setIsDraggingH] = useState(false);
+  const [isDraggingCenterH, setIsDraggingCenterH] = useState(false);
 
   const onStartDragV = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -328,6 +342,38 @@ export default function AnalyticsHud({
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }, [telemetryPercent]);
+
+  const onStartDragCenterH = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDraggingCenterH(true);
+    const startY = e.clientY;
+    const startHeight = centerRowHeight;
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "row-resize";
+
+    const onMove = (ev: MouseEvent) => {
+      // Inverted delta because dragging upward expands the bottom row
+      const deltaY = startY - ev.clientY;
+      const next = Math.max(140, Math.min(380, startHeight + deltaY));
+      setCenterRowHeight(next);
+      try {
+        localStorage.setItem(STORAGE_KEY_HUD_CENTER_ROW_HEIGHT, String(next));
+      } catch {}
+    };
+
+    const onUp = () => {
+      setIsDraggingCenterH(false);
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [centerRowHeight]);
 
   const fetchData = () => {
     tabAnalytics(sessionName, tabId, command, cwd, title, pid)
@@ -558,57 +604,7 @@ export default function AnalyticsHud({
     };
   }, []);
 
-  // Draw Token Distribution Arc Gauge Canvas
-  useEffect(() => {
-    const canvas = tokenCanvasRef.current;
-    if (!canvas || !data?.stats) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
 
-    const w = canvas.width;
-    const h = canvas.height;
-    ctx.clearRect(0, 0, w, h);
-
-    const st = data.stats;
-    const total =
-      st.total_input_tokens +
-      st.total_output_tokens +
-      st.total_cache_read_tokens +
-      st.total_reasoning_tokens;
-
-    const cx = w / 2;
-    const cy = h / 2;
-    const r = Math.min(cx, cy) - 6;
-
-    if (total === 0) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
-      ctx.lineWidth = 6;
-      ctx.stroke();
-      return;
-    }
-
-    const segments = [
-      { val: st.total_input_tokens, color: "#5b8def" },
-      { val: st.total_output_tokens, color: "#3dd68c" },
-      { val: st.total_cache_read_tokens, color: "#ff9a3c" },
-      { val: st.total_reasoning_tokens, color: "#c084fc" },
-    ];
-
-    let start = -Math.PI / 2;
-    ctx.lineWidth = 7;
-
-    for (const seg of segments) {
-      if (seg.val <= 0) continue;
-      const angle = (seg.val / total) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, start, start + angle);
-      ctx.strokeStyle = seg.color;
-      ctx.stroke();
-      start += angle;
-    }
-  }, [data]);
 
   const handleToggle = async () => {
     if (!data) return;
@@ -935,7 +931,10 @@ export default function AnalyticsHud({
             title="Drag to resize Left Panel width (Double-click to reset to default)"
           />
 
-          <main className="scifi-center">
+          <main
+            className="scifi-center"
+            style={{ ["--hud-bottom-row-height" as any]: `${centerRowHeight}px` }}
+          >
             {/* Interactive 3D Hill Terrain Viewport with Real Session Data */}
             <TerrainViewport
               timeline={st?.timeline ?? []}
@@ -945,39 +944,29 @@ export default function AnalyticsHud({
               stats={st}
             />
 
+            {/* Horizontal Splitter between 3D Area Map and Telemetry Row */}
+            <div
+              className={`scifi-splitter-h ${isDraggingCenterH ? "dragging" : ""}`}
+              onMouseDown={onStartDragCenterH}
+              onDoubleClick={() => {
+                setCenterRowHeight(200);
+                try {
+                  localStorage.setItem(STORAGE_KEY_HUD_CENTER_ROW_HEIGHT, "200");
+                } catch {}
+              }}
+              title="Drag to resize Section 04/05 height (Double-click to reset to 200px)"
+            />
+
             {/* Sub-grid: Token Allocation & Context Window Gauge */}
             <div className="scifi-row">
               <section className="scifi-panel token-panel">
                 <header>
                   <span className="tag">04</span>
                   <span>TOKEN SPECTRUM</span>
-                  <small>DISTRIBUTION</small>
+                  <small>CHRONO-TOPOGRAPHY</small>
                 </header>
-                <div className="body token-body">
-                  <canvas
-                    ref={tokenCanvasRef}
-                    width={90}
-                    height={90}
-                    className="scifi-token-canvas"
-                  />
-                  <div className="token-stats">
-                    <div>
-                      <small>INPUT</small>
-                      <b>{formatNum(st?.total_input_tokens ?? 0)}</b>
-                    </div>
-                    <div>
-                      <small>OUTPUT</small>
-                      <b>{formatNum(st?.total_output_tokens ?? 0)}</b>
-                    </div>
-                    <div>
-                      <small>CACHE READ</small>
-                      <b>{formatNum(st?.total_cache_read_tokens ?? 0)}</b>
-                    </div>
-                    <div>
-                      <small>REASONING</small>
-                      <b>{formatNum(st?.total_reasoning_tokens ?? 0)}</b>
-                    </div>
-                  </div>
+                <div className="body">
+                  <TokenSpectrumChart timeline={st?.timeline ?? []} stats={st} />
                 </div>
               </section>
 

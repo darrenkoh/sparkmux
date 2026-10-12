@@ -14,6 +14,16 @@ pub struct ActivityPoint {
     pub reply_count: u32,
     pub tool_count: u32,
     pub tokens: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
     pub top_event_kind: String,
     pub top_event_label: String,
 }
@@ -139,7 +149,9 @@ pub fn compute_stats(
             THINK => {
                 stats.thinking_blocks += 1;
                 buckets[b_idx].think_count += 1;
-                if buckets[b_idx].top_event_kind.is_empty() || buckets[b_idx].top_event_kind == "user" {
+                if buckets[b_idx].top_event_kind.is_empty()
+                    || buckets[b_idx].top_event_kind == "user"
+                {
                     buckets[b_idx].top_event_kind = "think".into();
                     buckets[b_idx].top_event_label = "REASONING".into();
                 }
@@ -152,7 +164,11 @@ pub fn compute_stats(
                 }
                 if buckets[b_idx].top_event_kind.is_empty() {
                     buckets[b_idx].top_event_kind = "reply".into();
-                    buckets[b_idx].top_event_label = if !ev.n.is_empty() { ev.n.clone() } else { "ASSISTANT".into() };
+                    buckets[b_idx].top_event_label = if !ev.n.is_empty() {
+                        ev.n.clone()
+                    } else {
+                        "ASSISTANT".into()
+                    };
                 }
             }
             TOOL => {
@@ -163,7 +179,11 @@ pub fn compute_stats(
                 entry.4 = entry.4.max(ev.t);
                 // Tools have high priority for top event label
                 buckets[b_idx].top_event_kind = "tool".into();
-                buckets[b_idx].top_event_label = if !ev.n.is_empty() { ev.n.clone() } else { "TOOL".into() };
+                buckets[b_idx].top_event_label = if !ev.n.is_empty() {
+                    ev.n.clone()
+                } else {
+                    "TOOL".into()
+                };
             }
             RESULT => {
                 stats.tool_results += 1;
@@ -203,6 +223,11 @@ pub fn compute_stats(
                 stats.total_reasoning_tokens += ev.tr;
 
                 buckets[b_idx].tokens += ev.ti + ev.to;
+                buckets[b_idx].input_tokens += ev.ti;
+                buckets[b_idx].output_tokens += ev.to;
+                buckets[b_idx].cache_read_tokens += ev.tc;
+                buckets[b_idx].cache_write_tokens += ev.tw;
+                buckets[b_idx].reasoning_tokens += ev.tr;
             }
             TURN => {
                 stats.turn_count += 1;
@@ -279,5 +304,10 @@ mod tests {
         assert_eq!(stats.tools[0].name, "ls");
         assert_eq!(stats.tools[0].avg_duration_ms, 100);
         assert_eq!(stats.active_model, "claude-3");
+
+        let total_bucket_input: u64 = stats.timeline.iter().map(|b| b.input_tokens).sum();
+        let total_bucket_output: u64 = stats.timeline.iter().map(|b| b.output_tokens).sum();
+        assert_eq!(total_bucket_input, 500);
+        assert_eq!(total_bucket_output, 100);
     }
 }

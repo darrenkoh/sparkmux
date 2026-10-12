@@ -98,7 +98,7 @@ function makeRng(seed: number) {
 // ---------------------------------------------------------------------------
 const VS_TERRAIN = `#version 300 es
 uniform mat4 uVP;
-uniform float uTime, uFocus, uAperture, uDpr, uGain, uScan, uReal;
+uniform float uTime, uFocus, uAperture, uDpr, uGain, uScanX, uMaxX, uReal;
 in vec4 aPos;      // xyz + brightness
 in vec3 aCol;      // label category color
 in float aSeed;
@@ -114,9 +114,15 @@ void main() {
   gl_PointSize = size * uDpr;
   float energy = (base * base) / (size * size);
   float twinkle = 0.84 + 0.16 * sin(uTime * (0.8 + aSeed * 2.2) + aSeed * 53.0);
-  float scan = 1.0 + 3.2 * exp(-pow((aPos.y - uScan) * 4.2, 2.0)) * step(0.04, aPos.y);
+  
+  // Chronological X-axis scanning pulse
+  float scan = 1.0 + 3.2 * exp(-pow((aPos.x - uScanX) * 0.95, 2.0));
+  
+  // Scrubber / growth clip: hide or fade particles ahead of current timeline scrub
+  float timeClip = smoothstep(uMaxX + 0.45, uMaxX - 0.2, aPos.x);
+  
   float fog = exp(-max(c.w - 38.0, 0.0) * 0.035);
-  vA = aPos.w * energy * twinkle * scan * fog * uGain;
+  vA = aPos.w * energy * twinkle * scan * fog * uGain * timeClip;
   vRing = smoothstep(5.0, 15.0, coc);
   // Maintain vivid saturated chromaticity across the entire heightmap and scan pass
   vCol = mix(vec3(1.0), aCol * 1.25, uReal);
@@ -143,7 +149,7 @@ void main() {
 const VS_CONTOUR = `#version 300 es
 uniform mat4 uVP;
 uniform vec3 uCam;
-uniform float uScan, uScanAmount;
+uniform float uScanX, uScanAmount, uMaxX;
 in vec3 aPos;
 in float aA;
 out float vA;
@@ -151,8 +157,9 @@ void main() {
   gl_Position = uVP * vec4(aPos, 1.0);
   float d = length(aPos - uCam);
   float fog = exp(-max(d - 30.0, 0.0) * 0.035);
-  float scan = 1.0 + uScanAmount * exp(-pow((aPos.y - uScan) * 2.5, 2.0));
-  vA = aA * fog * scan;
+  float scan = 1.0 + uScanAmount * exp(-pow((aPos.x - uScanX) * 0.85, 2.0));
+  float timeClip = smoothstep(uMaxX + 0.45, uMaxX - 0.2, aPos.x);
+  vA = aA * fog * scan * timeClip;
 }
 `;
 
@@ -363,17 +370,23 @@ function generateBaseGridVerts(shape: BaseShape): Float32Array {
   return new Float32Array(verts);
 }
 
+interface MilestoneInfo {
+  x: number;
+  z: number;
+  y: number;
+  label: string;
+  cat: string;
+  hex: string;
+  tNorm: number;
+  timeStr: string;
+  kindStr: string;
+  detailStr: string;
+}
+
 interface TerrainMeta {
   maxAltitude: number;
   maxMetric: number;
-  keyMilestones: Array<{
-    x: number;
-    z: number;
-    y: number;
-    label: string;
-    cat: string;
-    hex: string;
-  }>;
+  keyMilestones: MilestoneInfo[];
   curvedSlopeTrail: Array<[number, number, number]>;
   channelWaypoints: Array<{
     code: string;
@@ -382,6 +395,9 @@ interface TerrainMeta {
     pos: [number, number, number];
     val: string;
   }>;
+  startTime: number;
+  endTime: number;
+  dataPointCount: number;
 }
 
 export default function TerrainViewport({
@@ -409,6 +425,22 @@ export default function TerrainViewport({
 
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
   const autoRotateRef = useRef<boolean>(true);
+
+  // Chronological Scrubber & Playback state (1.0 = Latest / Full Terrain)
+  const [scrubProgress, setScrubProgress] = useState<number>(1.0);
+  const scrubProgressRef = useRef<number>(1.0);
+  scrubProgressRef.current = scrubProgress;
+
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const isPlayingRef = useRef<boolean>(false);
+  isPlayingRef.current = isPlaying;
+
+  // Active hovered milestone for rich inspection card
+  const [hoveredMilestone, setHoveredMilestone] = useState<{
+    info: MilestoneInfo;
+    screenX: number;
+    screenY: number;
+  } | null>(null);
 
   const setBaseShape = (next: BaseShape) => {
     persistentBaseShape = next;
@@ -449,6 +481,9 @@ export default function TerrainViewport({
     keyMilestones: [],
     curvedSlopeTrail: [],
     channelWaypoints: [],
+    startTime: 0,
+    endTime: 0,
+    dataPointCount: 0,
   });
 
   // Cached base particles for active baseShape
@@ -737,32 +772,90 @@ export default function TerrainViewport({
     }
 
     // 4. Milestone Waypoints and Catmull-Rom Spline Trail
-    const keyMilestones: Array<{
-      x: number;
-      z: number;
-      y: number;
-      label: string;
-      cat: string;
-      hex: string;
-    }> = [];
+    const keyMilestones: MilestoneInfo[] = [];
+
+    const formatElapsed = (ms: number): string => {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      const m = Math.floor(s / 60);
+      const remS = s % 60;
+      return `${m}:${remS.toString().padStart(2, "0")}`;
+    };
+
+    const startTime = currentTimeline && currentTimeline.length > 0
+      ? currentTimeline[0].timestamp
+      : 0;
+    const endTime = currentTimeline && currentTimeline.length > 0
+      ? currentTimeline[currentTimeline.length - 1].timestamp
+      : 0;
 
     dataPoints.forEach((pt, i) => {
       const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
-      const maxVal = Math.max(pt.user, pt.think, pt.reply, pt.tool, 0.1);
+      const origPt = currentTimeline && currentTimeline[i];
+
       let catIdx = 0;
-      if (pt.tool === maxVal) catIdx = 3;
-      else if (pt.reply === maxVal) catIdx = 2;
-      else if (pt.think === maxVal) catIdx = 1;
+      let kindStr = "USER PROMPT";
+      let detailStr = `${pt.user} prompts`;
+
+      if (origPt?.top_event_kind) {
+        if (origPt.top_event_kind === "tool") {
+          catIdx = 3;
+          kindStr = `TOOL: ${origPt.top_event_label || "RUNTIME"}`;
+          detailStr = `${pt.tool} calls`;
+        } else if (origPt.top_event_kind === "reply") {
+          catIdx = 2;
+          kindStr = `REPLY: ${origPt.top_event_label || "ASSISTANT"}`;
+          detailStr = `${pt.reply} replies`;
+        } else if (origPt.top_event_kind === "think") {
+          catIdx = 1;
+          kindStr = "REASONING";
+          detailStr = `${pt.think} blocks`;
+        } else {
+          catIdx = 0;
+          kindStr = "USER PROMPT";
+          detailStr = `${pt.user} prompts`;
+        }
+      } else {
+        const maxVal = Math.max(pt.user, pt.think, pt.reply, pt.tool, 0.1);
+        if (pt.tool === maxVal) {
+          catIdx = 3;
+          kindStr = "TOOL RUNTIME";
+          detailStr = `${Math.round(pt.tool)} calls`;
+        } else if (pt.reply === maxVal) {
+          catIdx = 2;
+          kindStr = "ASSISTANT REPLY";
+          detailStr = `${Math.round(pt.reply)} replies`;
+        } else if (pt.think === maxVal) {
+          catIdx = 1;
+          kindStr = "REASONING";
+          detailStr = `${Math.round(pt.think)} blocks`;
+        } else {
+          catIdx = 0;
+          kindStr = "USER PROMPT";
+          detailStr = `${Math.round(pt.user)} prompts`;
+        }
+      }
 
       const tz = zLanes[catIdx];
-      const ty = getAlt(tx, tz) + 0.06;
+      const ty = getAlt(tx, tz) + 0.08;
+
+      let timeStr = `T+${i + 1}`;
+      if (origPt && startTime > 0) {
+        timeStr = `+${formatElapsed(origPt.timestamp - startTime)}`;
+      } else if (startTime === 0 && currentStats?.total_events) {
+        timeStr = `+${Math.floor(i * 1.5)}m`;
+      }
+
       keyMilestones.push({
         x: tx,
         z: tz,
         y: ty,
-        label: `T+${i + 1}`,
+        label: timeStr,
         cat: CHANNELS[catIdx].label,
         hex: CHANNELS[catIdx].hex,
+        tNorm: pt.tNorm,
+        timeStr,
+        kindStr,
+        detailStr,
       });
     });
 
@@ -799,7 +892,7 @@ export default function TerrainViewport({
             (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3
           );
 
-          const cy = getAlt(cx, cz) + 0.06;
+          const cy = getAlt(cx, cz) + 0.08;
           curvedSlopeTrail.push([cx, cy, cz]);
         }
       }
@@ -851,6 +944,9 @@ export default function TerrainViewport({
       keyMilestones,
       curvedSlopeTrail,
       channelWaypoints,
+      startTime,
+      endTime,
+      dataPointCount: dataPoints.length,
     };
   };
 
@@ -924,7 +1020,8 @@ export default function TerrainViewport({
       uAperture: gl.getUniformLocation(progTerrain, "uAperture"),
       uDpr: gl.getUniformLocation(progTerrain, "uDpr"),
       uGain: gl.getUniformLocation(progTerrain, "uGain"),
-      uScan: gl.getUniformLocation(progTerrain, "uScan"),
+      uScanX: gl.getUniformLocation(progTerrain, "uScanX"),
+      uMaxX: gl.getUniformLocation(progTerrain, "uMaxX"),
       uReal: gl.getUniformLocation(progTerrain, "uReal"),
     };
     uTRef.current = uT;
@@ -932,8 +1029,9 @@ export default function TerrainViewport({
     const uC = {
       uVP: gl.getUniformLocation(progContour, "uVP"),
       uCam: gl.getUniformLocation(progContour, "uCam"),
-      uScan: gl.getUniformLocation(progContour, "uScan"),
+      uScanX: gl.getUniformLocation(progContour, "uScanX"),
       uScanAmount: gl.getUniformLocation(progContour, "uScanAmount"),
+      uMaxX: gl.getUniformLocation(progContour, "uMaxX"),
       uColor: gl.getUniformLocation(progContour, "uColor"),
     };
     uCRef.current = uC;
@@ -1060,13 +1158,29 @@ export default function TerrainViewport({
 
       const speedSetting = scanSpeedRef.current;
       const speedMultiplier = speedSetting === "paused" ? 0 : speedSetting === "0.25x" ? 0.25 : speedSetting === "0.5x" ? 0.5 : speedSetting === "2x" ? 2.0 : 1.0;
-      if (speedMultiplier > 0) {
-        clockRef.current.scanProgress = (clockRef.current.scanProgress + (dt * speedMultiplier) / 9.0) % 1.0;
+
+      // Handle playback mode if active
+      if (isPlayingRef.current) {
+        let nextScrub = scrubProgressRef.current + (dt * speedMultiplier) / 14.0;
+        if (nextScrub >= 1.0) {
+          nextScrub = 1.0;
+          setIsPlaying(false);
+          isPlayingRef.current = false;
+        }
+        scrubProgressRef.current = nextScrub;
+        setScrubProgress(nextScrub);
       }
-      const scanPhase = clockRef.current.scanProgress;
+
       const meta = terrainMetaRef.current;
       const maxAltitude = meta.maxAltitude;
-      const scanAltY = scanPhase * maxAltitude;
+
+      // X-axis sweep: past (-14) to present (+14)
+      const curMaxX = (scrubProgressRef.current * 2 - 1) * (TIME_SPAN / 2);
+      if (speedMultiplier > 0 && !isPlayingRef.current) {
+        clockRef.current.scanProgress = (clockRef.current.scanProgress + (dt * speedMultiplier) / 7.0) % 1.0;
+      }
+      const scanPhase = clockRef.current.scanProgress;
+      const scanXPos = -TIME_SPAN / 2 + scanPhase * (curMaxX - (-TIME_SPAN / 2));
       const scanFade = speedMultiplier === 0 ? 0.8 : smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
 
       const isMono = realismRef.current === "mono";
@@ -1075,8 +1189,9 @@ export default function TerrainViewport({
       gl.useProgram(progContour);
       gl.uniformMatrix4fv(uC.uVP, false, matVP);
       gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
-      gl.uniform1f(uC.uScan, scanAltY);
+      gl.uniform1f(uC.uScanX, scanXPos);
       gl.uniform1f(uC.uScanAmount, 0);
+      gl.uniform1f(uC.uMaxX, curMaxX);
       gl.uniform3f(uC.uColor, 1.0, 1.0, 1.0);
       gl.bindVertexArray(vaoBaseGrid);
       gl.drawArrays(gl.LINES, 0, baseGridCountRef.current);
@@ -1084,6 +1199,7 @@ export default function TerrainViewport({
       // Draw Marching Squares Contours
       if (contoursCountRef.current > 0) {
         gl.uniform1f(uC.uScanAmount, 3.0 * scanFade);
+        gl.uniform1f(uC.uMaxX, curMaxX);
         gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.78, isMono ? 1.0 : 1.0, isMono ? 1.0 : 0.94);
         gl.bindVertexArray(vaoContours);
         gl.drawArrays(gl.LINES, 0, contoursCountRef.current);
@@ -1097,7 +1213,8 @@ export default function TerrainViewport({
       gl.uniform1f(uT.uAperture, 0.5 * (h / 700));
       gl.uniform1f(uT.uDpr, dpr);
       gl.uniform1f(uT.uGain, 0.44);
-      gl.uniform1f(uT.uScan, scanAltY);
+      gl.uniform1f(uT.uScanX, scanXPos);
+      gl.uniform1f(uT.uMaxX, curMaxX);
       gl.uniform1f(uT.uReal, isMono ? 0.0 : 1.0);
 
       gl.bindVertexArray(vaoTerrain);
@@ -1110,15 +1227,17 @@ export default function TerrainViewport({
 
       const project = (p: [number, number, number]) => projectPoint(matVP, p, rect.width, rect.height);
 
-      // (A) Glowing Yellow Neon Trail following the curving slope of the terrain
+      // (A) Glowing Chronological Agent Journey Trail (Clipped to scrubProgress)
       hud.lineJoin = "round";
       hud.lineCap = "round";
 
-      hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
-      hud.lineWidth = 2.8;
+      // Outer golden aura
+      hud.strokeStyle = "rgba(255, 175, 45, 0.28)";
+      hud.lineWidth = 3.2;
       hud.beginPath();
       let first = true;
       for (const pos of meta.curvedSlopeTrail) {
+        if (pos[0] > curMaxX + 0.1) break;
         const sc = project(pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
@@ -1126,11 +1245,13 @@ export default function TerrainViewport({
       }
       hud.stroke();
 
-      hud.strokeStyle = "rgba(255, 195, 55, 0.95)";
-      hud.lineWidth = 0.9;
+      // Sharp bright core
+      hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
+      hud.lineWidth = 1.2;
       hud.beginPath();
       first = true;
       for (const pos of meta.curvedSlopeTrail) {
+        if (pos[0] > curMaxX + 0.1) break;
         const sc = project(pos);
         if (!sc) { first = true; continue; }
         if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
@@ -1138,13 +1259,39 @@ export default function TerrainViewport({
       }
       hud.stroke();
 
+      // (A.1) Chronological Time Sweep Laser / Playhead line across the terrain
+      const pScanTop = project([scanXPos, maxAltitude * 1.05, 0]);
+      const pScanBottom = project([scanXPos, 0, 0]);
+      if (pScanTop && pScanBottom) {
+        hud.strokeStyle = `rgba(255, 220, 100, ${0.45 * scanFade})`;
+        hud.lineWidth = 1.0;
+        hud.beginPath();
+        hud.moveTo(pScanTop[0], pScanTop[1]);
+        hud.lineTo(pScanBottom[0], pScanBottom[1]);
+        hud.stroke();
+      }
+
+      // Render visible milestones with glowing beacons
       for (const m of meta.keyMilestones) {
+        if (m.x > curMaxX + 0.2) continue;
         const sc = project([m.x, m.y, m.z]);
         if (!sc) continue;
-        hud.fillStyle = "rgba(255, 215, 75, 0.95)";
+
+        hud.fillStyle = m.hex;
         hud.beginPath();
-        hud.arc(sc[0], sc[1], 1.5, 0, Math.PI * 2);
+        hud.arc(sc[0], sc[1], 2.2, 0, Math.PI * 2);
         hud.fill();
+
+        hud.strokeStyle = "rgba(255, 255, 255, 0.9)";
+        hud.lineWidth = 1.0;
+        hud.beginPath();
+        hud.arc(sc[0], sc[1], 4.0, 0, Math.PI * 2);
+        hud.stroke();
+
+        hud.fillStyle = "rgba(255, 255, 255, 0.75)";
+        hud.font = '7.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+        hud.textAlign = "center";
+        hud.fillText(m.timeStr, sc[0], sc[1] - 6);
       }
 
       // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
@@ -1154,11 +1301,26 @@ export default function TerrainViewport({
       const tStart = project([-13, 0, -10.5]);
       const tEnd = project([13, 0, -10.5]);
       if (tStart && tEnd) {
-        hud.fillStyle = "rgba(255, 255, 255, 0.65)";
+        hud.fillStyle = "rgba(255, 255, 255, 0.75)";
         hud.textAlign = "left";
-        hud.fillText("◄ TIME AXIS (SESSION START)", tStart[0], tStart[1]);
+        hud.fillText("◄ CHRONO TIME: 00:00 (START)", tStart[0], tStart[1]);
         hud.textAlign = "right";
-        hud.fillText("SESSION LATEST ►", tEnd[0], tEnd[1]);
+        hud.fillText("LATEST EVENT (NOW) ►", tEnd[0], tEnd[1]);
+      }
+
+      // Show intermediate timeline ticks along the time axis
+      for (let f = 0.25; f <= 0.75; f += 0.25) {
+        const xTick = -13 + f * 26;
+        const ptTick = project([xTick, 0, -10.5]);
+        if (ptTick && meta.endTime > meta.startTime && meta.startTime > 0) {
+          const tickMs = meta.startTime + f * (meta.endTime - meta.startTime);
+          const s = Math.floor((tickMs - meta.startTime) / 1000);
+          const m = Math.floor(s / 60);
+          const str = `+${m}:${(s % 60).toString().padStart(2, "0")}`;
+          hud.fillStyle = "rgba(255, 255, 255, 0.4)";
+          hud.textAlign = "center";
+          hud.fillText(str, ptTick[0], ptTick[1]);
+        }
       }
 
       CHANNELS.forEach((ch, idx) => {
@@ -1262,7 +1424,7 @@ export default function TerrainViewport({
         hud.fillText(`${metricEquivalent}`, 28, rY(v));
       }
 
-      const cursorY = rY(clamp(scanAltY, 0, maxAltitude));
+      const cursorY = rY(clamp(scanPhase * maxAltitude, 0, maxAltitude));
       hud.fillStyle = `rgba(255, 255, 255, ${0.40 + 0.60 * scanFade})`;
       hud.beginPath();
       hud.moveTo(14, cursorY);
@@ -1276,7 +1438,7 @@ export default function TerrainViewport({
         hud.textAlign = 'right';
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
         hud.fillStyle = 'rgba(255, 255, 255, 0.40)';
-        hud.fillText(`SCAN ${scanAltY.toFixed(2)} Y   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 12);
+        hud.fillText(`SWEEP X ${scanXPos.toFixed(1)}   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 12);
       }
     };
 
@@ -1290,14 +1452,46 @@ export default function TerrainViewport({
     };
 
     const handleMove = (e: PointerEvent) => {
-      if (!isDraggingRef.current) return;
-      const dx = e.clientX - lastXRef.current;
-      const dy = e.clientY - lastYRef.current;
-      lastXRef.current = e.clientX;
-      lastYRef.current = e.clientY;
+      if (isDraggingRef.current) {
+        const dx = e.clientX - lastXRef.current;
+        const dy = e.clientY - lastYRef.current;
+        lastXRef.current = e.clientX;
+        lastYRef.current = e.clientY;
 
-      persistentCam.azimuth -= dx * 0.005;
-      persistentCam.elevation = clamp(persistentCam.elevation + dy * 0.004, 0.06, 1.35);
+        persistentCam.azimuth -= dx * 0.005;
+        persistentCam.elevation = clamp(persistentCam.elevation + dy * 0.004, 0.06, 1.35);
+        if (hoveredMilestone) setHoveredMilestone(null);
+        return;
+      }
+
+      // Check hover proximity to milestones
+      const rect = glCanvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const cam = persistentCam;
+      const eyeX = cam.target[0] + cam.radius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
+      const eyeY = cam.target[1] + cam.radius * Math.sin(cam.elevation);
+      const eyeZ = cam.target[2] + cam.radius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
+      const matProj = perspective(38 * (Math.PI / 180), rect.width / rect.height, 0.5, 260.0);
+      const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
+      const matVP = multiply(matProj, matView);
+
+      let found: { info: MilestoneInfo; screenX: number; screenY: number } | null = null;
+      const curMaxX = (scrubProgressRef.current * 2 - 1) * (TIME_SPAN / 2);
+
+      for (const m of terrainMetaRef.current.keyMilestones) {
+        if (m.x > curMaxX + 0.2) continue;
+        const pt = projectPoint(matVP, [m.x, m.y, m.z], rect.width, rect.height);
+        if (pt) {
+          const dist = Math.hypot(pt[0] - mouseX, pt[1] - mouseY);
+          if (dist < 18) {
+            found = { info: m, screenX: pt[0], screenY: pt[1] };
+            break;
+          }
+        }
+      }
+      setHoveredMilestone(found);
     };
 
     const handleUp = (e: PointerEvent) => {
@@ -1450,14 +1644,14 @@ export default function TerrainViewport({
           className="scifi-select"
           value={scanSpeed}
           onChange={(e) => setScanSpeed(e.target.value as ScanSpeed)}
-          title="Y-Axis Vertical Scanning Speed"
-          aria-label="Y-Axis Vertical Scanning Speed"
+          title="Timeline Chrono Sweep Speed"
+          aria-label="Timeline Chrono Sweep Speed"
         >
-          <option value="0.25x">SCAN: 0.25x</option>
-          <option value="0.5x">SCAN: 0.5x</option>
-          <option value="1x">SCAN: 1x (NORM)</option>
-          <option value="2x">SCAN: 2x (FAST)</option>
-          <option value="paused">SCAN: PAUSED</option>
+          <option value="0.25x">SWEEP: 0.25x</option>
+          <option value="0.5x">SWEEP: 0.5x</option>
+          <option value="1x">SWEEP: 1x (NORM)</option>
+          <option value="2x">SWEEP: 2x (FAST)</option>
+          <option value="paused">SWEEP: PAUSED</option>
         </select>
 
         <button
@@ -1473,6 +1667,73 @@ export default function TerrainViewport({
           {autoRotate ? "AUTO-ROTATE: ON" : "AUTO-ROTATE: OFF"}
         </button>
       </div>
+
+      {/* Chronological Timeline Playback Scrubber */}
+      <div className="scifi-viewport-bottombar">
+        <button
+          type="button"
+          className="scifi-scrubber-play-btn"
+          onClick={() => {
+            if (isPlaying) {
+              setIsPlaying(false);
+            } else {
+              if (scrubProgress >= 0.98) {
+                setScrubProgress(0.05);
+                scrubProgressRef.current = 0.05;
+              }
+              setIsPlaying(true);
+            }
+          }}
+          title={isPlaying ? "Pause timeline replay" : "Replay session growth from start"}
+        >
+          {isPlaying ? "⏸ PAUSE" : scrubProgress >= 0.98 ? "▶ REPLAY" : "▶ PLAY"}
+        </button>
+
+        <div className="scifi-scrubber-track">
+          <span className="scifi-scrubber-time">
+            00:00
+          </span>
+          <input
+            type="range"
+            className="scifi-scrubber-slider"
+            min={0.05}
+            max={1.0}
+            step={0.01}
+            value={scrubProgress}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setScrubProgress(val);
+              scrubProgressRef.current = val;
+              if (isPlaying) setIsPlaying(false);
+            }}
+            title="Drag to scrub session timeline and reveal mountain growth"
+          />
+          <span className="scifi-scrubber-time" style={{ color: "#ff9a3c" }}>
+            {scrubProgress >= 0.98 ? "NOW (LATEST)" : `${Math.round(scrubProgress * 100)}%`}
+          </span>
+        </div>
+      </div>
+
+      {/* Hover Inspection Tooltip */}
+      {hoveredMilestone && (
+        <div
+          className="scifi-milestone-tooltip"
+          style={{
+            left: `${hoveredMilestone.screenX}px`,
+            top: `${hoveredMilestone.screenY}px`,
+          }}
+        >
+          <div style={{ color: hoveredMilestone.info.hex, fontWeight: "bold", marginBottom: 2 }}>
+            [{hoveredMilestone.info.cat}] {hoveredMilestone.info.timeStr}
+          </div>
+          <div style={{ color: "rgba(255, 255, 255, 0.9)" }}>
+            {hoveredMilestone.info.kindStr}
+          </div>
+          <div style={{ color: "rgba(255, 255, 255, 0.6)", fontSize: "8px", marginTop: 2 }}>
+            ACTIVITY: {hoveredMilestone.info.detailStr}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
