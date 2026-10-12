@@ -690,17 +690,6 @@ export default function AnalyticsHud({
               </span>
             )}
             <span
-              className={`scifi-badge-pill scope ${isLifetime ? "lifetime" : "current"}`}
-              title={
-                isLifetime
-                  ? "Showing cumulative stats across all sessions in this tab"
-                  : "Showing stats strictly for the current active task (starts fresh on /new)"
-              }
-            >
-              <span className="scifi-pill-dot" />
-              SCOPE: <strong>{isLifetime ? "TAB CUMULATIVE" : "CURRENT TASK"}</strong>
-            </span>
-            <span
               className="scifi-badge-pill events"
               title="Total raw telemetry events captured across this session"
             >

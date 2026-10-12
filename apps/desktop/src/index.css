@@ -1584,30 +1584,6 @@ code {
   background: #2dd4bf;
   box-shadow: 0 0 6px #2dd4bf;
 }
-.scifi-badge-pill.scope.current {
-  border-color: rgba(61, 214, 140, 0.45);
-  background: rgba(61, 214, 140, 0.09);
-  color: rgba(255, 255, 255, 0.9);
-}
-.scifi-badge-pill.scope.current strong {
-  color: #3dd68c;
-}
-.scifi-badge-pill.scope.current .scifi-pill-dot {
-  background: #3dd68c;
-  box-shadow: 0 0 6px #3dd68c;
-}
-.scifi-badge-pill.scope.lifetime {
-  border-color: rgba(255, 154, 60, 0.45);
-  background: rgba(255, 154, 60, 0.09);
-  color: rgba(255, 255, 255, 0.9);
-}
-.scifi-badge-pill.scope.lifetime strong {
-  color: #ff9a3c;
-}
-.scifi-badge-pill.scope.lifetime .scifi-pill-dot {
-  background: #ff9a3c;
-  box-shadow: 0 0 6px #ff9a3c;
-}
 .scifi-pill-dot {
   width: 6px;
   height: 6px;
