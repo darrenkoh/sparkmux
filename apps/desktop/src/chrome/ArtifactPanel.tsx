@@ -2,21 +2,11 @@ import { useEffect, useRef, useState } from "react";
 
 import { paneArtifacts } from "../api";
 import {
-  clearedThrough,
   cliLabel,
   directoryLabel,
   emptyOutputText,
-  loadAutoScroll,
-  loadClears,
-  markCleared,
-  nearOutputBottom,
-  outputTailKey,
-  saveAutoScroll,
-  saveClears,
-  visibleEntries,
   type ArtifactEntry,
   type ArtifactFeed,
-  type ClearMap,
 } from "./artifactModel";
 
 export default function ArtifactPanel({
@@ -37,15 +27,8 @@ export default function ArtifactPanel({
   isDocked?: boolean;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
-  const [clears, setClears] = useState<ClearMap>(() => loadClears());
-  const [autoScroll, setAutoScroll] = useState(loadAutoScroll);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const listRef = useRef<HTMLDivElement>(null);
-  const autoScrollRef = useRef(autoScroll);
-  // Clicking Off while already at the bottom stays off until the user scrolls away.
-  const resumeAtBottom = useRef(autoScroll);
-  const ignoreScroll = useRef(false);
-  const pinGen = useRef(0);
-  autoScrollRef.current = autoScroll;
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +51,7 @@ export default function ArtifactPanel({
         });
     };
     setFeed(null);
+    setExpandedIds(new Set());
     tick();
     const id = window.setInterval(tick, 1000);
     return () => {
@@ -76,66 +60,37 @@ export default function ArtifactPanel({
     };
   }, [command, cwd, title, pid]);
 
-  const path = feed?.transcript_path ?? null;
-  const through = clearedThrough(clears, path, feed?.file_len ?? 0);
-  const visible = visibleEntries(feed?.entries ?? [], through);
-  const empty = emptyOutputText(feed, visible.length, through);
-  const tailKey = `${feed?.file_len ?? 0}:${outputTailKey(visible)}`;
-
-  useEffect(() => {
-    saveAutoScroll(autoScroll);
-  }, [autoScroll]);
-
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el || autoScrollRef.current) return;
-    ignoreScroll.current = true;
-    el.scrollTop = 0;
-    ignoreScroll.current = false;
-  }, [command, cwd, title, pid]);
-
-  useEffect(() => {
-    if (!autoScroll) return;
-    const el = listRef.current;
-    if (!el) return;
-    const gen = ++pinGen.current;
-    // The pin itself emits a scroll event. Ignore that one so it cannot turn follow off.
-    ignoreScroll.current = true;
-    el.scrollTop = el.scrollHeight;
-    let inner = 0;
-    const outer = window.requestAnimationFrame(() => {
-      inner = window.requestAnimationFrame(() => {
-        if (pinGen.current === gen) ignoreScroll.current = false;
-      });
-    });
-    return () => {
-      window.cancelAnimationFrame(outer);
-      if (inner) window.cancelAnimationFrame(inner);
-      if (pinGen.current === gen) ignoreScroll.current = false;
-    };
-  }, [autoScroll, tailKey]);
+  const rawEntries = feed?.entries ?? [];
+  const empty = emptyOutputText(feed, rawEntries.length, 0);
+  // Latest logs on top
+  const displayed = [...rawEntries].reverse();
 
   const where = directoryLabel(cwd);
   const who = cliLabel(feed?.cli ?? null);
   const subtitle = [who, where].filter(Boolean).join(" · ");
 
-  function clear() {
-    if (!path || !feed) return;
-    const next = markCleared(clears, path, feed.file_len);
-    saveClears(next);
-    setClears(next);
-  }
+  const handleToggle = (id: string, open: boolean) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (open) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  };
 
   return (
     <aside
       className={`artifact-panel${isDocked ? " docked" : ""}`}
-      aria-label="Agent output"
+      aria-label="Agent logs"
       onMouseDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
       <header className="artifact-head">
         <div className="artifact-title">
-          <span>Output</span>
+          <span>AGENT LOGS</span>
           {subtitle && <span className="artifact-sub">{subtitle}</span>}
         </div>
         <div className="artifact-actions">
@@ -150,57 +105,47 @@ export default function ArtifactPanel({
               ◈ Stats
             </button>
           )}
-          <button
-            type="button"
-            aria-pressed={autoScroll}
-            onClick={() => {
-              setAutoScroll((on) => {
-                const next = !on;
-                resumeAtBottom.current = next;
-                return next;
-              });
-            }}
-          >
-            Auto scroll {autoScroll ? "On" : "Off"}
-          </button>
-          <button type="button" onClick={clear} disabled={!path} aria-label="Clear output">
-            Clear
-          </button>
-          <button type="button" onClick={onCollapse} aria-label="Collapse output">
+          <button type="button" onClick={onCollapse} aria-label="Collapse logs">
             Collapse
           </button>
         </div>
       </header>
-      <div
-        className="artifact-list"
-        ref={listRef}
-        onScroll={() => {
-          if (ignoreScroll.current) return;
-          const el = listRef.current;
-          if (!el) return;
-          const near = nearOutputBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
-          if (!near) {
-            resumeAtBottom.current = true;
-            setAutoScroll(false);
-            return;
-          }
-          if (resumeAtBottom.current) setAutoScroll(true);
-        }}
-      >
+      <div className="artifact-list" ref={listRef}>
         {empty ? (
           <p className="artifact-empty">{empty}</p>
         ) : (
-          visible.map((entry) => <Entry key={entry.id} entry={entry} />)
+          displayed.map((entry) => (
+            <Entry
+              key={entry.id}
+              entry={entry}
+              expanded={expandedIds.has(entry.id)}
+              onToggle={(open) => handleToggle(entry.id, open)}
+            />
+          ))
         )}
       </div>
     </aside>
   );
 }
 
-function Entry({ entry }: { entry: ArtifactEntry }) {
+function Entry({
+  entry,
+  expanded,
+  onToggle,
+}: {
+  entry: ArtifactEntry;
+  expanded: boolean;
+  onToggle: (open: boolean) => void;
+}) {
   if (entry.kind === "reasoning") {
     return (
-      <details className="artifact-item reasoning">
+      <details
+        className="artifact-item reasoning"
+        open={expanded}
+        onToggle={(event) => {
+          onToggle(event.currentTarget.open);
+        }}
+      >
         <summary>{entry.label}</summary>
         <div className="artifact-body">{entry.body}</div>
       </details>

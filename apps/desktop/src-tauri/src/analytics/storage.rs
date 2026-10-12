@@ -247,6 +247,12 @@ fn dir_size(path: &Path) -> u64 {
     size
 }
 
+pub fn tab_storage_bytes(session_name: &str, tab_id: &str) -> u64 {
+    tab_dir(session_name, tab_id)
+        .map(|dir| dir_size(&dir))
+        .unwrap_or(0)
+}
+
 pub fn clear_all_analytics() -> Result<(), String> {
     let root = analytics_root().ok_or_else(|| "no analytics root".to_string())?;
     if root.exists() {

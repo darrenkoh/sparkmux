@@ -238,6 +238,7 @@ export interface TabAnalyticsResponse {
   cli: string | null;
   transcript_path: string | null;
   stats: TabAnalyticsStats;
+  lifetime_stats?: TabAnalyticsStats | null;
   storage: AnalyticsConfig;
 }
 

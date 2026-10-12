@@ -46,14 +46,19 @@ export default function DockedStatsPanel({
     return <div className="docked-stats-panel" aria-label="Docked area map" />;
   }
 
+  const isLifetime =
+    typeof window !== "undefined" &&
+    window.localStorage.getItem("sparkmux_hud_view_mode") === "lifetime";
+  const st = isLifetime ? (data?.lifetime_stats ?? data?.stats) : data?.stats;
+
   return (
     <div className="docked-stats-panel" aria-label="Docked area map">
       <TerrainViewport
-        timeline={data?.stats?.timeline ?? []}
-        activeModel={data?.stats?.active_model}
+        timeline={st?.timeline ?? []}
+        activeModel={st?.active_model}
         sessionName={sessionName}
         tabName={tabName}
-        stats={data?.stats}
+        stats={st}
         docked={true}
         onExpand={onExpand}
         onClose={onClose}

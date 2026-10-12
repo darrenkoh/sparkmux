@@ -1521,7 +1521,8 @@ fn push_text(
     if body.is_empty() && kind != "tool" {
         return;
     }
-    let id = format!("{offset}:{}", entries.len());
+    let count_at_offset = entries.iter().filter(|e| e.offset == offset).count();
+    let id = format!("{offset}:{kind}:{count_at_offset}");
     entries.push(ArtifactEntry {
         id,
         offset,
@@ -1882,9 +1883,8 @@ mod tests {
         assert!(bar.contains("status-output"));
         assert!(bar.contains("aria-label=\"Agent output\""));
         let panel = include_str!("../../src/chrome/ArtifactPanel.tsx");
-        assert!(panel.contains("Clear"));
+        assert!(panel.contains("AGENT LOGS"));
         assert!(panel.contains("Collapse"));
-        assert!(panel.contains("Auto scroll"));
         assert!(panel.contains("paneArtifacts"));
         assert!(app.contains("outputPaneForTab"));
         assert!(app.contains("pid={outputPane?.pid ?? 0}"));

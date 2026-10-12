@@ -25,6 +25,15 @@ export { formatBytes, formatNum, formatMs, formatUsd, estimateCost };
 
 const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
 const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
+const STORAGE_KEY_HUD_VIEW_MODE = "sparkmux_hud_view_mode";
+
+function getInitialViewMode(): "current" | "lifetime" {
+  try {
+    const val = localStorage.getItem(STORAGE_KEY_HUD_VIEW_MODE);
+    if (val === "lifetime") return "lifetime";
+  } catch {}
+  return "current";
+}
 
 function getInitialLeftWidth(): number {
   try {
@@ -616,7 +625,17 @@ export default function AnalyticsHud({
     fetchData();
   };
 
-  const st = data?.stats;
+  const [viewMode, setViewMode] = useState<"current" | "lifetime">(getInitialViewMode);
+
+  const handleViewMode = (mode: "current" | "lifetime") => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(STORAGE_KEY_HUD_VIEW_MODE, mode);
+    } catch {}
+  };
+
+  const isLifetime = viewMode === "lifetime";
+  const st = isLifetime ? (data?.lifetime_stats ?? data?.stats) : data?.stats;
   const storage = data?.storage;
 
   const promptTokens = (st?.total_input_tokens ?? 0) + (st?.total_cache_read_tokens ?? 0);
@@ -671,6 +690,17 @@ export default function AnalyticsHud({
               </span>
             )}
             <span
+              className={`scifi-badge-pill scope ${isLifetime ? "lifetime" : "current"}`}
+              title={
+                isLifetime
+                  ? "Showing cumulative stats across all sessions in this tab"
+                  : "Showing stats strictly for the current active task (starts fresh on /new)"
+              }
+            >
+              <span className="scifi-pill-dot" />
+              SCOPE: <strong>{isLifetime ? "TAB CUMULATIVE" : "CURRENT TASK"}</strong>
+            </span>
+            <span
               className="scifi-badge-pill events"
               title="Total raw telemetry events captured across this session"
             >
@@ -687,6 +717,25 @@ export default function AnalyticsHud({
           </div>
 
           <div className="scifi-controls">
+            <div className="scifi-mode-group" role="group" aria-label="Telemetry Scope Mode">
+              <button
+                type="button"
+                className={`scifi-btn scifi-mode-btn ${!isLifetime ? "on" : "off"}`}
+                onClick={() => handleViewMode("current")}
+                title="Current active task (starts fresh on /new)"
+              >
+                CURRENT TASK
+              </button>
+              <button
+                type="button"
+                className={`scifi-btn scifi-mode-btn ${isLifetime ? "on" : "off"}`}
+                onClick={() => handleViewMode("lifetime")}
+                title="Cumulative metrics across all sessions in this tab"
+              >
+                TAB CUMULATIVE
+              </button>
+            </div>
+
             <button
               type="button"
               className={`scifi-btn ${data?.enabled ? "on" : "off"}`}
@@ -1083,12 +1132,6 @@ export default function AnalyticsHud({
             <span>
               STORAGE ALLOCATION:{" "}
               <strong>{formatBytes(storage?.total_bytes ?? 0)}</strong> ON DISK
-            </span>
-          </div>
-          <div>
-            <span>
-              TOTAL MONITORED: {storage?.session_count ?? 0} SESSIONS /{" "}
-              {storage?.tab_count ?? 0} TABS
             </span>
           </div>
           <div className="scifi-foot-right">

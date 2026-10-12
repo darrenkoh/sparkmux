@@ -42,6 +42,7 @@ pub struct TabAnalyticsResponse {
     pub cli: Option<String>,
     pub transcript_path: Option<String>,
     pub stats: TabAnalyticsStats,
+    pub lifetime_stats: Option<TabAnalyticsStats>,
     pub storage: AnalyticsConfig,
 }
 
@@ -127,9 +128,13 @@ pub async fn tab_analytics(
         // Filter events strictly to the active agent session/conversation if one is active,
         // so metrics are not polluted by prior or other sessions that were run in this tab.
         let events_to_analyze: Vec<event::Event> = if let Some(ref src) = active_src {
-            all_events.into_iter().filter(|ev| ev.s == *src).collect()
-        } else {
             all_events
+                .iter()
+                .filter(|ev| ev.s == *src)
+                .cloned()
+                .collect()
+        } else {
+            all_events.clone()
         };
 
         let active_model = cursor.model.clone();
@@ -143,7 +148,22 @@ pub async fn tab_analytics(
             &active_model,
         );
 
-        let storage = get_storage_stats();
+        let lifetime_stats = if active_src.is_some() && all_events.len() > events_to_analyze.len() {
+            Some(compute_stats(
+                &all_events,
+                cursor.ctx_used,
+                cursor.ctx_window,
+                cursor.ttft_ms,
+                cursor.lines_added,
+                cursor.lines_removed,
+                &active_model,
+            ))
+        } else {
+            Some(stats.clone())
+        };
+
+        let mut storage = get_storage_stats();
+        storage.total_bytes = storage::tab_storage_bytes(&session_name, &tab_id);
 
         Ok(TabAnalyticsResponse {
             enabled,
@@ -152,6 +172,7 @@ pub async fn tab_analytics(
             cli: cli_str,
             transcript_path: path_str,
             stats,
+            lifetime_stats,
             storage,
         })
     })
