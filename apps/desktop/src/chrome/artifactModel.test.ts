@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  calculatePreservedScrollTop,
   clearedThrough,
   cliLabel,
   emptyOutputText,
+  hasNewTopContent,
   markCleared,
   nearOutputBottom,
   outputPaneForTab,
@@ -104,4 +106,39 @@ test("a shell pane and a missing transcript explain themselves", () => {
     emptyOutputText({ ...feed, transcript_path: null, entries: [] }, 0, 0),
     "No transcript for this pane yet.",
   );
+});
+
+test("calculatePreservedScrollTop anchors when scrolled down and stays at top otherwise", () => {
+  // Scrolled down (scrollTop = 250), content grew by 80px -> adjust to 330px
+  assert.equal(calculatePreservedScrollTop(250, 1000, 1080), 330);
+
+  // At top (scrollTop = 0) -> no adjustment, stays at top
+  assert.equal(calculatePreservedScrollTop(0, 1000, 1080), null);
+
+  // Near top subpixel threshold (scrollTop = 1) -> stays at top
+  assert.equal(calculatePreservedScrollTop(1, 1000, 1080), null);
+
+  // Scrolled down, but content didn't grow or shrank -> no adjustment
+  assert.equal(calculatePreservedScrollTop(250, 1000, 1000), null);
+  assert.equal(calculatePreservedScrollTop(250, 1080, 1000), null);
+});
+
+test("hasNewTopContent detects prepended entries and updated latest entry body", () => {
+  const e1 = { id: "1", offset: 0, kind: "user", label: "You", body: "a" };
+  const e2 = { id: "2", offset: 10, kind: "assistant", label: "Assistant", body: "b" };
+  const e2Grown = { id: "2", offset: 10, kind: "assistant", label: "Assistant", body: "b+" };
+  const e3 = { id: "3", offset: 20, kind: "tool", label: "Tool", body: "c" };
+
+  // New entry added
+  assert.equal(hasNewTopContent([e1, e2], [e1, e2, e3]), true);
+
+  // Latest entry grew body text (streaming)
+  assert.equal(hasNewTopContent([e1, e2], [e1, e2Grown]), true);
+
+  // Identical entries
+  assert.equal(hasNewTopContent([e1, e2], [e1, e2]), false);
+
+  // Empty lists
+  assert.equal(hasNewTopContent([], []), false);
+  assert.equal(hasNewTopContent([], [e1]), true);
 });

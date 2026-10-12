@@ -1,4 +1,4 @@
-import type { ArtifactFeed } from "../api";
+import type { ArtifactEntry, ArtifactFeed } from "../api";
 import type { Pane, Snapshot } from "../types";
 
 export type { ArtifactEntry, ArtifactFeed } from "../api";
@@ -44,6 +44,50 @@ export function outputTailKey(entries: { id: string; body: string }[]): string {
   const last = entries[entries.length - 1];
   if (!last) return "0";
   return `${entries.length}\n${last.id}\n${last.body.length}\n${last.body.slice(-32)}`;
+}
+
+/**
+ * Calculates scroll adjustment when new items are prepended to the top of an inverted list.
+ * If the user was scrolled down (prevScrollTop > threshold), and height was added (deltaScrollHeight > 0),
+ * returns the new scrollTop that preserves their scrolled position.
+ * If the user was at the top (prevScrollTop <= threshold), returns null (no adjustment, stay at top).
+ */
+export function calculatePreservedScrollTop(
+  prevScrollTop: number,
+  prevScrollHeight: number,
+  currentScrollHeight: number,
+  threshold = 2,
+): number | null {
+  if (prevScrollTop <= threshold) {
+    return null;
+  }
+  const delta = currentScrollHeight - prevScrollHeight;
+  if (delta <= 0) {
+    return null;
+  }
+  return prevScrollTop + delta;
+}
+
+/**
+ * Checks whether new entries arrived at the top or the topmost entry grew in size.
+ */
+export function hasNewTopContent(
+  prevEntries: ArtifactEntry[],
+  nextEntries: ArtifactEntry[],
+): boolean {
+  if (nextEntries.length > prevEntries.length) {
+    return true;
+  }
+  if (nextEntries.length === 0 || prevEntries.length === 0) {
+    return false;
+  }
+  const prevLast = prevEntries[prevEntries.length - 1];
+  const nextLast = nextEntries[nextEntries.length - 1];
+  return (
+    prevLast.id !== nextLast.id ||
+    prevLast.body !== nextLast.body ||
+    prevLast.label !== nextLast.label
+  );
 }
 
 export function markCleared(map: ClearMap, path: string, fileLen: number): ClearMap {

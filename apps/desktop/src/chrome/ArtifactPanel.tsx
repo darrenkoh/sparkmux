@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { paneArtifacts } from "../api";
 import {
-  cliLabel,
-  directoryLabel,
+  calculatePreservedScrollTop,
   emptyOutputText,
+  hasNewTopContent,
   type ArtifactEntry,
   type ArtifactFeed,
 } from "./artifactModel";
@@ -29,45 +29,101 @@ export default function ArtifactPanel({
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const listRef = useRef<HTMLDivElement>(null);
+  const unmountedRef = useRef(false);
+  const paramsRef = useRef({ command, cwd, title, pid });
+  paramsRef.current = { command, cwd, title, pid };
+
+  const prevFeedRef = useRef<ArtifactFeed | null>(null);
+  const scrollStateRef = useRef<{ scrollTop: number; scrollHeight: number }>({
+    scrollTop: 0,
+    scrollHeight: 0,
+  });
+
+  const tick = useCallback(() => {
+    const { command, cwd, title, pid } = paramsRef.current;
+    void paneArtifacts(command, cwd, title, pid)
+      .then((next) => {
+        if (unmountedRef.current) return;
+        setFeed((prev) => {
+          if (
+            prev &&
+            prev.cli === next.cli &&
+            prev.transcript_path === next.transcript_path &&
+            prev.file_len === next.file_len &&
+            prev.entries.length === next.entries.length &&
+            prev.error === next.error
+          ) {
+            const prevLast = prev.entries[prev.entries.length - 1];
+            const nextLast = next.entries[next.entries.length - 1];
+            if (
+              prevLast?.id === nextLast?.id &&
+              prevLast?.body === nextLast?.body &&
+              prevLast?.label === nextLast?.label
+            ) {
+              return prev;
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        if (unmountedRef.current) return;
+        setFeed((prev) =>
+          prev ?? {
+            cli: null,
+            transcript_path: null,
+            file_len: 0,
+            entries: [],
+            error: "Could not read the transcript.",
+          },
+        );
+      });
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const tick = () => {
-      void paneArtifacts(command, cwd, title, pid)
-        .then((next) => {
-          if (!cancelled) setFeed(next);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setFeed((prev) =>
-            prev ?? {
-              cli: null,
-              transcript_path: null,
-              file_len: 0,
-              entries: [],
-              error: "Could not read the transcript.",
-            },
-          );
-        });
-    };
-    setFeed(null);
-    setExpandedIds(new Set());
     tick();
+  }, [command, cwd, title, pid, tick]);
+
+  useEffect(() => {
     const id = window.setInterval(tick, 1000);
     return () => {
-      cancelled = true;
+      unmountedRef.current = true;
       window.clearInterval(id);
     };
-  }, [command, cwd, title, pid]);
+  }, [tick]);
 
   const rawEntries = feed?.entries ?? [];
   const empty = emptyOutputText(feed, rawEntries.length, 0);
   // Latest logs on top
   const displayed = [...rawEntries].reverse();
 
-  const where = directoryLabel(cwd);
-  const who = cliLabel(feed?.cli ?? null);
-  const subtitle = [who, where].filter(Boolean).join(" · ");
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+
+    const prevFeed = prevFeedRef.current;
+    prevFeedRef.current = feed;
+
+    const prevEntries = prevFeed?.entries ?? [];
+    const currentEntries = feed?.entries ?? [];
+    const isNewFeed = prevFeed !== feed && prevFeed !== null && feed !== null;
+
+    if (isNewFeed && hasNewTopContent(prevEntries, currentEntries)) {
+      const nextScrollTop = calculatePreservedScrollTop(
+        scrollStateRef.current.scrollTop,
+        scrollStateRef.current.scrollHeight,
+        el.scrollHeight,
+      );
+      if (nextScrollTop !== null) {
+        el.scrollTop = nextScrollTop;
+      }
+    }
+
+    scrollStateRef.current = {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+    };
+  }, [feed, expandedIds]);
 
   const handleToggle = (id: string, open: boolean) => {
     setExpandedIds((prev) => {
@@ -91,7 +147,6 @@ export default function ArtifactPanel({
       <header className="artifact-head">
         <div className="artifact-title">
           <span>AGENT LOGS</span>
-          {subtitle && <span className="artifact-sub">{subtitle}</span>}
         </div>
         <div className="artifact-actions">
           {onOpenAnalytics && (
@@ -110,7 +165,18 @@ export default function ArtifactPanel({
           </button>
         </div>
       </header>
-      <div className="artifact-list" ref={listRef}>
+      <div
+        className="artifact-list"
+        ref={listRef}
+        onScroll={() => {
+          const el = listRef.current;
+          if (!el) return;
+          scrollStateRef.current = {
+            scrollTop: el.scrollTop,
+            scrollHeight: el.scrollHeight,
+          };
+        }}
+      >
         {empty ? (
           <p className="artifact-empty">{empty}</p>
         ) : (

@@ -14,6 +14,8 @@ pub struct ActivityPoint {
     pub reply_count: u32,
     pub tool_count: u32,
     pub tokens: u64,
+    pub top_event_kind: String,
+    pub top_event_label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -129,16 +131,28 @@ pub fn compute_stats(
             USER => {
                 stats.user_prompts += 1;
                 buckets[b_idx].user_count += 1;
+                if buckets[b_idx].top_event_kind.is_empty() {
+                    buckets[b_idx].top_event_kind = "user".into();
+                    buckets[b_idx].top_event_label = "USER PROMPT".into();
+                }
             }
             THINK => {
                 stats.thinking_blocks += 1;
                 buckets[b_idx].think_count += 1;
+                if buckets[b_idx].top_event_kind.is_empty() || buckets[b_idx].top_event_kind == "user" {
+                    buckets[b_idx].top_event_kind = "think".into();
+                    buckets[b_idx].top_event_label = "REASONING".into();
+                }
             }
             REPLY => {
                 stats.assistant_replies += 1;
                 buckets[b_idx].reply_count += 1;
                 if !ev.n.is_empty() && stats.active_model.is_empty() {
                     stats.active_model.clone_from(&ev.n);
+                }
+                if buckets[b_idx].top_event_kind.is_empty() {
+                    buckets[b_idx].top_event_kind = "reply".into();
+                    buckets[b_idx].top_event_label = if !ev.n.is_empty() { ev.n.clone() } else { "ASSISTANT".into() };
                 }
             }
             TOOL => {
@@ -147,6 +161,9 @@ pub fn compute_stats(
                 let entry = tool_map.entry(ev.n.clone()).or_insert((0, 0, 0, 0, ev.t));
                 entry.0 += 1;
                 entry.4 = entry.4.max(ev.t);
+                // Tools have high priority for top event label
+                buckets[b_idx].top_event_kind = "tool".into();
+                buckets[b_idx].top_event_label = if !ev.n.is_empty() { ev.n.clone() } else { "TOOL".into() };
             }
             RESULT => {
                 stats.tool_results += 1;
