@@ -28,11 +28,11 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
   const [mode, setMode] = useState<TokenChartMode>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_MODE);
-      if (saved === "perspective" || saved === "contour" || saved === "burst" || saved === "gauge") {
+      if (saved === "contour" || saved === "burst" || saved === "gauge") {
         return saved;
       }
     } catch {}
-    return "perspective";
+    return "contour";
   });
 
   const [activeChannel, setActiveChannel] = useState<ChannelKey | null>(null);
@@ -98,14 +98,12 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
       ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, w, h);
 
-      if (mode === "perspective") {
-        drawPerspectiveMode(ctx, w, h, processedData, activeChannel, hoverIndex, elapsed, cam3dRef.current);
-      } else if (mode === "gauge") {
+      if (mode === "gauge") {
         drawGaugeMode(ctx, w, h, stats, activeChannel);
       } else if (mode === "burst") {
         drawBurstMode(ctx, w, h, processedData, activeChannel, hoverIndex);
       } else {
-        drawContourMode(ctx, w, h, processedData, activeChannel, hoverIndex, elapsed);
+        draw3DContourMode(ctx, w, h, processedData, activeChannel, hoverIndex, elapsed, cam3dRef.current);
       }
 
       ctx.restore();
@@ -122,9 +120,9 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
     };
   }, [mode, processedData, stats, activeChannel, hoverIndex]);
 
-  // Pointer event handlers for 45° orbit and crosshair inspection
+  // Pointer event handlers for 3D contour orbit and crosshair inspection
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (mode === "perspective") {
+    if (mode === "contour") {
       cam3dRef.current.isDragging = true;
       cam3dRef.current.lastX = e.clientX;
       cam3dRef.current.lastY = e.clientY;
@@ -133,7 +131,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (mode === "perspective" && cam3dRef.current.isDragging) {
+      if (mode === "contour" && cam3dRef.current.isDragging) {
         const dx = e.clientX - cam3dRef.current.lastX;
         const dy = e.clientY - cam3dRef.current.lastY;
         cam3dRef.current.lastX = e.clientX;
@@ -151,7 +149,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 
       const rect = e.currentTarget.getBoundingClientRect();
       const clientX = e.clientX - rect.left;
-      const padLeft = mode === "perspective" ? 40 : 54;
+      const padLeft = mode === "contour" ? 40 : 54;
       const padRight = 20;
       const plotW = Math.max(1, rect.width - padLeft - padRight);
 
@@ -172,7 +170,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
   }, []);
 
   const onDoubleClick = useCallback(() => {
-    if (mode === "perspective") {
+    if (mode === "contour") {
       cam3dRef.current.azimuth = -0.42;
       cam3dRef.current.elevation = 0.62;
     }
@@ -187,19 +185,11 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         <div className="token-chart-modes">
           <button
             type="button"
-            className={mode === "perspective" ? "on" : ""}
-            onClick={() => handleModeChange("perspective")}
-            title="45° axonometric 3D topographical relief view"
-          >
-            45° RELIEF
-          </button>
-          <button
-            type="button"
             className={mode === "contour" ? "on" : ""}
             onClick={() => handleModeChange("contour")}
-            title="Stacked topographical elevation contours"
+            title="3D topographical contour elevation relief with orbital camera"
           >
-            CONTOUR
+            3D CONTOUR
           </button>
           <button
             type="button"
@@ -313,10 +303,10 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 }
 
 // ---------------------------------------------------------------------------
-// Canvas Drawing: 45-Degree Axonometric 3D Topographical Relief View
+// Canvas Drawing: 3D Topographical Contour Elevation Mode
 // ---------------------------------------------------------------------------
 
-function drawPerspectiveMode(
+function draw3DContourMode(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
@@ -505,7 +495,33 @@ function drawPerspectiveMode(
         }
       }
 
-      // 2C. Glowing Top Ridge Crest
+      // 2C. 3D Elevation Iso-Contours (topographical height tiers)
+      const contourTiers = [0.25, 0.5, 0.75];
+      ctx.strokeStyle = ch.color;
+      ctx.lineWidth = 0.9;
+      for (const tier of contourTiers) {
+        ctx.globalAlpha = 0.35;
+        ctx.beginPath();
+        let startedContour = false;
+        for (let i = 0; i < n; i++) {
+          const val = data[i][ch.key];
+          const y = (val / maxAltitude) * maxVisualY * tier;
+          if (y < 0.05) continue;
+          const frac = i / (n - 1);
+          const x = xMin + frac * xSpan;
+          const pt = project([x, y, z]);
+          if (!pt) continue;
+          if (!startedContour) {
+            ctx.moveTo(pt[0], pt[1]);
+            startedContour = true;
+          } else {
+            ctx.lineTo(pt[0], pt[1]);
+          }
+        }
+        ctx.stroke();
+      }
+
+      // 2D. Glowing Top Ridge Crest
       ctx.globalAlpha = 0.95;
       ctx.strokeStyle = ch.color;
       ctx.shadowColor = ch.glow;
@@ -526,7 +542,7 @@ function drawPerspectiveMode(
       }
       ctx.stroke();
 
-      // 2D. Glowing Crest Core Beads on Non-Zero Points
+      // 2E. Glowing Crest Core Beads on Non-Zero Points
       ctx.shadowBlur = 0;
       for (let i = 0; i < n; i++) {
         const pt = topPts[i];
@@ -622,146 +638,8 @@ function drawPerspectiveMode(
   ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
   ctx.textAlign = "left";
-  ctx.fillText("DRAG · 45° ORBIT   DBL-CLICK · RESET", 14, h - 8);
+  ctx.fillText("DRAG · 3D ORBIT   DBL-CLICK · RESET", 14, h - 8);
   ctx.restore();
-}
-
-// ---------------------------------------------------------------------------
-// Canvas Drawing: 2D Topographical Contour Mode
-// ---------------------------------------------------------------------------
-
-function drawContourMode(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  data: ProcessedBucket[],
-  activeChannel: ChannelKey | null,
-  hoverIndex: number | null,
-  elapsed: number,
-) {
-  const padL = 54;
-  const padR = 16;
-  const padT = 12;
-  const padB = 24;
-  const plotW = Math.max(1, w - padL - padR);
-  const plotH = Math.max(1, h - padT - padB);
-
-  let maxAltitude = 1;
-  if (activeChannel) {
-    for (const d of data) {
-      maxAltitude = Math.max(maxAltitude, d[activeChannel]);
-    }
-  } else {
-    for (const d of data) {
-      maxAltitude = Math.max(maxAltitude, d.stackOutput);
-    }
-  }
-  maxAltitude = Math.max(100, Math.ceil(maxAltitude * 1.15));
-
-  drawGridAndContours(ctx, padL, padT, plotW, plotH, maxAltitude, data);
-
-  if (data.length < 2) return;
-
-  const n = data.length;
-  const getX = (i: number) => padL + (i / (n - 1)) * plotW;
-  const getY = (val: number) => padT + plotH - (Math.min(maxAltitude, val) / maxAltitude) * plotH;
-
-  if (activeChannel) {
-    const chDef = CHANNELS.find((c) => c.key === activeChannel)!;
-    drawSingleArea(ctx, data, getX, getY, (d) => d[activeChannel], chDef, padT + plotH);
-  } else {
-    const layers = [
-      {
-        key: "output",
-        def: CHANNELS[3],
-        getTop: (d: ProcessedBucket) => d.stackOutput,
-        getBot: (d: ProcessedBucket) => d.stackReasoning,
-      },
-      {
-        key: "reasoning",
-        def: CHANNELS[2],
-        getTop: (d: ProcessedBucket) => d.stackReasoning,
-        getBot: (d: ProcessedBucket) => d.stackInput,
-      },
-      {
-        key: "input",
-        def: CHANNELS[1],
-        getTop: (d: ProcessedBucket) => d.stackInput,
-        getBot: (d: ProcessedBucket) => d.stackCache,
-      },
-      {
-        key: "cache",
-        def: CHANNELS[0],
-        getTop: (d: ProcessedBucket) => d.stackCache,
-        getBot: () => 0,
-      },
-    ];
-
-    for (const layer of layers) {
-      drawStackedBand(ctx, data, getX, getY, layer.getTop, layer.getBot, layer.def);
-    }
-  }
-
-  // Radar sweep line
-  const sweepProgress = (elapsed * 0.25) % 1.0;
-  const sweepX = padL + sweepProgress * plotW;
-  ctx.save();
-  const sweepGrad = ctx.createLinearGradient(sweepX - 25, 0, sweepX, 0);
-  sweepGrad.addColorStop(0, "rgba(255, 154, 60, 0)");
-  sweepGrad.addColorStop(1, "rgba(255, 154, 60, 0.22)");
-  ctx.fillStyle = sweepGrad;
-  ctx.fillRect(sweepX - 25, padT, 25, plotH);
-
-  ctx.strokeStyle = "rgba(255, 154, 60, 0.55)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(sweepX, padT);
-  ctx.lineTo(sweepX, padT + plotH);
-  ctx.stroke();
-  ctx.restore();
-
-  // Crosshair
-  if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < data.length) {
-    const hX = getX(hoverIndex);
-    const d = data[hoverIndex];
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 2]);
-    ctx.beginPath();
-    ctx.moveTo(hX, padT);
-    ctx.lineTo(hX, padT + plotH);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    const pointsToMark: Array<{ y: number; color: string }> = [];
-    if (activeChannel) {
-      const ch = CHANNELS.find((c) => c.key === activeChannel)!;
-      pointsToMark.push({ y: getY(d[activeChannel]), color: ch.color });
-    } else {
-      if (d.output > 0) pointsToMark.push({ y: getY(d.stackOutput), color: CHANNELS[3].color });
-      if (d.reasoning > 0) pointsToMark.push({ y: getY(d.stackReasoning), color: CHANNELS[2].color });
-      if (d.input > 0) pointsToMark.push({ y: getY(d.stackInput), color: CHANNELS[1].color });
-      if (d.cache > 0) pointsToMark.push({ y: getY(d.stackCache), color: CHANNELS[0].color });
-    }
-
-    for (const pt of pointsToMark) {
-      ctx.beginPath();
-      ctx.arc(hX, pt.y, 4.5, 0, Math.PI * 2);
-      ctx.fillStyle = pt.color;
-      ctx.shadowColor = pt.color;
-      ctx.shadowBlur = 8;
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(hX, pt.y, 1.8, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffffff";
-      ctx.shadowBlur = 0;
-      ctx.fill();
-    }
-    ctx.restore();
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -979,114 +857,3 @@ function drawGridAndContours(
   ctx.restore();
 }
 
-function drawStackedBand(
-  ctx: CanvasRenderingContext2D,
-  data: ProcessedBucket[],
-  getX: (i: number) => number,
-  getY: (v: number) => number,
-  getTop: (d: ProcessedBucket) => number,
-  getBot: (d: ProcessedBucket) => number,
-  def: ChannelDef,
-) {
-  const n = data.length;
-  if (n < 2) return;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(getX(0), getY(getTop(data[0])));
-
-  for (let i = 1; i < n; i++) {
-    const x0 = getX(i - 1);
-    const y0 = getY(getTop(data[i - 1]));
-    const x1 = getX(i);
-    const y1 = getY(getTop(data[i]));
-    const mx = (x0 + x1) / 2;
-    ctx.bezierCurveTo(mx, y0, mx, y1, x1, y1);
-  }
-
-  for (let i = n - 1; i >= 0; i--) {
-    const x = getX(i);
-    const y = getY(getBot(data[i]));
-    if (i === n - 1) {
-      ctx.lineTo(x, y);
-    } else {
-      const prevX = getX(i + 1);
-      const prevY = getY(getBot(data[i + 1]));
-      const mx = (prevX + x) / 2;
-      ctx.bezierCurveTo(mx, prevY, mx, y, x, y);
-    }
-  }
-
-  ctx.closePath();
-  ctx.fillStyle = def.bgGradient;
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(getX(0), getY(getTop(data[0])));
-  for (let i = 1; i < n; i++) {
-    const x0 = getX(i - 1);
-    const y0 = getY(getTop(data[i - 1]));
-    const x1 = getX(i);
-    const y1 = getY(getTop(data[i]));
-    const mx = (x0 + x1) / 2;
-    ctx.bezierCurveTo(mx, y0, mx, y1, x1, y1);
-  }
-  ctx.strokeStyle = def.color;
-  ctx.shadowColor = def.glow;
-  ctx.shadowBlur = 6;
-  ctx.lineWidth = 1.6;
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-function drawSingleArea(
-  ctx: CanvasRenderingContext2D,
-  data: ProcessedBucket[],
-  getX: (i: number) => number,
-  getY: (v: number) => number,
-  getValue: (d: ProcessedBucket) => number,
-  def: ChannelDef,
-  baseY: number,
-) {
-  const n = data.length;
-  if (n < 2) return;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(getX(0), baseY);
-  ctx.lineTo(getX(0), getY(getValue(data[0])));
-
-  for (let i = 1; i < n; i++) {
-    const x0 = getX(i - 1);
-    const y0 = getY(getValue(data[i - 1]));
-    const x1 = getX(i);
-    const y1 = getY(getValue(data[i]));
-    const mx = (x0 + x1) / 2;
-    ctx.bezierCurveTo(mx, y0, mx, y1, x1, y1);
-  }
-
-  ctx.lineTo(getX(n - 1), baseY);
-  ctx.closePath();
-
-  ctx.fillStyle = def.bgGradient;
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(getX(0), getY(getValue(data[0])));
-  for (let i = 1; i < n; i++) {
-    const x0 = getX(i - 1);
-    const y0 = getY(getValue(data[i - 1]));
-    const x1 = getX(i);
-    const y1 = getY(getValue(data[i]));
-    const mx = (x0 + x1) / 2;
-    ctx.bezierCurveTo(mx, y0, mx, y1, x1, y1);
-  }
-  ctx.strokeStyle = def.color;
-  ctx.shadowColor = def.glow;
-  ctx.shadowBlur = 7;
-  ctx.lineWidth = 1.8;
-  ctx.stroke();
-
-  ctx.restore();
-}

@@ -1,6 +1,6 @@
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
 
-export type TokenChartMode = "perspective" | "contour" | "burst" | "gauge";
+export type TokenChartMode = "contour" | "burst" | "gauge";
 export type ChannelKey = "cache" | "input" | "reasoning" | "output";
 
 export interface ChannelDef {
