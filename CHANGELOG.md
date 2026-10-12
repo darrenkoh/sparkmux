@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.22
+
+### Improvements
+
+- Stats Token Spectrum features a 3D isometric 45° perspective relief mode with interactive orbital rotation and altitude iso-contours alongside Contour, Burst Velocity, and Gauge views.
+- 3D Area Map and Neural Cortex Telemetry feature dense multi-tiered topographical contours, bio-neural connectome network firing, and custom base geometries (Island, Chamfer, Rect, Globe).
+- Telemetry telemetry HUD displays real-time cache efficiency metrics, input/output/reasoning token breakdown, code line deltas, and session-scoped cost estimates.
+- Status bar displays live Antigravity quota and Grok weekly allowance reset countdowns.
+
+### Fixes
+
+- Stats hover popups properly dismiss when switching modes or moving the cursor away.
+- Fixed canvas sizing and auto-rotation smoothness when docking or expanding panels.
+- Agent log scroll position is preserved when new streaming steps arrive.
+
 ## 0.1.21
 
 ### Improvements
