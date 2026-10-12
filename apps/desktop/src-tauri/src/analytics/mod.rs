@@ -17,7 +17,7 @@ use self::storage::{
     append_events, clear_all_analytics, get_storage_stats, is_enabled, load_meta, read_tab_events,
     save_meta, set_enabled, AnalyticsConfig, TabMeta,
 };
-use crate::artifacts::{cli_kind, default_roots, pane_family, select_transcript};
+use crate::artifacts::{default_roots, detect_cli, pane_family, select_transcript};
 
 static ACTIVE_CURSORS: Mutex<Option<HashMap<String, Cursor>>> = Mutex::new(None);
 
@@ -58,7 +58,7 @@ pub async fn tab_analytics(
     tokio::task::spawn_blocking(move || {
         let roots = default_roots();
         let family = pane_family(pid);
-        let kind = cli_kind(&command).or_else(|| cli_kind(&title));
+        let kind = detect_cli(&command, &title, &family);
 
         let transcript = kind.and_then(|k| select_transcript(k, &cwd, &title, &family, &roots));
         let active_src = match (kind, transcript.as_ref()) {

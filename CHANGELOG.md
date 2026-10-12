@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.24
+
+### Improvements
+
+- Support Claude Code running via Amazon Bedrock, custom wrappers, and modern Bun/Node runtime layouts.
+- Enhance CLI detection across title spinner symbols (e.g. `✳ Claude Code`) and live process trees.
+- Automatically bind active Claude Code conversation transcripts during turn pauses when no open file descriptors are held.
+
+### Fixes
+
+- Fixed Agent Logs showing "This pane is not running Grok, Claude, or Antigravity" when Claude Code runs via Amazon Bedrock or with title spinner prefixes.
+
 ## 0.1.23
 
 ### Improvements

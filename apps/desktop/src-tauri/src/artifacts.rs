@@ -149,8 +149,7 @@ fn load_for_family(
     // tmux reports the foreground executable's real file name (`grok-1.0.50`),
     // which differs from argv0 (`grok`). The pane title stays a status line
     // ending in ` - grok`, `Claude Code`, or Antigravity while the shell is
-    // still the process tmux names, and after the CLI has returned to the prompt.
-    let Some(kind) = cli_kind(command).or_else(|| cli_kind(title)) else {
+    let Some(kind) = detect_cli(command, title, family) else {
         return ArtifactFeed::none();
     };
     let Some(path) = select_transcript(kind, cwd, title, family, roots) else {
@@ -175,6 +174,19 @@ fn load_for_family(
 }
 
 pub(crate) fn cli_kind(value: &str) -> Option<CliKind> {
+    let lower_val = value.to_ascii_lowercase();
+    if lower_val.contains("/claude/")
+        || lower_val.contains("/.claude/")
+        || lower_val.contains("\\claude\\")
+    {
+        return Some(CliKind::Claude);
+    }
+    if lower_val.contains("/.grok/") || lower_val.contains("/grok/") {
+        return Some(CliKind::Grok);
+    }
+    if lower_val.contains("/.gemini/antigravity-cli/") {
+        return Some(CliKind::Antigravity);
+    }
     let base = value.rsplit(['/', '\\']).next().unwrap_or(value).trim();
     let name = base.strip_prefix('-').unwrap_or(base);
     let name = name.strip_suffix(".exe").unwrap_or(name);
@@ -186,7 +198,14 @@ fn named_cli(name: &str) -> Option<CliKind> {
     if name == "grok" || name.starts_with("grok ") || versioned_bin(name, "grok") {
         return Some(CliKind::Grok);
     }
-    if name == "claude" || name.starts_with("claude ") || versioned_bin(name, "claude") {
+    if name == "claude"
+        || name.starts_with("claude ")
+        || name == "claude-code"
+        || name.starts_with("claude-code ")
+        || name.starts_with("claude-code-")
+        || versioned_bin(name, "claude")
+        || versioned_bin(name, "claude-code")
+    {
         return Some(CliKind::Claude);
     }
     if name == "agy" || name.starts_with("agy ") || versioned_bin(name, "agy") {
@@ -206,17 +225,37 @@ fn versioned_bin(name: &str, cli: &str) -> bool {
     rest.starts_with(|ch: char| ch.is_ascii_digit())
 }
 
-/// Grok sets the pane title to `<status> - grok`. Claude uses `Claude Code`.
+/// Grok sets the pane title to `<status> - grok`. Claude uses `Claude Code` or
+/// `✳ Claude Code` (with unicode symbol/spinner prefix), or provider/platform title.
 /// Antigravity titles name the product or the `agy` binary. A hyphenated
 /// command such as `agy-extra` is not a title match; versioned `agy-1.2`
 /// is handled by [`versioned_bin`].
 fn titled_cli(name: &str) -> Option<CliKind> {
     let last = name.rsplit(" - ").next().unwrap_or(name).trim();
-    match last {
+    let clean_last = last
+        .trim_start_matches(|ch: char| !ch.is_alphanumeric() && !ch.is_whitespace())
+        .trim();
+    let first = name.split(" - ").next().unwrap_or(name).trim();
+    let clean_first = first
+        .trim_start_matches(|ch: char| !ch.is_alphanumeric() && !ch.is_whitespace())
+        .trim();
+    match clean_last {
         "grok" => return Some(CliKind::Grok),
         "claude" | "claude code" => return Some(CliKind::Claude),
         "agy" | "antigravity" => return Some(CliKind::Antigravity),
         _ => {}
+    }
+    match clean_first {
+        "grok" => return Some(CliKind::Grok),
+        "claude" | "claude code" => return Some(CliKind::Claude),
+        "agy" | "antigravity" => return Some(CliKind::Antigravity),
+        _ => {}
+    }
+    if name.contains("claude code") || name.contains("claude-code") {
+        return Some(CliKind::Claude);
+    }
+    if name.contains("claude") && (name.contains("bedrock") || name.contains("amazon")) {
+        return Some(CliKind::Claude);
     }
     if name.contains("antigravity") || name.split_whitespace().any(|part| part == "agy") {
         return Some(CliKind::Antigravity);
@@ -342,7 +381,20 @@ pub(crate) fn select_transcript(
     if found.len() == 1 {
         return found.into_iter().next();
     }
-    open_transcript(kind, family, title, roots)
+    if let Some(path) = open_transcript(kind, family, title, roots) {
+        return Some(path);
+    }
+    if kind == CliKind::Claude && !found.is_empty() && !family.is_empty() {
+        return claude_active_transcript(&found);
+    }
+    None
+}
+
+fn claude_active_transcript(found: &[PathBuf]) -> Option<PathBuf> {
+    found
+        .iter()
+        .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok())
+        .cloned()
 }
 
 /// The workspace's active Antigravity conversation, jailed to the CLI store.
@@ -836,6 +888,23 @@ mod macos_proc {
             buffer: *mut std::ffi::c_void,
             buffersize: i32,
         ) -> i32;
+        fn proc_pidpath(pid: i32, buffer: *mut std::ffi::c_void, buffersize: u32) -> i32;
+    }
+
+    pub fn pid_path(pid: u32) -> Option<PathBuf> {
+        let mut buf = [0u8; 1024];
+        let ret = unsafe { proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        if ret <= 0 {
+            return None;
+        }
+        let n = (ret as usize).min(buf.len());
+        let text = std::str::from_utf8(&buf[..n]).ok()?;
+        let trimmed = text.trim_matches('\0').trim();
+        if trimmed.starts_with('/') {
+            Some(PathBuf::from(trimmed))
+        } else {
+            None
+        }
     }
 
     pub fn child_pids(ppid: u32) -> Vec<u32> {
@@ -930,6 +999,11 @@ fn macos_open_paths(pid: u32) -> Vec<PathBuf> {
     macos_proc::open_paths(pid)
 }
 
+#[cfg(target_os = "macos")]
+fn macos_pid_path(pid: u32) -> Option<PathBuf> {
+    macos_proc::pid_path(pid)
+}
+
 #[cfg(target_os = "linux")]
 fn linux_child_pids(ppid: u32) -> Vec<u32> {
     let Ok(dir) = std::fs::read_dir("/proc") else {
@@ -976,6 +1050,45 @@ fn linux_open_paths(pid: u32) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+#[cfg(target_os = "linux")]
+fn linux_pid_path(pid: u32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+fn proc_path(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_pid_path(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_pid_path(pid)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+pub(crate) fn family_kind(family: &[(u32, u8)]) -> Option<CliKind> {
+    for (pid, _) in family {
+        if let Some(path) = proc_path(*pid) {
+            let path_str = path.to_string_lossy();
+            if let Some(kind) = cli_kind(&path_str) {
+                return Some(kind);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn detect_cli(command: &str, title: &str, family: &[(u32, u8)]) -> Option<CliKind> {
+    cli_kind(command)
+        .or_else(|| cli_kind(title))
+        .or_else(|| family_kind(family))
 }
 
 fn read_transcript(
@@ -2102,6 +2215,80 @@ mod tests {
         assert_eq!(feed.cli.as_deref(), Some("antigravity"));
         assert!(feed.transcript_path.is_none(), "{feed:?}");
         assert!(feed.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claude_detects_bedrock_and_symbol_titles() {
+        assert_eq!(cli_kind("✳ Claude Code"), Some(CliKind::Claude));
+        assert_eq!(cli_kind("Claude Code"), Some(CliKind::Claude));
+        assert_eq!(
+            cli_kind("✳ Claude Code (Amazon Bedrock)"),
+            Some(CliKind::Claude)
+        );
+        assert_eq!(cli_kind("Claude Code (Bedrock)"), Some(CliKind::Claude));
+        assert_eq!(cli_kind("[Bedrock] Claude Code"), Some(CliKind::Claude));
+        assert_eq!(cli_kind("Claude - Amazon Bedrock"), Some(CliKind::Claude));
+        assert_eq!(cli_kind("claude-code"), Some(CliKind::Claude));
+        assert_eq!(
+            cli_kind("/Users/x/.local/share/claude/versions/2.1.296"),
+            Some(CliKind::Claude)
+        );
+        assert_eq!(
+            cli_kind("C:\\Users\\x\\AppData\\Local\\claude\\versions\\2.1.296.exe"),
+            Some(CliKind::Claude)
+        );
+        assert_eq!(cli_kind("vim claude.txt"), None);
+    }
+
+    #[test]
+    fn claude_selects_active_transcript_when_family_is_present() {
+        let dir = scratch("claude-active");
+        let project = dir.join("repo");
+        fs::create_dir_all(&project).unwrap();
+        let projects = dir.join("projects");
+        let encoded = encode_claude_path(&project).unwrap();
+        let folder = projects.join(encoded);
+        fs::create_dir_all(&folder).unwrap();
+
+        let old_file = folder.join("old.jsonl");
+        fs::write(
+            &old_file,
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"older reply\"}}\n",
+        )
+        .unwrap();
+
+        // Give old file an older mtime
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let new_file = folder.join("new.jsonl");
+        fs::write(
+            &new_file,
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"active reply\"}}\n",
+        )
+        .unwrap();
+
+        let roots = roots(&dir, dir.join("no-grok"), projects);
+        // With family (live pane process), it picks the latest active session
+        let feed = load_for_family(
+            "2.1.296",
+            &project.to_string_lossy(),
+            "✳ Claude Code",
+            &[(100, 0), (101, 1)],
+            &roots,
+        );
+        assert_eq!(feed.cli.as_deref(), Some("claude"));
+        assert_eq!(
+            feed.transcript_path.as_deref(),
+            Some(new_file.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert!(
+            feed.entries
+                .iter()
+                .any(|entry| entry.body == "active reply"),
+            "{feed:?}"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 }
