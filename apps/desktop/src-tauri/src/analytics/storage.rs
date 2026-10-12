@@ -29,6 +29,10 @@ pub struct TabMeta {
     pub updated_at: i64,
     pub cursor: Cursor,
     pub total_events: u64,
+    #[serde(default)]
+    pub transcript_path: Option<String>,
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,7 +159,10 @@ pub fn read_tab_events(session_name: &str, tab_id: &str, max_events: usize) -> V
         if line.trim().is_empty() {
             continue;
         }
-        if let Ok(ev) = serde_json::from_str::<Event>(&line) {
+        for ev in serde_json::Deserializer::from_str(&line)
+            .into_iter::<Event>()
+            .flatten()
+        {
             events.push(ev);
         }
     }

@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use tauri::command;
 
 use self::event::now_ms;
-use self::ingest::{ingest, Cursor};
+use self::ingest::{ingest, source_id, Cursor};
 use self::stats::{compute_stats, TabAnalyticsStats};
 use self::storage::{
     append_events, clear_all_analytics, get_storage_stats, is_enabled, load_meta, read_tab_events,
@@ -60,6 +60,10 @@ pub async fn tab_analytics(
         let kind = cli_kind(&command).or_else(|| cli_kind(&title));
 
         let transcript = kind.and_then(|k| select_transcript(k, &cwd, &title, &family, &roots));
+        let active_src = match (kind, transcript.as_ref()) {
+            (Some(k), Some(p)) => Some(source_id(k, p)),
+            _ => None,
+        };
 
         let enabled = is_enabled();
         let key = format!(
@@ -72,14 +76,22 @@ pub async fn tab_analytics(
                 .unwrap_or_default()
         );
 
-        let mut cursor = get_active_cursor(&key)
-            .or_else(|| load_meta(&session_name, &tab_id).map(|m| m.cursor))
-            .unwrap_or_default();
-
         let cli_str = kind.map(|k| k.as_str().to_string());
         let path_str = transcript
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned());
+
+        let mut cursor = get_active_cursor(&key)
+            .or_else(|| {
+                load_meta(&session_name, &tab_id).and_then(|m| {
+                    if m.transcript_path.as_deref() == path_str.as_deref() {
+                        Some(m.cursor)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default();
 
         // Ingest new events if transcript exists and analytics is enabled
         if enabled {
@@ -95,22 +107,34 @@ pub async fn tab_analytics(
                         updated_at: now,
                         cursor: cursor.clone(),
                         total_events: 0,
+                        transcript_path: path_str.clone(),
+                        source_id: active_src.clone(),
                     });
                     meta.updated_at = now;
                     meta.total_events += new_events.len() as u64;
                     meta.cursor = cursor.clone();
+                    meta.transcript_path = path_str.clone();
+                    meta.source_id = active_src.clone();
                     let _ = save_meta(&meta);
                 }
                 set_active_cursor(&key, cursor.clone());
             }
         }
 
-        // Read all accumulated events for this session & tab
+        // Read accumulated events for this session & tab
         let all_events = read_tab_events(&session_name, &tab_id, 0);
+
+        // Filter events strictly to the active agent session/conversation if one is active,
+        // so metrics are not polluted by prior or other sessions that were run in this tab.
+        let events_to_analyze: Vec<event::Event> = if let Some(ref src) = active_src {
+            all_events.into_iter().filter(|ev| ev.s == *src).collect()
+        } else {
+            all_events
+        };
 
         let active_model = cursor.model.clone();
         let stats = compute_stats(
-            &all_events,
+            &events_to_analyze,
             cursor.ctx_used,
             cursor.ctx_window,
             cursor.ttft_ms,

@@ -656,6 +656,12 @@ export default function AnalyticsHud({
                 MODEL: <strong>{st.active_model}</strong>
               </span>
             )}
+            <span>
+              TOTAL EVENTS: <strong>{st?.total_events ?? 0}</strong>
+            </span>
+            <span>
+              TOTAL CALLS: <strong>{st?.tool_calls ?? 0}</strong>
+            </span>
           </div>
 
           <div className="scifi-controls">
@@ -732,7 +738,7 @@ export default function AnalyticsHud({
               <header>
                 <span className="tag">01</span>
                 <span>NEURAL TELEMETRY</span>
-                <small>3D SYNAPTIC CORE</small>
+                <small>{st?.total_events ?? 0} TOTAL EVENTS</small>
               </header>
               <div className="body">
                 <div
@@ -747,23 +753,23 @@ export default function AnalyticsHud({
                 </div>
                 <div className="kpis">
                   <div>
-                    <small>TOTAL EVENTS</small>
-                    <b>{st?.total_events ?? 0}</b>
+                    <small style={{ color: "#ff9a3c" }}>USER PROMPTS</small>
+                    <b style={{ color: "#ff9a3c" }}>{st?.user_prompts ?? 0}</b>
                   </div>
                   <div>
-                    <small>PROMPTS / REPLIES</small>
-                    <b>
-                      {st?.user_prompts ?? 0} / {st?.assistant_replies ?? 0}
-                    </b>
-                  </div>
-                  <div>
-                    <small>THINK BLOCKS</small>
+                    <small style={{ color: "#c084fc" }}>THINK BLOCKS</small>
                     <b style={{ color: "#c084fc" }}>
                       {st?.thinking_blocks ?? 0}
                     </b>
                   </div>
                   <div>
-                    <small>TOOL CALLS</small>
+                    <small style={{ color: "#5b8def" }}>MODEL REPLIES</small>
+                    <b style={{ color: "#5b8def" }}>
+                      {st?.assistant_replies ?? 0}
+                    </b>
+                  </div>
+                  <div>
+                    <small style={{ color: "#2dd4bf" }}>TOOL CALLS</small>
                     <b style={{ color: "#2dd4bf" }}>{st?.tool_calls ?? 0}</b>
                   </div>
                 </div>
@@ -788,7 +794,7 @@ export default function AnalyticsHud({
               <header>
                 <span className="tag">02</span>
                 <span>ACTIONS / TOOLS MATRIX</span>
-                <small>{st?.tools?.length ?? 0} LOGGED</small>
+                <small>{st?.tool_calls ?? 0} TOTAL CALLS · {st?.tools?.length ?? 0} LOGGED</small>
               </header>
               <div className="body table-scroll">
                 <table className="scifi-table">
