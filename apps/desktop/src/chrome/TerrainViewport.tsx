@@ -189,14 +189,6 @@ const GLOBE_RADIUS = 18.0;
 const POINT_COUNT = 50000;
 const LIGHT_DIR = [-0.45, 0.8, 0.4];
 
-// Persistent camera viewing angle across re-renders and view switches
-const persistentCam = {
-  azimuth: 0.38,
-  elevation: 0.48,
-  radius: 46,
-  target: [0, 1.2, 0] as [number, number, number],
-};
-
 export type BaseShape = "rect" | "globe";
 export type ScanSpeed = "0.25x" | "0.5x" | "1x" | "2x" | "paused";
 
@@ -225,6 +217,14 @@ function getInitialScanSpeed(): ScanSpeed {
 
 let persistentBaseShape: BaseShape = getInitialBaseShape();
 let persistentScanSpeed: ScanSpeed = getInitialScanSpeed();
+
+// Persistent camera viewing angle across re-renders and view switches
+const persistentCam = {
+  azimuth: 0.38,
+  elevation: 0.48,
+  radius: persistentBaseShape === "globe" ? 54 : 46,
+  target: [0, 1.2, 0] as [number, number, number],
+};
 
 interface BaseParticle {
   rx: number;
@@ -446,6 +446,11 @@ export default function TerrainViewport({
     persistentBaseShape = next;
     baseShapeRef.current = next;
     setBaseShapeState(next);
+    if (next === "globe" && persistentCam.radius < 52) {
+      persistentCam.radius = 54;
+    } else if (next === "rect" && persistentCam.radius > 50) {
+      persistentCam.radius = 46;
+    }
     try {
       localStorage.setItem(STORAGE_KEY_BASE_SHAPE, next);
     } catch {}
@@ -1174,24 +1179,30 @@ export default function TerrainViewport({
       const meta = terrainMetaRef.current;
       const maxAltitude = meta.maxAltitude;
 
-      // X-axis sweep: past (-14) to present (+14)
-      const curMaxX = (scrubProgressRef.current * 2 - 1) * (TIME_SPAN / 2);
+      // X-axis sweep: past (-extentX) to present (+extentX)
+      const currentShape = baseShapeRef.current;
+      const extentX = currentShape === "globe" ? GLOBE_RADIUS : RECT_HX;
+      // When at or near 100%, expand curMaxX beyond geometry so no edge particles or contour lines are clipped
+      const curMaxX = scrubProgressRef.current >= 0.98
+        ? extentX + 2.0
+        : (scrubProgressRef.current * 2 - 1) * extentX;
+
       if (speedMultiplier > 0 && !isPlayingRef.current) {
         clockRef.current.scanProgress = (clockRef.current.scanProgress + (dt * speedMultiplier) / 7.0) % 1.0;
       }
       const scanPhase = clockRef.current.scanProgress;
-      const scanXPos = -TIME_SPAN / 2 + scanPhase * (curMaxX - (-TIME_SPAN / 2));
+      const scanXPos = -extentX + scanPhase * (curMaxX - (-extentX));
       const scanFade = speedMultiplier === 0 ? 0.8 : smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
 
       const isMono = realismRef.current === "mono";
 
-      // Draw Grid Lines
+      // Draw Grid Lines (Base perimeter and grid lines are always fully visible and never sliced by time scrubber)
       gl.useProgram(progContour);
       gl.uniformMatrix4fv(uC.uVP, false, matVP);
       gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
       gl.uniform1f(uC.uScanX, scanXPos);
       gl.uniform1f(uC.uScanAmount, 0);
-      gl.uniform1f(uC.uMaxX, curMaxX);
+      gl.uniform1f(uC.uMaxX, 999.0);
       gl.uniform3f(uC.uColor, 1.0, 1.0, 1.0);
       gl.bindVertexArray(vaoBaseGrid);
       gl.drawArrays(gl.LINES, 0, baseGridCountRef.current);
@@ -1293,8 +1304,11 @@ export default function TerrainViewport({
       hud.save();
       hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
 
-      const tStart = project([-13, 0, -10.5]);
-      const tEnd = project([13, 0, -10.5]);
+      const extentZ = currentShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
+      const tStartX = extentX * 0.92;
+      const tStartZ = -(extentZ + 1.6);
+      const tStart = project([-tStartX, 0, tStartZ]);
+      const tEnd = project([tStartX, 0, tStartZ]);
       if (tStart && tEnd) {
         hud.fillStyle = "rgba(255, 255, 255, 0.75)";
         hud.textAlign = "left";
@@ -1305,8 +1319,8 @@ export default function TerrainViewport({
 
       // Show intermediate timeline ticks along the time axis
       for (let f = 0.25; f <= 0.75; f += 0.25) {
-        const xTick = -13 + f * 26;
-        const ptTick = project([xTick, 0, -10.5]);
+        const xTick = -tStartX + f * (tStartX * 2);
+        const ptTick = project([xTick, 0, tStartZ]);
         if (ptTick && meta.endTime > meta.startTime && meta.startTime > 0) {
           const tickMs = meta.startTime + f * (meta.endTime - meta.startTime);
           const s = Math.floor((tickMs - meta.startTime) / 1000);
@@ -1318,8 +1332,9 @@ export default function TerrainViewport({
         }
       }
 
+      const chLabelX = -(extentX + 0.8);
       CHANNELS.forEach((ch, idx) => {
-        const sc = project([-14.5, 0, zLanes[idx]]);
+        const sc = project([chLabelX, 0, zLanes[idx]]);
         if (sc) {
           hud.fillStyle = ch.hex;
           hud.textAlign = "right";
@@ -1473,7 +1488,10 @@ export default function TerrainViewport({
       const matVP = multiply(matProj, matView);
 
       let found: { info: MilestoneInfo; screenX: number; screenY: number } | null = null;
-      const curMaxX = (scrubProgressRef.current * 2 - 1) * (TIME_SPAN / 2);
+      const extentX = baseShapeRef.current === "globe" ? GLOBE_RADIUS : RECT_HX;
+      const curMaxX = scrubProgressRef.current >= 0.98
+        ? extentX + 2.0
+        : (scrubProgressRef.current * 2 - 1) * extentX;
 
       for (const m of terrainMetaRef.current.keyMilestones) {
         if (m.x > curMaxX + 0.2) continue;
@@ -1504,7 +1522,7 @@ export default function TerrainViewport({
     const handleDblClick = () => {
       persistentCam.azimuth = 0.38;
       persistentCam.elevation = 0.48;
-      persistentCam.radius = 46;
+      persistentCam.radius = baseShapeRef.current === "globe" ? 54 : 46;
     };
 
     glCanvas.addEventListener("pointerdown", handleDown);

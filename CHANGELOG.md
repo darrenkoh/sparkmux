@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.23
+
+### Improvements
+
+- 3D Area Map GLOBE mode bounds and camera framing: dynamic timeline scrubbing extent adapts seamlessly to spherical and rectangular geometry without edge truncation.
+- Base grid and perimeter ring are preserved continuously during timeline playback.
+- Interactive milestone hit testing and 3D axis coordinates dynamically scale to active base geometry.
+
+### Fixes
+
+- Fixed East / right-side clipping in 3D Area Map GLOBE mode caused by hardcoded rectangular timeline clipping boundaries.
+- Adjusted camera framing and double-click reset distance in GLOBE mode so the spherical dome remains fully in view without edge cutoff.
+
 ## 0.1.22
 
 ### Improvements
