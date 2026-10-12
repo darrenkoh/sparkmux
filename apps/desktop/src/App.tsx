@@ -38,6 +38,7 @@ import {
 } from "./api";
 import ArtifactPanel from "./chrome/ArtifactPanel";
 import AnalyticsHud from "./chrome/AnalyticsHud";
+import ChangeGraph from "./chrome/ChangeGraph";
 import DockedStatsPanel from "./chrome/DockedStatsPanel";
 import {
   DockWidthSplitter,
@@ -165,6 +166,7 @@ export default function App() {
     () => window.localStorage.getItem("sparkmux.statsDocked") === "1",
   );
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
   const [dockWidth, setDockWidth] = useState(() => {
     const raw = Number(window.localStorage.getItem("sparkmux.dockWidth"));
     if (Number.isFinite(raw) && raw >= DOCK_MIN_WIDTH && raw <= 960) return raw;
@@ -1013,7 +1015,7 @@ export default function App() {
   const isDockOpen = Boolean(showTiles) && (outputOpen || statsDocked);
 
   return (
-    <div className="app">
+    <div className={`app${graphOpen ? " graph-open" : ""}`}>
       <div className="body">
         <div
           className={`sidebar-slot ${sidebarCollapsed ? "collapsed" : ""}`}
@@ -1181,7 +1183,14 @@ export default function App() {
                               title={outputPane?.title ?? ""}
                               pid={outputPane?.pid ?? 0}
                               onCollapse={() => setOutputOpen(false)}
-                              onOpenAnalytics={() => setAnalyticsOpen(true)}
+                              onOpenAnalytics={() => {
+                                setGraphOpen(false);
+                                setAnalyticsOpen(true);
+                              }}
+                              onOpenGraph={() => {
+                                setAnalyticsOpen(false);
+                                setGraphOpen(true);
+                              }}
                               isDocked
                             />
                           </div>
@@ -1222,7 +1231,14 @@ export default function App() {
                             title={outputPane?.title ?? ""}
                             pid={outputPane?.pid ?? 0}
                             onCollapse={() => setOutputOpen(false)}
-                            onOpenAnalytics={() => setAnalyticsOpen(true)}
+                            onOpenAnalytics={() => {
+                              setGraphOpen(false);
+                              setAnalyticsOpen(true);
+                            }}
+                            onOpenGraph={() => {
+                              setAnalyticsOpen(false);
+                              setGraphOpen(true);
+                            }}
                             isDocked
                           />
                         </div>
@@ -1292,6 +1308,15 @@ export default function App() {
                     }}
                   />
                 )}
+                {graphOpen && (
+                  <ChangeGraph
+                    command={outputPane?.command ?? ""}
+                    cwd={outputPane?.path ?? ""}
+                    title={outputPane?.title ?? ""}
+                    pid={outputPane?.pid ?? 0}
+                    onClose={() => setGraphOpen(false)}
+                  />
+                )}
               </div>
             </>
           ) : failMsg ? (
@@ -1316,12 +1341,14 @@ export default function App() {
         outputOpen={outputOpen && Boolean(showTiles)}
         analyticsOpen={analyticsOpen || statsDocked}
         onOutput={() => setOutputOpen((open) => !open)}
+        graphOpen={graphOpen}
         onAnalytics={() => {
-          if (analyticsOpen) {
-            setAnalyticsOpen(false);
-          } else {
-            setAnalyticsOpen(true);
-          }
+          setGraphOpen(false);
+          setAnalyticsOpen((open) => !open);
+        }}
+        onGraph={() => {
+          setAnalyticsOpen(false);
+          setGraphOpen((open) => !open);
         }}
         onAsk={
           offerAsk

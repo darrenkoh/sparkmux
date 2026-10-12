@@ -1,5 +1,6 @@
 mod analytics;
 mod artifacts;
+mod change_graph;
 mod commands;
 mod control;
 mod error;
@@ -58,6 +59,7 @@ pub fn run() {
             telemetry::app_telemetry,
             llm_usage::llm_usage,
             artifacts::pane_artifacts,
+            change_graph::change_graph,
             analytics::tab_analytics,
             analytics::set_analytics_enabled,
             analytics::clear_analytics_data,

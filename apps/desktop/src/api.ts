@@ -146,6 +146,44 @@ export function paneArtifacts(
   return invoke("pane_artifacts", { command, cwd, title, pid });
 }
 
+export interface ChangeGraphFile {
+  path: string;
+  status: string;
+  agent_edited: boolean;
+  lines_added: number;
+  lines_removed: number;
+}
+
+export interface ChangeGraphRepo {
+  id: string;
+  name: string;
+  primary: boolean;
+  files: ChangeGraphFile[];
+}
+
+export interface ChangeGraphEdge {
+  from_repo: string;
+  to_repo: string;
+  label: string;
+  via: string;
+}
+
+export interface ChangeGraphResponse {
+  repos: ChangeGraphRepo[];
+  edges: ChangeGraphEdge[];
+  truncated: boolean;
+  error: string | null;
+}
+
+export function changeGraph(
+  command: string,
+  cwd: string,
+  title: string,
+  pid: number,
+): Promise<ChangeGraphResponse> {
+  return invoke("change_graph", { command, cwd, title, pid });
+}
+
 export interface ActivityPoint {
   timestamp: number;
   user_count: number;

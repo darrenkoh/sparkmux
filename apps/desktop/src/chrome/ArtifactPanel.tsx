@@ -17,6 +17,7 @@ export default function ArtifactPanel({
   pid,
   onCollapse,
   onOpenAnalytics,
+  onOpenGraph,
   isDocked = false,
 }: {
   command: string;
@@ -25,6 +26,7 @@ export default function ArtifactPanel({
   pid: number;
   onCollapse: () => void;
   onOpenAnalytics?: () => void;
+  onOpenGraph?: () => void;
   isDocked?: boolean;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
@@ -159,6 +161,17 @@ export default function ArtifactPanel({
               title="Open Sci-Fi Telemetry & Analytics HUD"
             >
               ◈ Stats
+            </button>
+          )}
+          {onOpenGraph && (
+            <button
+              type="button"
+              className="artifact-graph-btn"
+              onClick={onOpenGraph}
+              aria-label="Open changed files graph"
+              title="Open changed files graph"
+            >
+              ⬡ Graph
             </button>
           )}
           <button type="button" onClick={onCollapse} aria-label="Collapse logs">

@@ -16,8 +16,10 @@ export default function StatusBar({
   usage,
   outputOpen,
   analyticsOpen,
+  graphOpen,
   onOutput,
   onAnalytics,
+  onGraph,
   onAsk,
 }: {
   status: TmuxStatus | null;
@@ -27,8 +29,10 @@ export default function StatusBar({
   usage?: LlmUsage | null;
   outputOpen: boolean;
   analyticsOpen?: boolean;
+  graphOpen?: boolean;
   onOutput: () => void;
   onAnalytics?: () => void;
+  onGraph?: () => void;
   onAsk?: () => void;
 }) {
   const tmux = status?.version ?? "tmux";
@@ -104,6 +108,18 @@ export default function StatusBar({
           onClick={onAnalytics}
         >
           ◈ Stats
+        </button>
+      )}
+      {onGraph && (
+        <button
+          type="button"
+          className={`status-graph${graphOpen ? " open" : ""}`}
+          aria-pressed={graphOpen}
+          aria-label="Changed files graph"
+          title="Show files changing in this repo"
+          onClick={onGraph}
+        >
+          ⬡ Graph
         </button>
       )}
       {onAsk && (
