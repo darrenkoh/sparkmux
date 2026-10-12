@@ -702,15 +702,14 @@ fn claude_record(obj: &Map<String, Value>, cur: &mut Cursor, fallback: i64, out:
                     cur.pending_reasoning_tokens = 0;
 
                     let mut ev = Event::new(ts, event::USAGE);
-                    // `ti` is the whole prompt, cache included, as Grok reports it.
-                    ev.ti = input + read + write;
+                    ev.ti = input;
                     ev.tc = read;
                     ev.tw = write;
                     ev.to = u64_of(usage, "output_tokens");
                     ev.tr = reasoning_val;
                     ev.n.clone_from(&model);
                     ev.c = 1;
-                    cur.ctx_used = ev.ti;
+                    cur.ctx_used = input + read + write;
                     cur.ctx_window = CLAUDE_WINDOW;
                     out.push(ev);
                 }
@@ -1231,7 +1230,7 @@ mod tests {
             vec!["user", "think", "usage", "tool", "result", "done", "reply", "usage", "turn"]
         );
         let usage: Vec<_> = events.iter().filter(|e| e.k == "usage").collect();
-        assert_eq!(usage[0].ti, 1110);
+        assert_eq!(usage[0].ti, 100);
         assert_eq!(usage[0].tc, 1000);
         assert_eq!(usage[1].to, 7);
         let done = events.iter().find(|e| e.k == "done").unwrap();

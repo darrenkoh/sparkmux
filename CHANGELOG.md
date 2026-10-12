@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.25
+
+### Improvements
+
+- Accurate EST. COST calculation aligned with Claude Code `/usage` breakdown.
+- Added tiered pricing for Claude Haiku (3.5, 4.5, 5.5), Sonnet (3.5, 3.7, 4.x, 5, 5.5), Opus (4.0, 4.1, 4.5–5, 5.5), Grok, and Gemini models.
+- Support prompt cache creation (write) token accounting across model stats and telemetry.
+- Multi-model cost estimation calculates precise aggregate totals across all models used in a session.
+
+### Fixes
+
+- Fixed Claude fresh input tokens double-counting cache read and write tokens in usage events.
+
 ## 0.1.24
 
 ### Improvements

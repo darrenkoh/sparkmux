@@ -6,7 +6,14 @@ import {
   type TabAnalyticsResponse,
 } from "../api";
 import { cliLabel } from "./artifactModel";
-import { formatBytes, formatNum, formatMs, formatUsd, estimateCost } from "./analyticsFormat";
+import {
+  formatBytes,
+  formatNum,
+  formatMs,
+  formatUsd,
+  estimateCost,
+  estimateTotalCost,
+} from "./analyticsFormat";
 import TerrainViewport from "./TerrainViewport";
 import TokenSpectrumChart from "./TokenSpectrumChart";
 
@@ -22,7 +29,7 @@ export interface AnalyticsHudProps {
   onDock?: () => void;
 }
 
-export { formatBytes, formatNum, formatMs, formatUsd, estimateCost };
+export { formatBytes, formatNum, formatMs, formatUsd, estimateCost, estimateTotalCost };
 
 const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
 const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
@@ -639,11 +646,13 @@ export default function AnalyticsHud({
     promptTokens > 0
       ? ((st?.total_cache_read_tokens ?? 0) / promptTokens) * 100
       : 0;
-  const estCost = estimateCost(
+  const estCost = estimateTotalCost(
+    st?.models,
     st?.active_model,
     st?.total_input_tokens ?? 0,
     st?.total_output_tokens ?? 0,
-    st?.total_cache_read_tokens ?? 0
+    st?.total_cache_read_tokens ?? 0,
+    st?.total_cache_write_tokens ?? 0,
   );
   const netDiff = (st?.lines_added ?? 0) - (st?.lines_removed ?? 0);
 

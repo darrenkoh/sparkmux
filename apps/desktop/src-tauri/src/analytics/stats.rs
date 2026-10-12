@@ -45,6 +45,7 @@ pub struct ModelStat {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
     pub reasoning_tokens: u64,
 }
 
@@ -193,6 +194,7 @@ pub fn compute_stats(
                 m_stat.input_tokens += ev.ti;
                 m_stat.output_tokens += ev.to;
                 m_stat.cache_read_tokens += ev.tc;
+                m_stat.cache_write_tokens += ev.tw;
                 m_stat.reasoning_tokens += ev.tr;
 
                 stats.total_input_tokens += ev.ti;

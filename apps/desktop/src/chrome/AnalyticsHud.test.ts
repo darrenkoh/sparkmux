@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatBytes, formatNum, formatMs, formatUsd, estimateCost } from "./analyticsFormat.ts";
+import {
+  formatBytes,
+  formatNum,
+  formatMs,
+  formatUsd,
+  estimateCost,
+  estimateTotalCost,
+  getModelPricing,
+} from "./analyticsFormat.ts";
 
 test("formatBytes formats small and large bytes correctly", () => {
   assert.equal(formatBytes(0), "0 B");
@@ -37,3 +45,31 @@ test("estimateCost computes cost for standard and light models", () => {
   // (100k / 1M) * 0.25 + (10k / 1M) * 1.25 + (200k / 1M) * 0.03 = 0.025 + 0.0125 + 0.006 = 0.0435
   assert.ok(Math.abs(flashCost - 0.0435) < 0.0001);
 });
+
+test("estimateCost accurately calculates Claude Haiku 4.5 pricing", () => {
+  const pricing = getModelPricing("claude-haiku-4-5-20251001");
+  assert.equal(pricing.inRate, 1.0);
+  assert.equal(pricing.outRate, 5.0);
+  assert.equal(pricing.cacheReadRate, 0.1);
+  assert.equal(pricing.cacheWriteRate, 1.25);
+
+  // Haiku 4.5 with 803 in, 23 out, 12M cache read, 600k cache write
+  const haikuCost = estimateCost("claude-haiku-4-5-20251001", 803, 23, 12_000_000, 600_000);
+  // 803/1e6*1 + 23/1e6*5 + 12*0.1 + 0.6*1.25 = 0.000803 + 0.000115 + 1.20 + 0.75 = 1.9509
+  assert.ok(Math.abs(haikuCost - 1.950918) < 0.001);
+});
+
+test("estimateTotalCost calculates cost per model breakdown", () => {
+  const models = [
+    {
+      model: "claude-haiku-4-5-20251001",
+      input_tokens: 803,
+      output_tokens: 23,
+      cache_read_tokens: 12_000_000,
+      cache_write_tokens: 600_000,
+    },
+  ];
+  const totalCost = estimateTotalCost(models, "claude-haiku-4-5", 803, 23, 12_000_000, 600_000);
+  assert.ok(Math.abs(totalCost - 1.950918) < 0.001);
+});
+
