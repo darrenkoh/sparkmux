@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.27
+
+### Fixes
+
+- Fixed 3D CONTOUR mode in Section 04 (TOKEN SPECTRUM) where the time-axis laser scanning line was moving slower than the ridge crest nodes; unified sweep velocity and synchronized the scanning line with the crest node pulses in lockstep across all channels.
+
 ## 0.1.26
 
 ### Improvements

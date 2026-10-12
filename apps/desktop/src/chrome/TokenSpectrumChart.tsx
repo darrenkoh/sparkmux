@@ -17,6 +17,7 @@ import {
   X_MIN,
   MAX_VISUAL_Y,
   getCameraProjector,
+  computeContourScanProgress,
 } from "./tokenSpectrumMath";
 
 export type { TokenChartMode, ChannelKey, ChannelDef, ProcessedBucket };
@@ -430,6 +431,9 @@ function draw3DContourMode(
   }
   maxAltitude = Math.max(50, Math.ceil(maxAltitude * 1.15));
   const maxVisualY = MAX_VISUAL_Y;
+  // Synchronized chronological scan sweep progress across time [0, 1)
+  const sweepFrac = computeContourScanProgress(elapsed);
+  const sweepX = xMin + sweepFrac * xSpan;
 
   // 1. Draw 3D Base Matrix Platform Grid (Razor-thin 0.6px lines with holographic crosses)
   ctx.save();
@@ -568,7 +572,7 @@ function draw3DContourMode(
   });
 
   if (n >= 2) {
-    sortedChannels.forEach((ch, chIdx) => {
+    sortedChannels.forEach((ch) => {
       const isSelected = activeChannel === ch.key || hoverChannel === ch.key;
       const isFaded = activeChannel !== null && !isSelected;
       if (isFaded) return;
@@ -687,18 +691,17 @@ function draw3DContourMode(
         ctx.fill();
       }
 
-      // 3F. Bioluminescent Energy Pulse Surging Along Ridge Crest
-      const pulseSpeed = 0.28;
-      const pulsePhase = (elapsed * pulseSpeed + chIdx * 0.22) % 1.0;
+      // 3F. Bioluminescent Energy Pulse Surging Along Ridge Crest (synchronized with 3D scan sweep line)
+      const pulsePhase = sweepFrac;
       const pIdx = Math.min(n - 1, Math.max(0, Math.floor(pulsePhase * (n - 1))));
       const pNext = Math.min(n - 1, pIdx + 1);
       const sub = pulsePhase * (n - 1) - pIdx;
-      const xPulse = xMin + pulsePhase * xSpan;
+      const xPulse = sweepX;
       const valPulse = data[pIdx][ch.key] * (1 - sub) + data[pNext][ch.key] * sub;
       const yPulse = (valPulse / maxAltitude) * maxVisualY;
       const pulsePt = project([xPulse, yPulse, z]);
 
-      if (pulsePt && yPulse > 0.08) {
+      if (pulsePt && (yPulse > 0.04 || valPulse > 0)) {
         ctx.shadowColor = ch.glow;
         ctx.shadowBlur = 12;
         ctx.fillStyle = "#ffffff";
@@ -718,11 +721,9 @@ function draw3DContourMode(
   }
 
   // 4. 3D Laser Scan Sweep Line across time + Spark Dust
-  const sweepFrac = (elapsed * 0.22) % 1.0;
-  const sweepX = xMin + sweepFrac * xSpan;
   const swP0 = project([sweepX, 0, -5.5]);
   const swP1 = project([sweepX, 0, 5.5]);
-  const swTop = project([sweepX, maxVisualY * 0.8, 0]);
+  const swTop = project([sweepX, maxVisualY * 1.02, 0]);
 
   if (swP0 && swP1) {
     ctx.save();

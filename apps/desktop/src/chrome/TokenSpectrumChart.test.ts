@@ -96,3 +96,15 @@ test("3D perspective projection projects center point accurately", async () => {
   assert.ok(Math.abs(pt[0] - 200) < 0.1);
   assert.ok(Math.abs(pt[1] - 200) < 0.1);
 });
+
+test("computeContourScanProgress synchronizes scanning sweep across [0, 1)", async () => {
+  const { computeContourScanProgress, CONTOUR_SCAN_SPEED } = await import("./tokenSpectrumMath.ts");
+  assert.equal(CONTOUR_SCAN_SPEED, 0.22);
+  assert.equal(computeContourScanProgress(0), 0);
+  // Halfway through a sweep cycle: elapsed = 0.5 / 0.22
+  const halfCycleElapsed = 0.5 / CONTOUR_SCAN_SPEED;
+  assert.ok(Math.abs(computeContourScanProgress(halfCycleElapsed) - 0.5) < 0.001);
+  // Full cycle wrap around
+  const fullCycleElapsed = 1.0 / CONTOUR_SCAN_SPEED;
+  assert.ok(Math.abs(computeContourScanProgress(fullCycleElapsed)) < 0.001);
+});

@@ -253,6 +253,13 @@ export const Z_LANES: Record<ChannelKey, number> = {
 export const X_SPAN = 22.0;
 export const X_MIN = -11.0;
 export const MAX_VISUAL_Y = 6.2;
+export const CONTOUR_SCAN_SPEED = 0.22;
+
+/** Computes synchronized progress [0, 1) across the time axis for 3D contour scanning */
+export function computeContourScanProgress(elapsed: number, speed: number = CONTOUR_SCAN_SPEED): number {
+  const p = (elapsed * speed) % 1.0;
+  return p < 0 ? p + 1.0 : p;
+}
 
 export function getCameraProjector(
   w: number,
