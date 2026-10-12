@@ -230,7 +230,13 @@ pub fn compute_stats(
 
     if !turn_durations.is_empty() {
         stats.avg_turn_duration_ms = stats.total_turn_duration_ms / turn_durations.len() as u64;
+    } else if stats.user_prompts > 0 {
+        stats.turn_count = stats.user_prompts;
+        stats.total_turn_duration_ms = (end_t - start_t).max(0) as u64;
+        stats.avg_turn_duration_ms = stats.total_turn_duration_ms;
+        stats.max_turn_duration_ms = stats.total_turn_duration_ms;
     }
+    stats.turn_count = stats.turn_count.max(stats.user_prompts);
 
     let mut tools: Vec<ToolStat> = tool_map
         .into_iter()

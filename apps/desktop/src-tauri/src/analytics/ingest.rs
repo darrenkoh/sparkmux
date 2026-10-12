@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -93,6 +93,21 @@ pub struct Cursor {
     pub lines_removed: u64,
     #[serde(default)]
     pub pending_reasoning_tokens: u64,
+    #[serde(default)]
+    pub pending_output_tokens: u64,
+    /// Grok `updates.jsonl` bytes consumed.
+    #[serde(default)]
+    pub updates_offset: u64,
+    #[serde(default)]
+    pub last_stream_ms: i64,
+    #[serde(default)]
+    pub last_stream_tokens: u64,
+    #[serde(default)]
+    pub waiting_ts: i64,
+    #[serde(default)]
+    pub ttft_samples: u64,
+    #[serde(default)]
+    pub ttft_sum_ms: u64,
 }
 
 /// First 8 characters of the Grok session directory or the Claude file stem.
@@ -179,6 +194,10 @@ fn str_of<'a>(obj: &'a Map<String, Value>, key: &str) -> &'a str {
 
 fn u64_of(obj: &Map<String, Value>, key: &str) -> u64 {
     obj.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn i64_of(obj: &Map<String, Value>, key: &str) -> Option<i64> {
+    obj.get(key).and_then(Value::as_i64)
 }
 
 fn mtime_ms(path: &Path) -> u64 {
@@ -302,7 +321,12 @@ fn get_args_value<'a>(val: &'a Value, buf: &'a mut Option<Value>) -> &'a Value {
 fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
     let name_lower = tool_name.to_ascii_lowercase();
     match name_lower.as_str() {
-        "replace_file_content" | "edit" | "edit_file" | "str_replace_editor" | "str_replace" => {
+        "replace_file_content"
+        | "edit"
+        | "edit_file"
+        | "str_replace_editor"
+        | "str_replace"
+        | "search_replace" => {
             let old_str = str_of_any(
                 args,
                 &[
@@ -368,6 +392,37 @@ fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
 
 fn ingest_grok(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
     let mut out = Vec::new();
+
+    // Default Grok context window if not already set by signals.json
+    if cur.ctx_window == 0 {
+        cur.ctx_window = 256_000;
+    }
+
+    // Backfill tool code deltas if cursor has read chat history but lines were not tracked
+    if cur.lines_added == 0 && cur.lines_removed == 0 && cur.offset > 0 {
+        if let Ok(file) = File::open(path) {
+            let reader = BufReader::new(file.take(cur.offset));
+            for line in reader.lines().map_while(Result::ok) {
+                if let Some(obj) = parse_obj(line.as_bytes()) {
+                    if str_of(&obj, "type") == "assistant" {
+                        if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
+                            for call in calls {
+                                let name = call.get("name").and_then(Value::as_str).unwrap_or("");
+                                let args = call
+                                    .get("arguments")
+                                    .or_else(|| call.get("args"))
+                                    .unwrap_or(&Value::Null);
+                                let mut args_buf = None;
+                                let parsed_args = get_args_value(args, &mut args_buf);
+                                track_tool_code_delta(name, parsed_args, cur);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(events) = sibling(path, "events.jsonl") {
         if let Some((lines, next)) = read_new_lines(&events, cur.ev_offset, MAX_READ) {
             cur.ev_offset = next;
@@ -378,7 +433,9 @@ fn ingest_grok(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
             }
         }
     }
-    if let Some(usage) = sibling(path, "usage.json") {
+    if let Some(updates) = sibling(path, "updates.jsonl") {
+        grok_updates(&updates, cur, now, &mut out);
+    } else if let Some(usage) = sibling(path, "usage.json") {
         grok_usage(&usage, cur, now, &mut out);
     }
     if let Some(signals) = sibling(path, "signals.json") {
@@ -406,6 +463,10 @@ fn grok_event(obj: &Map<String, Value>, cur: &mut Cursor, out: &mut Vec<Event>) 
         "turn_started" => {
             cur.turn_start = ts;
             push_queue(&mut cur.turn_ts, &mut cur.turns_ev, cur.turns_chat, ts);
+            let model = str_of(obj, "model_id");
+            if !model.is_empty() && cur.model.is_empty() {
+                cur.model = model.to_string();
+            }
         }
         "turn_ended" => {
             let mut ev = Event::new(ts, event::TURN);
@@ -417,6 +478,20 @@ fn grok_event(obj: &Map<String, Value>, cur: &mut Cursor, out: &mut Vec<Event>) 
             ev.a = outcome.to_string();
             cur.turn_start = 0;
             out.push(ev);
+        }
+        "phase_changed" => {
+            if str_of(obj, "phase") == "waiting_for_model" {
+                cur.waiting_ts = ts;
+            }
+        }
+        "first_token" => {
+            if cur.waiting_ts > 0 && ts >= cur.waiting_ts {
+                let diff = (ts - cur.waiting_ts) as u64;
+                cur.ttft_sum_ms += diff;
+                cur.ttft_samples += 1;
+                cur.ttft_ms = cur.ttft_sum_ms / cur.ttft_samples;
+                cur.waiting_ts = 0;
+            }
         }
         "tool_started" => {
             push_queue(&mut cur.tool_ts, &mut cur.tools_ev, cur.tools_chat, ts);
@@ -430,6 +505,109 @@ fn grok_event(obj: &Map<String, Value>, cur: &mut Cursor, out: &mut Vec<Event>) 
             out.push(ev);
         }
         _ => {}
+    }
+}
+
+fn grok_updates(path: &Path, cur: &mut Cursor, _now: i64, out: &mut Vec<Event>) {
+    let Some((lines, next)) = read_new_lines(path, cur.updates_offset, MAX_READ) else {
+        return;
+    };
+    cur.updates_offset = next;
+    for line in lines {
+        let Some(obj) = parse_obj(&line) else {
+            continue;
+        };
+        let params = match obj.get("params").and_then(Value::as_object) {
+            Some(p) => p,
+            None => continue,
+        };
+        let meta = match params.get("_meta").and_then(Value::as_object) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        let total_tokens = u64_of(meta, "totalTokens");
+        if total_tokens > 0 {
+            cur.ctx_used = cur.ctx_used.max(total_tokens);
+            if cur.ctx_window == 0 {
+                cur.ctx_window = 256_000;
+            }
+        }
+
+        if cur.model.is_empty() {
+            let model_id = str_of(meta, "modelId");
+            if !model_id.is_empty() {
+                cur.model = model_id.to_string();
+            } else if let Some(u_meta) = params
+                .get("update")
+                .and_then(|u| u.get("_meta"))
+                .and_then(Value::as_object)
+            {
+                let m = str_of(u_meta, "modelId");
+                if !m.is_empty() {
+                    cur.model = m.to_string();
+                }
+            }
+        }
+
+        let stream_start_ms = i64_of(meta, "streamStartMs");
+        if let Some(ss) = stream_start_ms {
+            if ss > 0 && ss != cur.last_stream_ms && total_tokens > 0 {
+                let cached = cur.last_stream_tokens.min(total_tokens);
+                let non_cached = total_tokens.saturating_sub(cached);
+                let reasoning = cur.pending_reasoning_tokens;
+                let output = cur.pending_output_tokens;
+                cur.pending_reasoning_tokens = 0;
+                cur.pending_output_tokens = 0;
+
+                let mut ev = Event::new(ss, event::USAGE);
+                ev.ti = non_cached;
+                ev.tc = cached;
+                ev.tw = 0;
+                ev.tr = reasoning;
+                ev.to = output;
+                ev.n = cur.model.clone();
+                ev.c = 1;
+
+                cur.last_stream_ms = ss;
+                cur.last_stream_tokens = total_tokens;
+                out.push(ev);
+            } else if total_tokens > cur.last_stream_tokens {
+                cur.last_stream_tokens = total_tokens;
+            }
+        }
+
+        if let Some(update) = params.get("update").and_then(Value::as_object) {
+            let session_update = str_of(update, "sessionUpdate");
+            if session_update == "agent_message_chunk" || session_update == "agent_thought_chunk" {
+                if let Some(content) = update.get("content").and_then(Value::as_object) {
+                    if let Some(text) = content.get("text").and_then(Value::as_str) {
+                        let est = estimate_tokens(text);
+                        if session_update == "agent_thought_chunk" {
+                            cur.pending_reasoning_tokens += est;
+                            if let Some(last_ev) = out
+                                .last_mut()
+                                .filter(|e| e.k == event::USAGE && e.t == cur.last_stream_ms)
+                            {
+                                last_ev.tr += est;
+                                cur.pending_reasoning_tokens =
+                                    cur.pending_reasoning_tokens.saturating_sub(est);
+                            }
+                        } else {
+                            cur.pending_output_tokens += est;
+                            if let Some(last_ev) = out
+                                .last_mut()
+                                .filter(|e| e.k == event::USAGE && e.t == cur.last_stream_ms)
+                            {
+                                last_ev.to += est;
+                                cur.pending_output_tokens =
+                                    cur.pending_output_tokens.saturating_sub(est);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1235,6 +1413,95 @@ mod tests {
         let tool = next.iter().find(|e| e.k == "tool").unwrap();
         assert_eq!(tool.n, "grep");
         assert_eq!(tool.t, parse_iso_ms("2026-10-10T09:00:05Z").unwrap());
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn grok_live_session_ingests_updates_jsonl_and_tracks_diffs() {
+        let dir = scratch("grok-live").join("01a131cf-session");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-10-12T20:32:54.023Z\",\"type\":\"turn_started\",\"model_id\":\"grok-4.7\"}\n",
+                "{\"ts\":\"2026-10-12T20:32:54.248Z\",\"type\":\"phase_changed\",\"phase\":\"waiting_for_model\"}\n",
+                "{\"ts\":\"2026-10-12T20:32:56.748Z\",\"type\":\"first_token\"}\n",
+                "{\"ts\":\"2026-10-12T20:33:00.000Z\",\"type\":\"tool_started\",\"tool_name\":\"search_replace\"}\n",
+                "{\"ts\":\"2026-10-12T20:33:00.020Z\",\"type\":\"tool_completed\",\"tool_name\":\"search_replace\",\"duration_ms\":20,\"outcome\":\"success\"}\n",
+            ),
+        )
+        .unwrap();
+
+        fs::write(
+            dir.join("updates.jsonl"),
+            concat!(
+                "{\"timestamp\":1791837175,\"method\":\"session/update\",\"params\":{\"_meta\":{\"streamStartMs\":1791837175061,\"totalTokens\":2031,\"modelId\":\"grok-4.7\"},\"update\":{\"sessionUpdate\":\"agent_thought_chunk\",\"content\":{\"type\":\"text\",\"text\":\"Planning changes...\"}}}}\n",
+                "{\"timestamp\":1791837178,\"method\":\"session/update\",\"params\":{\"_meta\":{\"streamStartMs\":1791837178984,\"totalTokens\":18817,\"modelId\":\"grok-4.7\"},\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"c1\"}}}\n",
+                "{\"timestamp\":1791837180,\"method\":\"session/update\",\"params\":{\"_meta\":{\"streamStartMs\":1791837178984,\"totalTokens\":28765,\"modelId\":\"grok-4.7\"},\"update\":{\"sessionUpdate\":\"tool_call_update\",\"status\":\"completed\"}}}\n",
+            ),
+        )
+        .unwrap();
+
+        let chat = dir.join("chat_history.jsonl");
+        fs::write(
+            &chat,
+            concat!(
+                "{\"type\":\"user\",\"content\":\"Refactor the layout\"}\n",
+                "{\"type\":\"assistant\",\"content\":\"Applying edit\",\"tool_calls\":[{\"id\":\"c1\",\"name\":\"search_replace\",\"arguments\":{\"old_string\":\"line 1\\nline 2\",\"new_string\":\"line 1\\nline 2\\nline 3\\nline 4\"}}]}\n",
+                "{\"type\":\"tool_result\",\"tool_call_id\":\"c1\",\"content\":\"File updated\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let mut cur = Cursor::default();
+        let events = ingest(CliKind::Grok, &chat, &mut cur, 1791837200000);
+
+        assert_eq!(cur.model, "grok-4.7");
+        assert_eq!(cur.ctx_used, 28765);
+        assert_eq!(cur.ctx_window, 256000);
+        assert_eq!(cur.ttft_ms, 2500); // 20:32:56.748 - 20:32:54.248 = 2500ms
+        assert_eq!(cur.lines_removed, 2);
+        assert_eq!(cur.lines_added, 4);
+
+        let usage_events: Vec<_> = events.iter().filter(|e| e.k == "usage").collect();
+        assert_eq!(usage_events.len(), 2);
+        // First stream: 2031 total, 0 cached, non-cached 2031
+        assert_eq!(usage_events[0].ti, 2031);
+        assert_eq!(usage_events[0].tc, 0);
+        assert!(usage_events[0].tr > 0); // reasoned "Planning changes..."
+                                         // Second stream: 18817 total, 2031 cached, non-cached 16786
+        assert_eq!(usage_events[1].ti, 16786);
+        assert_eq!(usage_events[1].tc, 2031);
+
+        // Stats computation should populate Sections 04 & 05
+        let stats = crate::analytics::stats::compute_stats(
+            &events,
+            cur.ctx_used,
+            cur.ctx_window,
+            cur.ttft_ms,
+            cur.lines_added,
+            cur.lines_removed,
+            &cur.model,
+        );
+
+        assert_eq!(stats.context_tokens_used, 28765);
+        assert_eq!(stats.context_window_tokens, 256000);
+        assert_eq!(stats.ttft_ms, 2500);
+        assert_eq!(stats.lines_added, 4);
+        assert_eq!(stats.lines_removed, 2);
+        assert_eq!(stats.total_cache_read_tokens, 2031);
+        assert_eq!(stats.total_input_tokens, 2031 + 16786);
+        assert!(stats.turn_count >= 1);
+        assert!(stats.avg_turn_duration_ms > 0);
+        assert_eq!(stats.models.len(), 1);
+        assert_eq!(stats.models[0].model, "grok-4.7");
+
+        let total_bucket_tokens: u64 = stats.timeline.iter().map(|b| b.tokens).sum();
+        assert!(
+            total_bucket_tokens > 0,
+            "Timeline must contain non-zero token activity"
+        );
+
         let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 
