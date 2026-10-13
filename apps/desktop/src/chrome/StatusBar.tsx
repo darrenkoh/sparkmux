@@ -119,7 +119,7 @@ export default function StatusBar({
           title="Show files changing in this repo"
           onClick={onGraph}
         >
-          ⬡ Graph
+          ⬡ Gits
         </button>
       )}
       {onAsk && (

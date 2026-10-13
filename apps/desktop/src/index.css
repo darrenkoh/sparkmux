@@ -3204,4 +3204,42 @@ code {
   }
 }
 
+.graph-mode-group {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(45, 212, 191, 0.35);
+  background: rgba(6, 12, 18, 0.85);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.graph-mode-btn {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  color: rgba(226, 232, 240, 0.55);
+  background: transparent;
+  border: none;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.graph-mode-btn:not(:last-child) {
+  border-right: 1px solid rgba(45, 212, 191, 0.2);
+}
+
+.graph-mode-btn:hover {
+  color: #fff;
+  background: rgba(45, 212, 191, 0.12);
+}
+
+.graph-mode-btn.on {
+  color: #fff;
+  background: rgba(45, 212, 191, 0.25);
+  box-shadow: inset 0 0 8px rgba(45, 212, 191, 0.3);
+  font-weight: 600;
+}
+
 

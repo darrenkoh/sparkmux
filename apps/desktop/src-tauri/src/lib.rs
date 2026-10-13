@@ -60,6 +60,7 @@ pub fn run() {
             llm_usage::llm_usage,
             artifacts::pane_artifacts,
             change_graph::change_graph,
+            change_graph::file_diff,
             analytics::tab_analytics,
             analytics::set_analytics_enabled,
             analytics::clear_analytics_data,

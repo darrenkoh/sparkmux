@@ -97,6 +97,13 @@ enum GitTop {
     Unavailable(String),
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FileDiff {
+    pub path: String,
+    pub diff: String,
+    pub is_binary: bool,
+}
+
 #[tauri::command]
 pub async fn change_graph(
     command: String,
@@ -110,6 +117,109 @@ pub async fn change_graph(
     })
     .await
     .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn file_diff(repo_id: String, path: String, cwd: String) -> Result<FileDiff, String> {
+    tokio::task::spawn_blocking(move || fetch_file_diff(&repo_id, &path, &cwd))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+fn fetch_file_diff(repo_id: &str, path: &str, cwd: &str) -> Result<FileDiff, String> {
+    let clean_path = path
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .replace('\\', "/");
+    if clean_path.is_empty() || clean_path.contains('\0') {
+        return Err("invalid path".into());
+    }
+    let repo_id_clean = repo_id.trim().trim_matches(['"', '\'', '`']);
+    let repo_dir = if !repo_id_clean.is_empty() && Path::new(repo_id_clean).is_dir() {
+        PathBuf::from(repo_id_clean)
+    } else if !cwd.is_empty() && Path::new(cwd).is_dir() {
+        match git_toplevel(Path::new(cwd)) {
+            GitTop::Root(root) => root,
+            _ => PathBuf::from(cwd),
+        }
+    } else {
+        return Err("invalid repository directory".into());
+    };
+
+    let target_path = repo_dir.join(&clean_path);
+    if let Ok(meta) = target_path.metadata() {
+        if meta.len() > 1024 * 1024 {
+            return Ok(FileDiff {
+                path: clean_path,
+                diff: "Diff suppressed: File size exceeds 1MB.".into(),
+                is_binary: true,
+            });
+        }
+    }
+
+    match git(
+        &repo_dir,
+        &["diff", "--no-ext-diff", "-U3", "HEAD", "--", &clean_path],
+    ) {
+        Ok(bytes) => {
+            if bytes.contains(&0) {
+                return Ok(FileDiff {
+                    path: clean_path,
+                    diff: "Binary file diff cannot be displayed.".into(),
+                    is_binary: true,
+                });
+            }
+            let diff_text = String::from_utf8_lossy(&bytes).into_owned();
+            if !diff_text.trim().is_empty() {
+                return Ok(FileDiff {
+                    path: clean_path,
+                    diff: diff_text,
+                    is_binary: false,
+                });
+            }
+        }
+        Err(e) => {
+            tracing::debug!("git diff failed: {e}");
+        }
+    }
+
+    if target_path.is_file() {
+        match std::fs::read(&target_path) {
+            Ok(bytes) => {
+                if bytes.contains(&0) {
+                    return Ok(FileDiff {
+                        path: clean_path,
+                        diff: "Binary file content cannot be displayed.".into(),
+                        is_binary: true,
+                    });
+                }
+                let content = String::from_utf8_lossy(&bytes);
+                let mut pseudo = format!(
+                    "--- /dev/null\n+++ b/{clean_path}\n@@ -0,0 +1,{} @@\n",
+                    content.lines().count()
+                );
+                for line in content.lines() {
+                    pseudo.push('+');
+                    pseudo.push_str(line);
+                    pseudo.push('\n');
+                }
+                return Ok(FileDiff {
+                    path: clean_path,
+                    diff: pseudo,
+                    is_binary: false,
+                });
+            }
+            Err(err) => {
+                return Err(format!("failed to read file: {err}"));
+            }
+        }
+    }
+
+    Ok(FileDiff {
+        path: clean_path,
+        diff: "No differences found between HEAD and working copy.".into(),
+        is_binary: false,
+    })
 }
 
 fn session_edits(command: &str, cwd: &str, title: &str, pid: u32) -> Vec<AgentEdit> {
@@ -405,7 +515,7 @@ struct LinkMap<'a> {
 }
 
 fn place_edit(cwd: &Path, primary: Option<&Path>, edit: &AgentEdit) -> Option<PlacedEdit> {
-    let raw = edit.path.trim();
+    let raw = edit.path.trim().trim_matches(['"', '\'', '`']);
     if raw.is_empty() || raw.len() > 1024 || raw.contains('\0') || raw.contains('\n') {
         return None;
     }
@@ -771,7 +881,13 @@ fn git_args_allowed(args: &[&str]) -> bool {
         ["rev-parse", "--show-toplevel"]
             | ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
             | ["diff", "--no-ext-diff", "--numstat", "-z", "HEAD"]
-    )
+    ) || (args.len() == 6
+        && args[0] == "diff"
+        && args[1] == "--no-ext-diff"
+        && args[2] == "-U3"
+        && args[3] == "HEAD"
+        && args[4] == "--"
+        && !args[5].starts_with('-'))
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
@@ -1692,7 +1808,7 @@ fn path_fields(args: &Value) -> Vec<String> {
         "targetFile",
     ] {
         if let Some(value) = map.get(key).and_then(Value::as_str) {
-            let value = value.trim();
+            let value = value.trim().trim_matches(['"', '\'', '`']);
             if !value.is_empty() {
                 return vec![value.to_string()];
             }
@@ -1903,6 +2019,22 @@ mod tests {
             "--numstat",
             "-z",
             "HEAD"
+        ]));
+        assert!(git_args_allowed(&[
+            "diff",
+            "--no-ext-diff",
+            "-U3",
+            "HEAD",
+            "--",
+            "src/lib.rs"
+        ]));
+        assert!(!git_args_allowed(&[
+            "diff",
+            "--no-ext-diff",
+            "-U3",
+            "HEAD",
+            "--",
+            "-something"
         ]));
         assert!(!git_args_allowed(&["add", "."]));
         assert!(!git_args_allowed(&["commit", "-m", "x"]));

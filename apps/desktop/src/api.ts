@@ -175,6 +175,12 @@ export interface ChangeGraphResponse {
   error: string | null;
 }
 
+export interface FileDiffResponse {
+  path: string;
+  diff: string;
+  is_binary: boolean;
+}
+
 export function changeGraph(
   command: string,
   cwd: string,
@@ -182,6 +188,14 @@ export function changeGraph(
   pid: number,
 ): Promise<ChangeGraphResponse> {
   return invoke("change_graph", { command, cwd, title, pid });
+}
+
+export function fileDiff(
+  repoId: string,
+  path: string,
+  cwd: string,
+): Promise<FileDiffResponse> {
+  return invoke("file_diff", { repoId, path, cwd });
 }
 
 export interface ActivityPoint {

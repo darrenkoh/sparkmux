@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.28
+
+### Improvements
+
+- The Graph button is now **Gits**. In the Gits screen, select a card and choose View Git Changes, or press `diff` beside a connected file, to open a diff view for that file with line numbers and colored additions and deletions. `Esc` closes it.
+
+### Fixes
+
+- Fixed the same file appearing twice in the Gits screen (e.g. `lib.rs` and `"lib.rs"`) when an agent transcript stored the path wrapped in quotes.
+
 ## 0.1.27
 
 ### Fixes

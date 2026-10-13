@@ -171,7 +171,7 @@ export default function ArtifactPanel({
               aria-label="Open changed files graph"
               title="Open changed files graph"
             >
-              ⬡ Graph
+              ⬡ Gits
             </button>
           )}
           <button type="button" onClick={onCollapse} aria-label="Collapse logs">
