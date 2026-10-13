@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
+import {
+  sessionSpan,
+  viewWindow,
+  windowStartFromFraction,
+  windowTrack,
+  type TimeWindow,
+} from "./terrainWindow";
 
 interface TerrainViewportProps {
   timeline: ActivityPoint[];
@@ -195,6 +202,19 @@ export type ScanSpeed = "0.25x" | "0.5x" | "1x" | "2x" | "paused";
 const STORAGE_KEY_BASE_SHAPE = "sparkmux_area_map_base_shape";
 const STORAGE_KEY_SCAN_SPEED = "sparkmux_area_map_scan_speed";
 const STORAGE_KEY_SHOW_TRACE = "sparkmux_area_map_show_trace";
+
+/** Elapsed session time: `12:05`, or `1:12:05` once an hour has passed. */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const remain = minutes % 60;
+    return `${hours}:${remain.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  }
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
 
 function getInitialBaseShape(): BaseShape {
   try {
@@ -409,6 +429,8 @@ interface TerrainMeta {
   }>;
   startTime: number;
   endTime: number;
+  sessionStart: number;
+  live: boolean;
   dataPointCount: number;
 }
 
@@ -505,6 +527,19 @@ export default function TerrainViewport({
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
 
+  // The map shows at most 30 minutes. followLive keeps that slice on the latest
+  // events; dragging parks it so a 2-hour session can be inspected earlier.
+  const [followLive, setFollowLive] = useState(true);
+  const [windowStart, setWindowStart] = useState(0);
+  const windowTrackRef = useRef<HTMLDivElement>(null);
+  const span = sessionSpan(timeline ?? [], stats);
+  const liveStart = windowStartFromFraction(span.start, span.end, 1);
+  const view = viewWindow(span.start, span.end, followLive ? liveStart : windowStart);
+  const viewRef = useRef<TimeWindow>(view);
+  viewRef.current = view;
+  const liveRef = useRef(followLive);
+  liveRef.current = followLive && view.end >= view.spanEnd - 1500;
+
   const terrainMetaRef = useRef<TerrainMeta>({
     maxAltitude: 4.0,
     maxMetric: 1,
@@ -513,6 +548,8 @@ export default function TerrainViewport({
     channelWaypoints: [],
     startTime: 0,
     endTime: 0,
+    sessionStart: 0,
+    live: true,
     dataPointCount: 0,
   });
 
@@ -578,17 +615,40 @@ export default function TerrainViewport({
 
     const currentTimeline = timelineRef.current;
     const currentStats = statsRef.current;
+    const view = viewRef.current;
+    const hasTimeline = !!currentTimeline && currentTimeline.length > 0;
+    const winStart = hasTimeline ? view.start : 0;
+    const winEnd = hasTimeline ? view.end : 0;
+    const sessionStart = hasTimeline ? view.spanStart : 0;
 
-    // Normalize timeline points or generate structured history
-    const dataPoints: Array<{ tNorm: number; user: number; think: number; reply: number; tool: number }> = [];
-    if (currentTimeline && currentTimeline.length > 0) {
-      currentTimeline.forEach((pt, i) => {
+    // Columns are placed by their real timestamp inside the visible window.
+    // A quiet minute stays flat instead of becoming an idle node.
+    const dataPoints: Array<{
+      tNorm: number;
+      user: number;
+      think: number;
+      reply: number;
+      tool: number;
+      timestamp?: number;
+      topKind?: string;
+      topLabel?: string;
+    }> = [];
+    if (hasTimeline && currentTimeline) {
+      const visible = currentTimeline.filter(
+        (pt) => pt.timestamp >= winStart && pt.timestamp <= winEnd && (pt.user_count > 0 || pt.think_count > 0 || pt.reply_count > 0 || pt.tool_count > 0),
+      );
+      const spanMs = winEnd - winStart;
+      visible.forEach((pt) => {
+        const tNorm = spanMs <= 0 ? 0 : ((pt.timestamp - winStart) / spanMs) * 2 - 1;
         dataPoints.push({
-          tNorm: (i / Math.max(1, currentTimeline.length - 1)) * 2 - 1, // -1 to +1
+          tNorm,
           user: pt.user_count,
           think: pt.think_count,
           reply: pt.reply_count,
           tool: pt.tool_count,
+          timestamp: pt.timestamp,
+          topKind: pt.top_event_kind,
+          topLabel: pt.top_event_label,
         });
       });
     } else {
@@ -804,26 +864,11 @@ export default function TerrainViewport({
     // 4. Milestone Waypoints and Catmull-Rom Spline Trail
     const keyMilestones: MilestoneInfo[] = [];
 
-    const formatElapsed = (ms: number): string => {
-      const s = Math.max(0, Math.floor(ms / 1000));
-      const m = Math.floor(s / 60);
-      const remS = s % 60;
-      return `${m}:${remS.toString().padStart(2, "0")}`;
-    };
-
-    const startTime = currentTimeline && currentTimeline.length > 0
-      ? currentTimeline[0].timestamp
-      : 0;
-    const endTime = currentTimeline && currentTimeline.length > 0
-      ? currentTimeline[currentTimeline.length - 1].timestamp
-      : 0;
-
     dataPoints.forEach((pt, i) => {
-      const origPt = currentTimeline && currentTimeline[i];
       let timeStr = `T+${i + 1}`;
-      if (origPt && startTime > 0) {
-        timeStr = `+${formatElapsed(origPt.timestamp - startTime)}`;
-      } else if (startTime === 0 && currentStats?.total_events) {
+      if (pt.timestamp != null && sessionStart > 0) {
+        timeStr = `+${formatElapsed(pt.timestamp - sessionStart)}`;
+      } else if (!hasTimeline && currentStats?.total_events) {
         timeStr = `+${Math.floor(i * 1.5)}m`;
       }
 
@@ -836,17 +881,18 @@ export default function TerrainViewport({
         activeChannels.push({ catIdx: 1, count: pt.think, kindStr: "REASONING", detailStr: `${Math.round(pt.think)} blocks` });
       }
       if (pt.tool > 0) {
-        const toolLabel = (origPt?.top_event_kind === "tool" ? origPt.top_event_label : "") || "RUNTIME";
+        const toolLabel = (pt.topKind === "tool" ? pt.topLabel : "") || "RUNTIME";
         activeChannels.push({ catIdx: 3, count: pt.tool, kindStr: `TOOL: ${toolLabel}`, detailStr: `${Math.round(pt.tool)} calls` });
       }
       if (pt.reply > 0) {
-        const replyLabel = (origPt?.top_event_kind === "reply" ? origPt.top_event_label : "") || "ASSISTANT";
+        const replyLabel = (pt.topKind === "reply" ? pt.topLabel : "") || "ASSISTANT";
         activeChannels.push({ catIdx: 2, count: pt.reply, kindStr: `REPLY: ${replyLabel}`, detailStr: `${Math.round(pt.reply)} replies` });
       }
 
-      // If no events in bucket or fallback, create a single resting point at dominant lane
+      // Synthetic history still gets a resting dot. A real quiet minute stays flat.
       if (activeChannels.length === 0) {
-        const catIdx = origPt?.top_event_kind === "tool" ? 3 : origPt?.top_event_kind === "reply" ? 2 : origPt?.top_event_kind === "think" ? 1 : 0;
+        if (pt.timestamp != null) return;
+        const catIdx = pt.topKind === "tool" ? 3 : pt.topKind === "reply" ? 2 : pt.topKind === "think" ? 1 : 0;
         const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
         const tz = zLanes[catIdx];
         const ty = getAlt(tx, tz) + 0.08;
@@ -974,8 +1020,10 @@ export default function TerrainViewport({
       keyMilestones,
       curvedSlopeTrail,
       channelWaypoints,
-      startTime,
-      endTime,
+      startTime: winStart,
+      endTime: winEnd,
+      sessionStart,
+      live: liveRef.current,
       dataPointCount: dataPoints.length,
     };
   };
@@ -1003,8 +1051,8 @@ export default function TerrainViewport({
     }
   };
 
-  // Trigger geometry update when timeline, stats, or base shape changes
-  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.tool_calls ?? 0}:${baseShape}`;
+  // Rebuild when the visible window moves, not only when the column count changes.
+  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.thinking_blocks ?? 0}:${stats?.assistant_replies ?? 0}:${stats?.tool_calls ?? 0}:${stats?.timeline_end ?? 0}:${Math.round(view.start)}:${Math.round(view.end)}:${baseShape}`;
   useEffect(() => {
     scheduleGeometryUpdate();
   }, [dataSignature]);
@@ -1337,22 +1385,31 @@ export default function TerrainViewport({
       const tStart = project([-tStartX, 0, tStartZ]);
       const tEnd = project([tStartX, 0, tStartZ]);
       if (tStart && tEnd) {
+        const timed = meta.sessionStart > 0 && meta.endTime > meta.startTime;
         hud.fillStyle = "rgba(255, 255, 255, 0.75)";
         hud.textAlign = "left";
-        hud.fillText("◄ CHRONO TIME: 00:00 (START)", tStart[0], tStart[1]);
+        hud.fillText(
+          timed ? `◄ +${formatElapsed(meta.startTime - meta.sessionStart)}` : "◄ CHRONO TIME: 00:00 (START)",
+          tStart[0],
+          tStart[1],
+        );
         hud.textAlign = "right";
-        hud.fillText("LATEST EVENT (NOW) ►", tEnd[0], tEnd[1]);
+        hud.fillText(
+          timed
+            ? `+${formatElapsed(meta.endTime - meta.sessionStart)}${meta.live ? " NOW" : ""} ►`
+            : "LATEST EVENT (NOW) ►",
+          tEnd[0],
+          tEnd[1],
+        );
       }
 
       // Show intermediate timeline ticks along the time axis
       for (let f = 0.25; f <= 0.75; f += 0.25) {
         const xTick = -tStartX + f * (tStartX * 2);
         const ptTick = project([xTick, 0, tStartZ]);
-        if (ptTick && meta.endTime > meta.startTime && meta.startTime > 0) {
+        if (ptTick && meta.endTime > meta.startTime && meta.sessionStart > 0) {
           const tickMs = meta.startTime + f * (meta.endTime - meta.startTime);
-          const s = Math.floor((tickMs - meta.startTime) / 1000);
-          const m = Math.floor(s / 60);
-          const str = `+${m}:${(s % 60).toString().padStart(2, "0")}`;
+          const str = `+${formatElapsed(tickMs - meta.sessionStart)}`;
           hud.fillStyle = "rgba(255, 255, 255, 0.4)";
           hud.textAlign = "center";
           hud.fillText(str, ptTick[0], ptTick[1]);
@@ -1721,6 +1778,96 @@ export default function TerrainViewport({
 
       {/* Chronological Timeline Playback Scrubber */}
       <div className="scifi-viewport-bottombar">
+        {view.slidable && (
+          <div className="scifi-window-row">
+            <span className="scifi-scrubber-time">+{formatElapsed(view.start - view.spanStart)}</span>
+            <div
+              ref={windowTrackRef}
+              className="scifi-window-track"
+              role="slider"
+              aria-label="Area map time window"
+              aria-valuemin={0}
+              aria-valuemax={Math.max(0, view.spanEnd - view.spanStart)}
+              aria-valuenow={Math.max(0, view.start - view.spanStart)}
+              aria-valuetext={`+${formatElapsed(view.start - view.spanStart)} to +${formatElapsed(view.end - view.spanStart)}`}
+              tabIndex={0}
+              title="Drag the window across the session. A 2 hour session can show any 30 minutes. Arrow keys move one minute."
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                const step = (event.shiftKey ? 5 : 1) * 60_000;
+                const delta = event.key === "ArrowLeft" ? -step : step;
+                const next = view.start + delta;
+                const maxStart = view.spanStart + Math.max(0, view.spanEnd - view.spanStart - (view.end - view.start));
+                setFollowLive(next >= maxStart - 1500);
+                setWindowStart(next);
+              }}
+              onPointerDown={(event) => {
+                if (event.target !== event.currentTarget) return;
+                const rect = event.currentTarget.getBoundingClientRect();
+                const fraction = (event.clientX - rect.left) / Math.max(1, rect.width);
+                const spanMs = view.spanEnd - view.spanStart;
+                const width = view.end - view.start;
+                const center = view.spanStart + fraction * spanMs;
+                const next = center - width / 2;
+                const maxStart = view.spanStart + Math.max(0, spanMs - width);
+                setFollowLive(next >= maxStart - 1500);
+                setWindowStart(next);
+              }}
+            >
+              <div
+                className="scifi-window-thumb"
+                style={{ left: `${windowTrack(view).leftPct}%`, width: `${windowTrack(view).widthPct}%` }}
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const track = windowTrackRef.current;
+                  if (!track) return;
+                  const rect = track.getBoundingClientRect();
+                  const originX = event.clientX;
+                  const originStart = view.start;
+                  const spanMs = Math.max(1, view.spanEnd - view.spanStart);
+                  const maxStart = view.spanStart + Math.max(0, spanMs - (view.end - view.start));
+                  let pending = originStart;
+                  let raf = 0;
+                  setWindowStart(originStart);
+                  setFollowLive(false);
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  const onMove = (ev: PointerEvent) => {
+                    pending = originStart + ((ev.clientX - originX) / rect.width) * spanMs;
+                    if (raf) return;
+                    raf = window.requestAnimationFrame(() => {
+                      raf = 0;
+                      setWindowStart(pending);
+                    });
+                  };
+                  const onUp = () => {
+                    if (raf) window.cancelAnimationFrame(raf);
+                    setWindowStart(pending);
+                    setFollowLive(pending >= maxStart - 1500);
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                  };
+                  window.addEventListener("pointermove", onMove);
+                  window.addEventListener("pointerup", onUp);
+                }}
+              />
+            </div>
+            <span className="scifi-scrubber-time">+{formatElapsed(view.end - view.spanStart)}</span>
+            <button
+              type="button"
+              className={`scifi-scrubber-play-btn ${followLive ? "on" : ""}`}
+              onClick={() => {
+                setFollowLive(true);
+                setWindowStart(liveStart);
+              }}
+              title={followLive ? "Window is following the latest 30 minutes" : "Jump the window back to the latest 30 minutes"}
+            >
+              {followLive ? "LIVE" : "JUMP LIVE"}
+            </button>
+          </div>
+        )}
+        <div className="scifi-scrubber-row">
         <button
           type="button"
           className="scifi-scrubber-play-btn"
@@ -1762,6 +1909,7 @@ export default function TerrainViewport({
           <span className="scifi-scrubber-time" style={{ color: "#ff9a3c" }}>
             {scrubProgress >= 0.98 ? "NOW (LATEST)" : `${Math.round(scrubProgress * 100)}%`}
           </span>
+        </div>
         </div>
       </div>
 

@@ -281,6 +281,10 @@ export interface TabAnalyticsStats {
   tools: ToolStat[];
   models: ModelStat[];
   timeline: ActivityPoint[];
+  /** First event time. The area-map window slides between this and `timeline_end`. */
+  timeline_start?: number;
+  /** Last event time. */
+  timeline_end?: number;
   recent_events: AnalyticsEvent[];
 }
 

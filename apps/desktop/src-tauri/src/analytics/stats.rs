@@ -79,10 +79,41 @@ pub struct TabAnalyticsStats {
     pub active_model: String,
     pub tools: Vec<ToolStat>,
     pub models: Vec<ModelStat>,
-    /// Activity timeline buckets (10 to 30 buckets)
+    /// One column per time bucket across the whole session.
+    /// Up to 30 minutes the columns are 15–60 seconds. After that they are
+    /// one minute, and past eight hours they widen so the vector stays
+    /// within [`MAX_BUCKETS`]. The area map shows a draggable 30-minute slice.
     pub timeline: Vec<ActivityPoint>,
+    /// Earliest event timestamp. The map window slides from here.
+    #[serde(default)]
+    pub timeline_start: i64,
+    /// Latest event timestamp.
+    #[serde(default)]
+    pub timeline_end: i64,
     /// Recent log entries for HUD stream
     pub recent_events: Vec<Event>,
+}
+
+/// Shortest column. A two-minute session still grows a new node every 15 seconds.
+const MIN_BUCKET_MS: i64 = 15_000;
+const MINUTE_MS: i64 = 60_000;
+/// Sessions this long or shorter are drawn in full. Longer ones use minute columns.
+const DETAIL_SPAN_MS: i64 = 30 * MINUTE_MS;
+/// Eight hours of one-minute columns. Longer sessions widen the column.
+const MAX_BUCKETS: usize = 480;
+
+/// `(start, end, bucket_ms, count)` covering every event, including the last one.
+fn timeline_grid(start_t: i64, end_t: i64) -> (i64, i64, i64, usize) {
+    let start = start_t.min(end_t);
+    let end = start_t.max(end_t);
+    let span = (end - start).max(1);
+    let bucket_ms = if span <= DETAIL_SPAN_MS {
+        (span / 40).clamp(MIN_BUCKET_MS, MINUTE_MS)
+    } else {
+        (span / (MAX_BUCKETS as i64 - 1)).max(MINUTE_MS)
+    };
+    let count = ((span / bucket_ms) as usize + 1).clamp(1, MAX_BUCKETS);
+    (start, end, bucket_ms, count)
 }
 
 pub fn compute_stats(
@@ -119,9 +150,9 @@ pub fn compute_stats(
     let end_t = events.iter().map(|e| e.t).max().unwrap_or(0);
     let time_span = (end_t - start_t).max(1);
 
-    // Choose bucket size, max 24 buckets
-    let num_buckets = 24;
-    let bucket_ms = (time_span / num_buckets as i64).max(1000);
+    let (start_t, end_t, bucket_ms, num_buckets) = timeline_grid(start_t, end_t);
+    stats.timeline_start = start_t;
+    stats.timeline_end = end_t;
     let mut buckets: Vec<ActivityPoint> = (0..num_buckets)
         .map(|i| ActivityPoint {
             timestamp: start_t + (i as i64 * bucket_ms),
@@ -333,5 +364,51 @@ mod tests {
         let total_bucket_output: u64 = stats.timeline.iter().map(|b| b.output_tokens).sum();
         assert_eq!(total_bucket_input, 500);
         assert_eq!(total_bucket_output, 100);
+    }
+
+    #[test]
+    fn two_hour_session_keeps_a_column_per_minute() {
+        let start = 1_700_000_000_000;
+        let mut events = Vec::new();
+        for minute in [0_i64, 30, 90, 119] {
+            let mut ev = Event::new(start + minute * 60_000, USER);
+            ev.b = "prompt".into();
+            events.push(ev);
+        }
+        let stats = compute_stats(&events, 0, 0, 0, 0, 0, "");
+
+        assert!(stats.timeline.len() > 24);
+        assert_eq!(stats.timeline_start, start);
+        assert_eq!(stats.timeline_end, start + 119 * 60_000);
+        let occupied: Vec<_> = stats
+            .timeline
+            .iter()
+            .filter(|bucket| bucket.user_count > 0)
+            .collect();
+        assert_eq!(occupied.len(), 4);
+        assert!(occupied[1].timestamp - occupied[0].timestamp >= 30 * 60_000);
+        assert!(occupied[3].timestamp >= start + 119 * 60_000);
+        assert!(stats.timeline.last().unwrap().timestamp >= start + 119 * 60_000);
+    }
+
+    #[test]
+    fn short_session_grows_a_column_faster_than_once_a_minute() {
+        let start = 1_700_000_000_000;
+        let mut events = Vec::new();
+        for sec in [0_i64, 20, 40, 80] {
+            let mut ev = Event::new(start + sec * 1000, TOOL);
+            ev.n = "read".into();
+            events.push(ev);
+        }
+        let stats = compute_stats(&events, 0, 0, 0, 0, 0, "");
+        let occupied = stats
+            .timeline
+            .iter()
+            .filter(|bucket| bucket.tool_count > 0)
+            .count();
+        assert!(
+            occupied >= 3,
+            "calls 20 seconds apart should not collapse into one column"
+        );
     }
 }
