@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.29
+
+### Fixes
+
+- Fixed lines added and removed count discrepancy in the Gits screen when viewing committed files (aligned card metrics and file inspector with git commit numstat).
+- Added additions and deletions badge (`+added` / `-removed`) in the Git Changes diff viewer header.
+- Improved diff viewer responsiveness and added commit details banner for clean working tree files.
+
 ## 0.1.28
 
 ### Improvements

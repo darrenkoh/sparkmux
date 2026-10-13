@@ -109,6 +109,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
       return;
     }
     let cancelled = false;
+    setDiffData(null);
     setDiffLoading(true);
     setDiffError(null);
     fileDiff(diffTarget.repoId, diffTarget.path, cwd)
@@ -1384,7 +1385,21 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                     </span>
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    {!diffLoading && !diffError && diffData && (() => {
+                      let adds = 0;
+                      let rems = 0;
+                      for (const l of diffData.diff.split("\n")) {
+                        if (l.startsWith("+") && !l.startsWith("+++")) adds++;
+                        else if (l.startsWith("-") && !l.startsWith("---")) rems++;
+                      }
+                      return (
+                        <div style={{ display: "flex", gap: "6px", fontSize: "10px", fontWeight: "bold" }}>
+                          <span style={{ color: "#2dd4bf" }}>+{adds}</span>
+                          <span style={{ color: "#f87171" }}>-{rems}</span>
+                        </div>
+                      );
+                    })()}
                     <button
                       type="button"
                       onClick={() => setDiffTarget(null)}
@@ -1444,11 +1459,15 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                           const isAdd = line.startsWith("+") && !line.startsWith("+++");
                           const isRem = line.startsWith("-") && !line.startsWith("---");
                           const isHunk = line.startsWith("@@");
+                          const isComment = line.startsWith("#");
                           const isHeader = line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++");
 
                           let bg = "transparent";
                           let color = "rgba(255, 255, 255, 0.75)";
-                          if (isAdd) {
+                          if (isComment) {
+                            bg = "rgba(45, 212, 191, 0.08)";
+                            color = "#5eead4";
+                          } else if (isAdd) {
                             bg = "rgba(45, 212, 191, 0.12)";
                             color = "#34d399";
                           } else if (isRem) {
@@ -1517,7 +1536,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                     color: "rgba(255, 255, 255, 0.4)",
                   }}
                 >
-                  <span>HEAD ↔ WORKING COPY</span>
+                  <span>HEAD ↔ WORKING COPY{diffData ? ` · ${diffData.path}` : ""}</span>
                   <span>PRESS ESC TO CLOSE</span>
                 </div>
               </div>

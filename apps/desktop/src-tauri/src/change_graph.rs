@@ -183,7 +183,13 @@ fn fetch_file_diff(repo_id: &str, path: &str, cwd: &str) -> Result<FileDiff, Str
         }
     }
 
-    if target_path.is_file() {
+    let is_tracked = git(
+        &repo_dir,
+        &["ls-files", "--error-unmatch", "--", &clean_path],
+    )
+    .is_ok();
+
+    if !is_tracked && target_path.is_file() {
         match std::fs::read(&target_path) {
             Ok(bytes) => {
                 if bytes.contains(&0) {
@@ -215,6 +221,46 @@ fn fetch_file_diff(repo_id: &str, path: &str, cwd: &str) -> Result<FileDiff, Str
         }
     }
 
+    if is_tracked {
+        if let Ok(log_bytes) = git(
+            &repo_dir,
+            &[
+                "log",
+                "-n",
+                "1",
+                "--no-ext-diff",
+                "-U3",
+                "-p",
+                "--",
+                &clean_path,
+            ],
+        ) {
+            let log_text = String::from_utf8_lossy(&log_bytes);
+            if let Some(pos) = log_text.find("diff --git") {
+                let diff_portion = &log_text[pos..];
+                if !diff_portion.trim().is_empty() {
+                    let header_info: Vec<&str> = log_text[..pos]
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    let commit_banner = if let (Some(commit), Some(subject)) =
+                        (header_info.first(), header_info.last())
+                    {
+                        format!("# Latest Commit: {commit} ({subject})\n# (No uncommitted working tree differences; showing latest commit changes)\n\n")
+                    } else {
+                        String::new()
+                    };
+                    return Ok(FileDiff {
+                        path: clean_path,
+                        diff: format!("{commit_banner}{diff_portion}"),
+                        is_binary: false,
+                    });
+                }
+            }
+        }
+    }
+
     Ok(FileDiff {
         path: clean_path,
         diff: "No differences found between HEAD and working copy.".into(),
@@ -231,10 +277,14 @@ fn session_edits(command: &str, cwd: &str, title: &str, pid: u32) -> Vec<AgentEd
     let Some(path) = artifacts::select_transcript(kind, cwd, title, &family, &roots) else {
         return Vec::new();
     };
-    let mut edits = edits_from_jsonl(&read_tail(&path, MAX_TRANSCRIPT));
-    if let Some(full) = jailed_sibling(&path, "transcript_full.jsonl") {
-        edits.extend(edits_from_jsonl(&read_tail(&full, MAX_TRANSCRIPT)));
-    }
+    // If transcript_full.jsonl exists, it contains the untruncated entries.
+    // Read transcript_full.jsonl if present, or fallback to transcript.jsonl.
+    // Do not concatenate both as that double-counts the same edits.
+    let edits = if let Some(full) = jailed_sibling(&path, "transcript_full.jsonl") {
+        edits_from_jsonl(&read_tail(&full, MAX_TRANSCRIPT))
+    } else {
+        edits_from_jsonl(&read_tail(&path, MAX_TRANSCRIPT))
+    };
     dedupe_edits(edits)
 }
 
@@ -302,13 +352,23 @@ fn build_change_graph(cwd: &Path, edits: &[AgentEdit]) -> ChangeGraph {
         names
             .entry(placed.root_id.clone())
             .or_insert_with(|| repo_name(&placed.root));
-        let key = (placed.root_id, placed.rel.clone());
+        let key = (placed.root_id.clone(), placed.rel.clone());
+        let (git_added, git_removed) = if let Some(path_str) = placed.root.to_str() {
+            latest_commit_numstat(Path::new(path_str), &placed.rel).unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
         match rows.get_mut(&key) {
             Some(file) => {
                 file.agent_edited = true;
                 if file.lines_added == 0 && file.lines_removed == 0 {
-                    file.lines_added = edit.added;
-                    file.lines_removed = edit.removed;
+                    if git_added > 0 || git_removed > 0 {
+                        file.lines_added = git_added;
+                        file.lines_removed = git_removed;
+                    } else {
+                        file.lines_added = edit.added;
+                        file.lines_removed = edit.removed;
+                    }
                 }
                 if edit.deleted && file.status != "deleted" {
                     file.status = "deleted".to_string();
@@ -320,14 +380,19 @@ fn build_change_graph(cwd: &Path, edits: &[AgentEdit]) -> ChangeGraph {
                     continue;
                 }
                 let status = if edit.deleted { "deleted" } else { "edited" };
+                let (lines_added, lines_removed) = if git_added > 0 || git_removed > 0 {
+                    (git_added, git_removed)
+                } else {
+                    (edit.added, edit.removed)
+                };
                 rows.insert(
                     key,
                     ChangedFile {
                         path: placed.rel,
                         status: status.to_string(),
                         agent_edited: true,
-                        lines_added: edit.added,
-                        lines_removed: edit.removed,
+                        lines_added,
+                        lines_removed,
                     },
                 );
             }
@@ -888,6 +953,52 @@ fn git_args_allowed(args: &[&str]) -> bool {
         && args[3] == "HEAD"
         && args[4] == "--"
         && !args[5].starts_with('-'))
+        || (args.len() == 4
+            && args[0] == "ls-files"
+            && args[1] == "--error-unmatch"
+            && args[2] == "--"
+            && !args[3].starts_with('-'))
+        || (args.len() == 8
+            && args[0] == "log"
+            && args[1] == "-n"
+            && args[2] == "1"
+            && args[3] == "--no-ext-diff"
+            && args[4] == "-U3"
+            && args[5] == "-p"
+            && args[6] == "--"
+            && !args[7].starts_with('-'))
+        || (args.len() == 8
+            && args[0] == "log"
+            && args[1] == "-n"
+            && args[2] == "1"
+            && args[3] == "--format="
+            && args[4] == "--numstat"
+            && args[5] == "-z"
+            && args[6] == "--"
+            && !args[7].starts_with('-'))
+}
+
+fn latest_commit_numstat(root: &Path, rel: &str) -> Option<(u64, u64)> {
+    let clean = rel.trim().trim_matches(['"', '\'', '`']);
+    if clean.is_empty() || clean.starts_with('-') || clean.contains('\0') {
+        return None;
+    }
+    let bytes = git(
+        root,
+        &[
+            "log",
+            "-n",
+            "1",
+            "--format=",
+            "--numstat",
+            "-z",
+            "--",
+            clean,
+        ],
+    )
+    .ok()?;
+    let counts = parse_numstat(&bytes);
+    counts.get(&clean.replace('\\', "/")).copied()
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
@@ -2028,6 +2139,58 @@ mod tests {
             "--",
             "src/lib.rs"
         ]));
+        assert!(git_args_allowed(&[
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            "src/lib.rs"
+        ]));
+        assert!(!git_args_allowed(&[
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            "-something"
+        ]));
+        assert!(git_args_allowed(&[
+            "log",
+            "-n",
+            "1",
+            "--no-ext-diff",
+            "-U3",
+            "-p",
+            "--",
+            "src/lib.rs"
+        ]));
+        assert!(!git_args_allowed(&[
+            "log",
+            "-n",
+            "1",
+            "--no-ext-diff",
+            "-U3",
+            "-p",
+            "--",
+            "-something"
+        ]));
+        assert!(git_args_allowed(&[
+            "log",
+            "-n",
+            "1",
+            "--format=",
+            "--numstat",
+            "-z",
+            "--",
+            "src/lib.rs"
+        ]));
+        assert!(!git_args_allowed(&[
+            "log",
+            "-n",
+            "1",
+            "--format=",
+            "--numstat",
+            "-z",
+            "--",
+            "-something"
+        ]));
         assert!(!git_args_allowed(&[
             "diff",
             "--no-ext-diff",
@@ -2228,6 +2391,37 @@ mod tests {
                 .any(|edge| edge.from_repo == primary.id && edge.to_repo == other.id),
             "{graph:?}"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn file_diff_returns_the_requested_file() {
+        let root = scratch("diff");
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        fs::write(root.join("b.txt"), "two\n").unwrap();
+        fs::write(root.join("clean.txt"), "clean content\n").unwrap();
+        git_init(&root);
+        fs::write(root.join("a.txt"), "one changed\n").unwrap();
+        fs::write(root.join("b.txt"), "two changed\n").unwrap();
+        fs::write(root.join("untracked.txt"), "brand new\n").unwrap();
+        let id = root_id(&root.canonicalize().unwrap());
+        let a = fetch_file_diff(&id, "a.txt", "").unwrap();
+        let b = fetch_file_diff(&id, "b.txt", "").unwrap();
+        let clean = fetch_file_diff(&id, "clean.txt", "").unwrap();
+        let untracked = fetch_file_diff(&id, "untracked.txt", "").unwrap();
+        assert!(
+            a.diff.contains("one changed") && !a.diff.contains("two"),
+            "{a:?}"
+        );
+        assert!(
+            b.diff.contains("two changed") && !b.diff.contains("one"),
+            "{b:?}"
+        );
+        assert!(
+            clean.diff.contains("clean content") || clean.diff.contains("No differences found"),
+            "{clean:?}"
+        );
+        assert!(untracked.diff.contains("+brand new"), "{untracked:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
