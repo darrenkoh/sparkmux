@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { changeGraph, fileDiff, type ChangeGraphResponse, type FileDiffResponse } from "../api";
 import {
+  arrangeCards,
+  computeFitCamera,
   fileBasename,
   parseSideBySideDiff,
   statusColor,
   statusLabel,
+  CARD_WIDTH,
+  CARD_HEIGHT,
+  type CardOrganizationMode,
   type GraphFile,
   type GraphRepo,
 } from "./changeGraphLayout";
+import VerticalZoomDial from "./VerticalZoomDial";
 
 export interface ChangeGraphProps {
   command: string;
@@ -112,6 +118,78 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   const panStartRef = useRef({ x: 0, y: 0 });
   const panOriginRef = useRef({ x: 0, y: 0 });
 
+  // Organization mode & screen real-estate tracking
+  const [orgMode, setOrgMode] = useState<CardOrganizationMode>("grid");
+  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 900, height: 600 });
+  const hasInitialFitRef = useRef(false);
+
+  // Multi-touch pinch state for touchscreen
+  const touchPinchRef = useRef<{
+    initialDist: number;
+    initialZoom: number;
+    midX: number;
+    midY: number;
+    initialPan: { x: number; y: number };
+  } | null>(null);
+
+  // Track viewport real-estate with ResizeObserver
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const updateSize = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0 && h > 0) {
+        setViewportSize((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+      }
+    };
+    updateSize();
+    const ro = new ResizeObserver(updateSize);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // WebKit native trackpad multi-touch gestures (Safari/macOS WKWebView)
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    let initialGestureZoom = zoom;
+    let gestureMid = { x: 0, y: 0 };
+    let initialGesturePan = { ...pan };
+
+    const onGestureStart = (e: any) => {
+      e.preventDefault();
+      initialGestureZoom = zoom;
+      initialGesturePan = { ...pan };
+      const rect = el.getBoundingClientRect();
+      gestureMid = {
+        x: (e.clientX || rect.width / 2) - rect.left,
+        y: (e.clientY || rect.height / 2) - rect.top,
+      };
+    };
+
+    const onGestureChange = (e: any) => {
+      e.preventDefault();
+      if (e.scale) {
+        const newZoom = Math.min(2.5, Math.max(0.35, initialGestureZoom * e.scale));
+        const ratio = newZoom / initialGestureZoom;
+        setPan({
+          x: gestureMid.x - (gestureMid.x - initialGesturePan.x) * ratio,
+          y: gestureMid.y - (gestureMid.y - initialGesturePan.y) * ratio,
+        });
+        setZoom(newZoom);
+      }
+    };
+
+    el.addEventListener("gesturestart", onGestureStart, { passive: false });
+    el.addEventListener("gesturechange", onGestureChange, { passive: false });
+    return () => {
+      el.removeEventListener("gesturestart", onGestureStart);
+      el.removeEventListener("gesturechange", onGestureChange);
+    };
+  }, [zoom, pan]);
+
   // Dragging individual cards
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const dragCardRef = useRef({
@@ -168,8 +246,6 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   }, [command, cwd, title, pid]);
 
   // Construct Cards and Chain Connections
-  const CARD_WIDTH = 270;
-  const CARD_HEIGHT = 138;
   const COL_GAP = 90;
   const ROW_GAP = 36;
 
@@ -300,13 +376,6 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
     return { cards: cardList, links: linkList, repos: reposList };
   }, [data]);
 
-  // Card Positions Map (allows dragging individual cards)
-  const [customPositions, setCustomPositions] = useState<{ [id: string]: { x: number; y: number } }>({});
-
-  const getCardPos = (c: FileCardData) => {
-    return customPositions[c.id] || { x: c.x, y: c.y };
-  };
-
   // Filtered Cards
   const visibleCards = useMemo(() => {
     return cards.filter((c) => {
@@ -319,7 +388,30 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
     });
   }, [cards, filterRepo, searchQuery]);
 
+  // Dynamic Card Organization Layout fitting current viewport real-estate
+  const arrangement = useMemo(() => {
+    return arrangeCards(visibleCards, orgMode, viewportSize.width, viewportSize.height);
+  }, [visibleCards, orgMode, viewportSize.width, viewportSize.height]);
+
+  // Card Positions Map (allows dragging individual cards)
+  const [customPositions, setCustomPositions] = useState<{ [id: string]: { x: number; y: number } }>({});
+
+  const getCardPos = (c: FileCardData) => {
+    return customPositions[c.id] || arrangement.positions[c.id] || { x: c.x, y: c.y };
+  };
+
   const visibleCardIds = useMemo(() => new Set(visibleCards.map((c) => c.id)), [visibleCards]);
+
+  // Initial Auto-Fit Camera framing once cards are loaded
+  useEffect(() => {
+    if (!hasInitialFitRef.current && visibleCards.length > 0 && viewportSize.width > 0) {
+      hasInitialFitRef.current = true;
+      const result = arrangeCards(visibleCards, orgMode, viewportSize.width, viewportSize.height);
+      const fit = computeFitCamera(result.positions, viewportSize.width, viewportSize.height, CARD_WIDTH, CARD_HEIGHT);
+      setZoom(fit.zoom);
+      setPan(fit.pan);
+    }
+  }, [visibleCards.length, orgMode, viewportSize.width, viewportSize.height]);
 
   // Filtered Links
   const visibleLinks = useMemo(() => {
@@ -395,11 +487,92 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
     }
   };
 
+  // Wheel control now PANS workspace instead of zooming, unless trackpad pinch (ctrlKey) is active
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (e.deltaY === 0) return;
-    const factor = e.deltaY < 0 ? 1.04 : 0.96;
-    setZoom((curr) => Math.min(2.5, Math.max(0.35, curr * factor)));
+    // Multi-touch trackpad pinch (dispatched with ctrlKey === true)
+    if (e.ctrlKey) {
+      const factor = e.deltaY < 0 ? 1.05 : 0.95;
+      const newZoom = Math.min(2.5, Math.max(0.35, zoom * factor));
+      if (viewportRef.current) {
+        const rect = viewportRef.current.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const ratio = newZoom / zoom;
+        setPan((prev) => ({
+          x: mouseX - (mouseX - prev.x) * ratio,
+          y: mouseY - (mouseY - prev.y) * ratio,
+        }));
+      }
+      setZoom(newZoom);
+      return;
+    }
+
+    // Regular mouse wheel / scroll gesture: PAN WORKSPACE
+    setPan((prev) => ({
+      x: prev.x - e.deltaX,
+      y: prev.y - e.deltaY,
+    }));
+  };
+
+  // Multi-touch gestures (touchscreen 2-finger pinch to zoom)
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 2) {
+      const t0 = e.touches[0]!;
+      const t1 = e.touches[1]!;
+      const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      const rect = viewportRef.current?.getBoundingClientRect();
+      const midX = (t0.clientX + t1.clientX) / 2 - (rect?.left ?? 0);
+      const midY = (t0.clientY + t1.clientY) / 2 - (rect?.top ?? 0);
+      touchPinchRef.current = {
+        initialDist: dist,
+        initialZoom: zoom,
+        midX,
+        midY,
+        initialPan: { ...pan },
+      };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 2 && touchPinchRef.current && touchPinchRef.current.initialDist > 0) {
+      e.preventDefault();
+      const t0 = e.touches[0]!;
+      const t1 = e.touches[1]!;
+      const dist = Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+      const scale = dist / touchPinchRef.current.initialDist;
+      const newZoom = Math.min(2.5, Math.max(0.35, touchPinchRef.current.initialZoom * scale));
+      const ratio = newZoom / touchPinchRef.current.initialZoom;
+      const { midX, midY, initialPan } = touchPinchRef.current;
+      setPan({
+        x: midX - (midX - initialPan.x) * ratio,
+        y: midY - (midY - initialPan.y) * ratio,
+      });
+      setZoom(newZoom);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchPinchRef.current = null;
+  };
+
+  // Auto-arrange and fit camera to screen
+  const handleAutoFit = () => {
+    setCustomPositions({});
+    const result = arrangeCards(visibleCards, orgMode, viewportSize.width, viewportSize.height);
+    const fit = computeFitCamera(result.positions, viewportSize.width, viewportSize.height, CARD_WIDTH, CARD_HEIGHT);
+    setZoom(fit.zoom);
+    setPan(fit.pan);
+  };
+
+  // Switch organization mode and auto-frame
+  const handleToggleOrgMode = (newMode: CardOrganizationMode) => {
+    setOrgMode(newMode);
+    setCustomPositions({});
+    const result = arrangeCards(visibleCards, newMode, viewportSize.width, viewportSize.height);
+    const fit = computeFitCamera(result.positions, viewportSize.width, viewportSize.height, CARD_WIDTH, CARD_HEIGHT);
+    setZoom(fit.zoom);
+    setPan(fit.pan);
   };
 
   const handleResetView = () => {
@@ -657,6 +830,73 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             )}
           </div>
 
+          {/* Card Organization Modes Toggle & Auto-Fit */}
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <div className="graph-mode-group" role="group" aria-label="Card Organization Modes">
+              <button
+                type="button"
+                className={`graph-mode-btn ${orgMode === "grid" ? "on" : ""}`}
+                onClick={() => handleToggleOrgMode("grid")}
+                title="Auto-Fit Grid: Balanced responsive matrix fitting screen"
+              >
+                ⊞ GRID
+              </button>
+              <button
+                type="button"
+                className={`graph-mode-btn ${orgMode === "pipeline" ? "on" : ""}`}
+                onClick={() => handleToggleOrgMode("pipeline")}
+                title="Pipeline: Lifecycle kanban (Agent, Modified, Added, Other)"
+              >
+                ▥ PIPELINE
+              </button>
+              <button
+                type="button"
+                className={`graph-mode-btn ${orgMode === "modules" ? "on" : ""}`}
+                onClick={() => handleToggleOrgMode("modules")}
+                title="Modules: Grouped by directory / subsystem hierarchy"
+              >
+                🗂 MODULES
+              </button>
+              <button
+                type="button"
+                className={`graph-mode-btn ${orgMode === "impact" ? "on" : ""}`}
+                onClick={() => handleToggleOrgMode("impact")}
+                title="Impact: Priority waterfall ranked by change churn"
+              >
+                🔥 IMPACT
+              </button>
+              <button
+                type="button"
+                className={`graph-mode-btn ${orgMode === "radial" ? "on" : ""}`}
+                onClick={() => handleToggleOrgMode("radial")}
+                title="Radial: Orbit constellation radiating from primary hub"
+              >
+                ◎ RADIAL
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleAutoFit}
+              title="Auto arrange cards to fit current screen real-estate"
+              style={{
+                background: "rgba(45, 212, 191, 0.16)",
+                color: "#2dd4bf",
+                border: "1px solid rgba(45, 212, 191, 0.4)",
+                padding: "3px 8px",
+                fontSize: "9px",
+                borderRadius: "3px",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontWeight: 600,
+                letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+              }}
+            >
+              ⤢ AUTO FIT
+            </button>
+          </div>
+
           {/* Summary Metric Counters */}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "14px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "10px" }}>
@@ -757,6 +997,10 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             onPointerMove={handleViewportPointerMove}
             onPointerUp={handleViewportPointerUp}
             onPointerCancel={handleViewportPointerUp}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchEnd}
             onWheel={handleWheel}
             style={{
               flex: selectedFile ? `0 0 calc(${splitRatio * 100}% - 3px)` : "1 1 100%",
@@ -814,6 +1058,33 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                   <feComposite in="SourceGraphic" in2="blur" operator="over" />
                 </filter>
               </defs>
+
+              {/* Radial Orbit Rings */}
+              {orgMode === "radial" &&
+                arrangement.orbitRings.map((ring, idx) => (
+                  <g key={`orbit-ring-${idx}`}>
+                    <circle
+                      cx={ring.cx}
+                      cy={ring.cy}
+                      r={ring.r}
+                      fill="none"
+                      stroke="rgba(45, 212, 191, 0.18)"
+                      strokeWidth="1.2"
+                      strokeDasharray="5 7"
+                    />
+                    <text
+                      x={ring.cx}
+                      y={ring.cy - ring.r - 8}
+                      textAnchor="middle"
+                      fill="rgba(45, 212, 191, 0.65)"
+                      fontSize="9px"
+                      fontFamily="ui-monospace, monospace"
+                      letterSpacing="0.12em"
+                    >
+                      {ring.label}
+                    </text>
+                  </g>
+                ))}
 
               {visibleLinks.map((link) => {
                 const cardA = cards.find((c) => c.id === link.fromId);
@@ -929,6 +1200,65 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               })}
             </svg>
 
+            {/* LANE HEADERS LAYER (PIPELINE, MODULES, IMPACT) */}
+            {arrangement.laneHeaders.map((header) => (
+              <div
+                key={header.id}
+                style={{
+                  position: "absolute",
+                  left: header.x,
+                  top: header.y,
+                  width: header.width,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "6px 10px",
+                  background: "rgba(6, 12, 18, 0.92)",
+                  border: `1px solid ${header.color}40`,
+                  borderTop: `2.5px solid ${header.color}`,
+                  borderRadius: "4px",
+                  fontSize: "9px",
+                  fontFamily: "ui-monospace, monospace",
+                  color: header.color,
+                  fontWeight: 700,
+                  letterSpacing: "0.08em",
+                  boxShadow: "0 4px 14px rgba(0,0,0,0.6)",
+                  pointerEvents: "none",
+                  zIndex: 5,
+                  transition: "left 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.35s cubic-bezier(0.2, 0.8, 0.2, 1)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", overflow: "hidden" }}>
+                  <span style={{ whiteSpace: "nowrap" }}>{header.title}</span>
+                  {header.badge && (
+                    <span
+                      style={{
+                        fontSize: "7.5px",
+                        padding: "1px 4px",
+                        borderRadius: "2px",
+                        background: `${header.color}20`,
+                        border: `1px solid ${header.color}50`,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {header.badge}
+                    </span>
+                  )}
+                </div>
+                <span
+                  style={{
+                    background: "rgba(255,255,255,0.08)",
+                    padding: "1px 6px",
+                    borderRadius: "10px",
+                    fontSize: "8.5px",
+                    color: "#fff",
+                  }}
+                >
+                  {header.count}
+                </span>
+              </div>
+            ))}
+
             {/* CARDS LAYER */}
             {visibleCards.map((card) => {
               const pos = getCardPos(card);
@@ -990,7 +1320,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                     transition:
                       draggingCardId === card.id
                         ? "none"
-                        : "transform 0.15s ease, border-color 0.15s ease, opacity 0.2s ease",
+                        : "left 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.15s ease, border-color 0.15s ease, opacity 0.2s ease",
                     zIndex: isSelected ? 20 : isHovered ? 15 : isConnected ? 10 : 2,
                     display: "flex",
                     flexDirection: "column",
@@ -1188,8 +1518,33 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               pointerEvents: "auto",
             }}
           >
-            <span>DRAG CARD TO REARRANGE · PAN WORKSPACE · WHEEL ZOOM</span>
+            <span>DRAG CARD TO REARRANGE · WHEEL / SWIPE TO PAN · PINCH OR VERTICAL DIAL TO ZOOM</span>
           </div>
+
+          {/* Vertical Zoom In/Out Dial */}
+          <VerticalZoomDial
+            zoom={zoom}
+            minZoom={0.35}
+            maxZoom={2.5}
+            onZoomChange={(newZ) => {
+              if (viewportRef.current) {
+                const rect = viewportRef.current.getBoundingClientRect();
+                const cx = rect.width / 2;
+                const cy = rect.height / 2;
+                const ratio = newZ / zoom;
+                setPan((prev) => ({
+                  x: cx - (cx - prev.x) * ratio,
+                  y: cy - (cy - prev.y) * ratio,
+                }));
+              }
+              setZoom(newZ);
+            }}
+            onFit={handleAutoFit}
+            onReset={() => {
+              setZoom(1.0);
+              setPan({ x: 0, y: 0 });
+            }}
+          />
 
           {/* Empty / Error state */}
           {cards.length === 0 && (

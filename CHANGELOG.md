@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.31
+
+### Improvements
+
+- Enhanced the Gits screen with screen real-estate adaptive card organization and added 5 selectable organization modes:
+  - **Auto-Fit Grid**: Responsive balanced matrix optimizing space usage based on current viewport dimensions.
+  - **Pipeline**: Git change lifecycle stages (Agent Edits, Modified, Added, Other) rendered in structured Kanban columns with headers and counts.
+  - **Modules**: Architectural subsystem clusters grouped by directory hierarchy with folder badges.
+  - **Impact**: Churn magnitude waterfall prioritized by lines delta and AI agent edit weights.
+  - **Radial**: Sci-fi constellation layout orbiting radiating rings with SVG guides.
+- Added a one-click **AUTO FIT** button to recalculate card positions and camera framing to fit the available screen.
+- Added smooth positional transitions when toggling between card organization modes.
+- Added a dedicated **Vertical Zoom Dial** widget with graduated tick marks (35% to 200%), interactive drag physics, zoom steppers, quick 1:1 reset, and Auto-Fit buttons.
+- Replaced mouse wheel zooming with multi-touch pinch-to-zoom (trackpad pinch, touchscreen gestures, WebKit native gestures) and repurposed regular mouse wheel / swipe gestures to smoothly pan the workspace.
+
 ## 0.1.30
 
 ### Improvements
