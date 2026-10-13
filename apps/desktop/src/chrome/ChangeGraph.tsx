@@ -397,7 +397,8 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.08 : 0.92;
+    if (e.deltaY === 0) return;
+    const factor = e.deltaY < 0 ? 1.04 : 0.96;
     setZoom((curr) => Math.min(2.5, Math.max(0.35, curr * factor)));
   };
 
