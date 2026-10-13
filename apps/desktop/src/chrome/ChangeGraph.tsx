@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { changeGraph, fileDiff, type ChangeGraphResponse, type FileDiffResponse } from "../api";
 import {
   fileBasename,
+  parseSideBySideDiff,
   statusColor,
   statusLabel,
   type GraphFile,
@@ -94,41 +95,14 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   const [filterRepo, setFilterRepo] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [animatePulses, setAnimatePulses] = useState<boolean>(true);
-  // File Git Diff modal state
-  const [diffTarget, setDiffTarget] = useState<{ repoId: string; repoName: string; path: string; filename: string; status: string } | null>(null);
+  // Split pane & Git Diff state
+  const [splitRatio, setSplitRatio] = useState<number>(0.5);
+  const [isResizingSplit, setIsResizingSplit] = useState<boolean>(false);
+  const [diffViewMode, setDiffViewMode] = useState<"unified" | "split">("unified");
   const [diffLoading, setDiffLoading] = useState<boolean>(false);
   const [diffData, setDiffData] = useState<FileDiffResponse | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
-
-  // Fetch diff when diffTarget changes
-  useEffect(() => {
-    if (!diffTarget) {
-      setDiffData(null);
-      setDiffError(null);
-      setDiffLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setDiffData(null);
-    setDiffLoading(true);
-    setDiffError(null);
-    fileDiff(diffTarget.repoId, diffTarget.path, cwd)
-      .then((res) => {
-        if (!cancelled) {
-          setDiffData(res);
-          setDiffLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setDiffError(err instanceof Error ? err.message : String(err));
-          setDiffLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [diffTarget, cwd]);
+  const mainContainerRef = useRef<HTMLDivElement>(null);
 
   // Pan & Zoom viewport state
   const [zoom, setZoom] = useState<number>(1.0);
@@ -155,8 +129,8 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        if (diffTarget) {
-          setDiffTarget(null);
+        if (selectedCardId) {
+          setSelectedCardId(null);
         } else {
           onClose();
         }
@@ -164,7 +138,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [diffTarget, onClose]);
+  }, [selectedCardId, onClose]);
 
   // Fetch changeGraph API
   useEffect(() => {
@@ -449,7 +423,96 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   const totalAdded = cards.reduce((sum, c) => sum + c.linesAdded, 0);
   const totalRemoved = cards.reduce((sum, c) => sum + c.linesRemoved, 0);
   const agentEditedCount = cards.filter((c) => c.agentEdited).length;
-  const selectedFile = cards.find((c) => c.id === selectedCardId);
+  const selectedFile = useMemo(() => {
+    return cards.find((c) => c.id === selectedCardId) ?? null;
+  }, [cards, selectedCardId]);
+
+  // Fetch diff when selectedFile changes
+  useEffect(() => {
+    if (!selectedFile) {
+      setDiffData(null);
+      setDiffError(null);
+      setDiffLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDiffData(null);
+    setDiffLoading(true);
+    setDiffError(null);
+    fileDiff(selectedFile.repoId, selectedFile.path, cwd)
+      .then((res) => {
+        if (!cancelled) {
+          setDiffData(res);
+          setDiffLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setDiffError(err instanceof Error ? err.message : String(err));
+          setDiffLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile?.repoId, selectedFile?.path, cwd]);
+
+  // Diff metrics
+  const diffStats = useMemo(() => {
+    if (!diffData?.diff) return { adds: 0, rems: 0 };
+    let adds = 0;
+    let rems = 0;
+    for (const l of diffData.diff.split("\n")) {
+      if (l.startsWith("+") && !l.startsWith("+++")) adds++;
+      else if (l.startsWith("-") && !l.startsWith("---")) rems++;
+    }
+    return { adds, rems };
+  }, [diffData]);
+
+  // Parsed side-by-side diff
+  const splitDiffRows = useMemo(() => {
+    if (!diffData?.diff || diffViewMode !== "split") return [];
+    return parseSideBySideDiff(diffData.diff);
+  }, [diffData, diffViewMode]);
+
+  // Connected links for selected file
+  const selectedFileLinks = useMemo(() => {
+    if (!selectedFile) return [];
+    return links.filter((l) => l.fromId === selectedFile.id || l.toId === selectedFile.id);
+  }, [selectedFile, links]);
+
+  // Splitter drag resize handler
+  const handleSplitterPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const container = mainContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const prevSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    document.body.classList.add("is-resizing");
+    setIsResizingSplit(true);
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const offset = ev.clientX - rect.left;
+      const ratio = offset / rect.width;
+      setSplitRatio(Math.min(0.8, Math.max(0.2, ratio)));
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      document.body.style.userSelect = prevSelect;
+      document.body.style.cursor = prevCursor;
+      document.body.classList.remove("is-resizing");
+      setIsResizingSplit(false);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
 
   return (
     <div
@@ -675,30 +738,44 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
           </div>
         </div>
 
-        {/* 2. INFINITE 2D INTERACTIVE WORKSPACE (Canvas Connectors + Card Nodes) */}
+        {/* 2. MAIN WORKSPACE CONTAINER: 2D GRAPH + RESIZABLE GIT DIFF PANE */}
         <div
-          ref={viewportRef}
-          onPointerDown={handleViewportPointerDown}
-          onPointerMove={handleViewportPointerMove}
-          onPointerUp={handleViewportPointerUp}
-          onPointerCancel={handleViewportPointerUp}
-          onWheel={handleWheel}
+          ref={mainContainerRef}
           style={{
             flex: 1,
-            position: "relative",
+            display: "flex",
             minHeight: 0,
+            position: "relative",
             overflow: "hidden",
-            cursor: isPanningRef.current ? "grabbing" : "grab",
-            backgroundColor: "#06090e",
-            backgroundImage: `
-              radial-gradient(circle at 50% 50%, rgba(13, 27, 42, 0.6) 0%, rgba(5, 7, 10, 0.95) 100%),
-              linear-gradient(rgba(45, 212, 191, 0.04) 1px, transparent 1px),
-              linear-gradient(90deg, rgba(45, 212, 191, 0.04) 1px, transparent 1px)
-            `,
-            backgroundSize: `100% 100%, ${32 * zoom}px ${32 * zoom}px, ${32 * zoom}px ${32 * zoom}px`,
-            backgroundPosition: `center, ${pan.x}px ${pan.y}px, ${pan.x}px ${pan.y}px`,
           }}
         >
+          {/* LEFT: 2D GRAPH WORKSPACE */}
+          <div
+            ref={viewportRef}
+            onPointerDown={handleViewportPointerDown}
+            onPointerMove={handleViewportPointerMove}
+            onPointerUp={handleViewportPointerUp}
+            onPointerCancel={handleViewportPointerUp}
+            onWheel={handleWheel}
+            style={{
+              flex: selectedFile ? `0 0 calc(${splitRatio * 100}% - 3px)` : "1 1 100%",
+              maxWidth: selectedFile ? `calc(${splitRatio * 100}% - 3px)` : "100%",
+              width: selectedFile ? `calc(${splitRatio * 100}% - 3px)` : "100%",
+              position: "relative",
+              minHeight: 0,
+              overflow: "hidden",
+              cursor: isPanningRef.current ? "grabbing" : "grab",
+              backgroundColor: "#06090e",
+              backgroundImage: `
+                radial-gradient(circle at 50% 50%, rgba(13, 27, 42, 0.6) 0%, rgba(5, 7, 10, 0.95) 100%),
+                linear-gradient(rgba(45, 212, 191, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(45, 212, 191, 0.04) 1px, transparent 1px)
+              `,
+              backgroundSize: `100% 100%, ${32 * zoom}px ${32 * zoom}px, ${32 * zoom}px ${32 * zoom}px`,
+              backgroundPosition: `center, ${pan.x}px ${pan.y}px, ${pan.x}px ${pan.y}px`,
+              transition: isResizingSplit ? "none" : "flex 0.12s ease, max-width 0.12s ease",
+            }}
+          >
           {/* Pan & Zoom Transform World Container */}
           <div
             style={{
@@ -1113,436 +1190,6 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             <span>DRAG CARD TO REARRANGE · PAN WORKSPACE · WHEEL ZOOM</span>
           </div>
 
-          {/* Selected File Card Detail Sidebar (Floating Inspector) */}
-          {selectedFile && (
-            <div
-              onPointerDown={(e) => e.stopPropagation()}
-              onPointerUp={(e) => e.stopPropagation()}
-              onWheel={(e) => e.stopPropagation()}
-              style={{
-                position: "absolute",
-                top: 16,
-                right: 16,
-                width: "300px",
-                background: "rgba(5, 10, 15, 0.96)",
-                border: "1px solid rgba(45, 212, 191, 0.5)",
-                borderRadius: "6px",
-                padding: "12px 14px",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: "10.5px",
-                zIndex: 35,
-                boxShadow: "0 10px 40px rgba(0,0,0,0.85)",
-                pointerEvents: "auto",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                <span style={{ color: "#2dd4bf", fontWeight: "bold", fontSize: "11px" }}>FILE INSPECTOR</span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedCardId(null)}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    color: "rgba(255,255,255,0.5)",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div style={{ fontSize: "13px", fontWeight: "bold", color: "#fff", wordBreak: "break-all", marginBottom: "4px" }}>
-                {selectedFile.filename}
-              </div>
-              <div style={{ fontSize: "9.5px", color: "rgba(255,255,255,0.5)", wordBreak: "break-all", marginBottom: "10px" }}>
-                {selectedFile.path}
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", marginBottom: "10px", fontSize: "9.5px" }}>
-                <div style={{ background: "rgba(255,255,255,0.03)", padding: "4px 6px", borderRadius: "3px" }}>
-                  <div style={{ color: "rgba(255,255,255,0.4)" }}>Cluster</div>
-                  <div style={{ color: "#fff", fontWeight: 600 }}>{selectedFile.repoName}</div>
-                </div>
-                <div style={{ background: "rgba(255,255,255,0.03)", padding: "4px 6px", borderRadius: "3px" }}>
-                  <div style={{ color: "rgba(255,255,255,0.4)" }}>Status</div>
-                  <div style={{ color: statusColor(selectedFile.status), fontWeight: 600 }}>
-                    {statusLabel(selectedFile.status)}
-                  </div>
-                </div>
-                <div style={{ background: "rgba(255,255,255,0.03)", padding: "4px 6px", borderRadius: "3px" }}>
-                  <div style={{ color: "rgba(255,255,255,0.4)" }}>Lines Added</div>
-                  <div style={{ color: "#2dd4bf", fontWeight: 600 }}>+{selectedFile.linesAdded}</div>
-                </div>
-                <div style={{ background: "rgba(255,255,255,0.03)", padding: "4px 6px", borderRadius: "3px" }}>
-                  <div style={{ color: "rgba(255,255,255,0.4)" }}>Lines Removed</div>
-                  <div style={{ color: "#f87171", fontWeight: 600 }}>-{selectedFile.linesRemoved}</div>
-                </div>
-              </div>
-
-              {/* Primary Selected File Action Bar */}
-              <div style={{ marginBottom: "10px", display: "flex", gap: "6px" }}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setDiffTarget({
-                      repoId: selectedFile.repoId,
-                      repoName: selectedFile.repoName,
-                      path: selectedFile.path,
-                      filename: selectedFile.filename,
-                      status: selectedFile.status,
-                    })
-                  }
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "6px",
-                    background: "rgba(45, 212, 191, 0.16)",
-                    border: "1px solid rgba(45, 212, 191, 0.45)",
-                    borderRadius: "4px",
-                    padding: "6px 10px",
-                    color: "#2dd4bf",
-                    fontSize: "10px",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    transition: "all 0.15s ease",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(45, 212, 191, 0.28)";
-                    e.currentTarget.style.borderColor = "#2dd4bf";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "rgba(45, 212, 191, 0.16)";
-                    e.currentTarget.style.borderColor = "rgba(45, 212, 191, 0.45)";
-                  }}
-                  title="View Git Diff changes for this file"
-                >
-                  <span>⌥ VIEW GIT CHANGES</span>
-                </button>
-              </div>
-
-              {/* Connected Chain Links for Selected File */}
-              <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "8px" }}>
-                <div style={{ fontSize: "9px", color: "#5eead4", fontWeight: "bold", marginBottom: "6px" }}>
-                  CONNECTED CHAIN LINKS ({links.filter((l) => l.fromId === selectedFile.id || l.toId === selectedFile.id).length})
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "4px", maxHeight: "140px", overflowY: "auto" }}>
-                  {links
-                    .filter((l) => l.fromId === selectedFile.id || l.toId === selectedFile.id)
-                    .map((l) => {
-                      const peerId = l.fromId === selectedFile.id ? l.toId : l.fromId;
-                      const peerCard = cards.find((c) => c.id === peerId);
-                      if (!peerCard) return null;
-                      return (
-                        <div
-                          key={l.id}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            padding: "4px 6px",
-                            background: "rgba(255,255,255,0.03)",
-                            borderRadius: "3px",
-                            cursor: "pointer",
-                            fontSize: "9px",
-                            transition: "background 0.15s",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = "rgba(45, 212, 191, 0.12)";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = "rgba(255,255,255,0.03)";
-                          }}
-                        >
-                          <span
-                            onClick={() => centerOnCard(peerCard)}
-                            style={{ color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
-                            title="Focus card"
-                          >
-                            {peerCard.filename}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDiffTarget({
-                                repoId: peerCard.repoId,
-                                repoName: peerCard.repoName,
-                                path: peerCard.path,
-                                filename: peerCard.filename,
-                                status: peerCard.status,
-                              });
-                            }}
-                            style={{
-                              marginLeft: "6px",
-                              background: "rgba(45, 212, 191, 0.15)",
-                              border: "1px solid rgba(45, 212, 191, 0.3)",
-                              borderRadius: "2px",
-                              color: "#2dd4bf",
-                              fontSize: "8px",
-                              padding: "1px 5px",
-                              cursor: "pointer",
-                              whiteSpace: "nowrap",
-                            }}
-                            title="View Git Diff"
-                          >
-                            diff
-                          </button>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 3. SCI-FI GIT DIFF VIEWER DRAWER / MODAL */}
-          {diffTarget && (
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                background: "rgba(3, 6, 10, 0.82)",
-                backdropFilter: "blur(4px)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                zIndex: 60,
-                padding: "24px",
-                pointerEvents: "auto",
-              }}
-              onClick={() => setDiffTarget(null)}
-              onPointerDown={(e) => e.stopPropagation()}
-              onPointerUp={(e) => e.stopPropagation()}
-              onWheel={(e) => e.stopPropagation()}
-            >
-              <div
-                style={{
-                  width: "100%",
-                  maxWidth: "940px",
-                  maxHeight: "88vh",
-                  background: "#070c14",
-                  border: "1px solid rgba(45, 212, 191, 0.4)",
-                  boxShadow: "0 20px 60px rgba(0, 0, 0, 0.95), 0 0 30px rgba(45, 212, 191, 0.15)",
-                  borderRadius: "6px",
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                {/* Diff Viewer Top Header */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "10px 16px",
-                    background: "rgba(9, 15, 24, 0.95)",
-                    borderBottom: "1px solid rgba(45, 212, 191, 0.25)",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
-                    <span style={{ fontSize: "14px", color: "#2dd4bf" }}>⬡</span>
-                    <span style={{ fontSize: "12px", fontWeight: "bold", color: "#fff", whiteSpace: "nowrap" }}>
-                      GIT CHANGES
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "9.5px",
-                        padding: "1px 6px",
-                        borderRadius: "2px",
-                        background: "rgba(45, 212, 191, 0.15)",
-                        color: "#5eead4",
-                        border: "1px solid rgba(45, 212, 191, 0.3)",
-                      }}
-                    >
-                      {diffTarget.repoName}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "9.5px",
-                        color: statusColor(diffTarget.status),
-                        fontWeight: 600,
-                      }}
-                    >
-                      [{statusLabel(diffTarget.status)}]
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "11px",
-                        color: "rgba(255, 255, 255, 0.6)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                      title={diffTarget.path}
-                    >
-                      {diffTarget.path}
-                    </span>
-                  </div>
-
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    {!diffLoading && !diffError && diffData && (() => {
-                      let adds = 0;
-                      let rems = 0;
-                      for (const l of diffData.diff.split("\n")) {
-                        if (l.startsWith("+") && !l.startsWith("+++")) adds++;
-                        else if (l.startsWith("-") && !l.startsWith("---")) rems++;
-                      }
-                      return (
-                        <div style={{ display: "flex", gap: "6px", fontSize: "10px", fontWeight: "bold" }}>
-                          <span style={{ color: "#2dd4bf" }}>+{adds}</span>
-                          <span style={{ color: "#f87171" }}>-{rems}</span>
-                        </div>
-                      );
-                    })()}
-                    <button
-                      type="button"
-                      onClick={() => setDiffTarget(null)}
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        color: "rgba(255, 255, 255, 0.5)",
-                        fontSize: "16px",
-                        cursor: "pointer",
-                        padding: "2px 6px",
-                        lineHeight: 1,
-                      }}
-                      title="Close Diff (Esc)"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-
-                {/* Diff Viewer Body */}
-                <div
-                  style={{
-                    flex: 1,
-                    overflow: "auto",
-                    padding: "12px 16px",
-                    background: "#04070c",
-                    fontSize: "11px",
-                    lineHeight: "1.45",
-                  }}
-                >
-                  {diffLoading && (
-                    <div style={{ padding: "40px 20px", textAlign: "center", color: "rgba(255, 255, 255, 0.5)" }}>
-                      <div style={{ color: "#2dd4bf", marginBottom: "6px" }}>⚡ RETRIEVING WORKING COPY DIFF...</div>
-                      <span>Querying git repository state</span>
-                    </div>
-                  )}
-
-                  {diffError && (
-                    <div
-                      style={{
-                        padding: "16px",
-                        background: "rgba(248, 113, 113, 0.1)",
-                        border: "1px solid rgba(248, 113, 113, 0.3)",
-                        borderRadius: "4px",
-                        color: "#f87171",
-                      }}
-                    >
-                      <b>Failed to load diff:</b> {diffError}
-                    </div>
-                  )}
-
-                  {!diffLoading && !diffError && diffData && (
-                    <div style={{ display: "flex", flexDirection: "column" }}>
-                      {diffData.diff
-                        .split("\n")
-                        .map((line, idx) => {
-                          const isAdd = line.startsWith("+") && !line.startsWith("+++");
-                          const isRem = line.startsWith("-") && !line.startsWith("---");
-                          const isHunk = line.startsWith("@@");
-                          const isComment = line.startsWith("#");
-                          const isHeader = line.startsWith("diff --git") || line.startsWith("index ") || line.startsWith("---") || line.startsWith("+++");
-
-                          let bg = "transparent";
-                          let color = "rgba(255, 255, 255, 0.75)";
-                          if (isComment) {
-                            bg = "rgba(45, 212, 191, 0.08)";
-                            color = "#5eead4";
-                          } else if (isAdd) {
-                            bg = "rgba(45, 212, 191, 0.12)";
-                            color = "#34d399";
-                          } else if (isRem) {
-                            bg = "rgba(248, 113, 113, 0.12)";
-                            color = "#f87171";
-                          } else if (isHunk) {
-                            bg = "rgba(56, 189, 248, 0.08)";
-                            color = "#38bdf8";
-                          } else if (isHeader) {
-                            color = "rgba(255, 255, 255, 0.4)";
-                          }
-
-                          return (
-                            <div
-                              key={idx}
-                              style={{
-                                display: "flex",
-                                background: bg,
-                                minHeight: "18px",
-                                padding: "0 6px",
-                                borderRadius: "2px",
-                              }}
-                            >
-                              <span
-                                style={{
-                                  width: "36px",
-                                  flexShrink: 0,
-                                  color: "rgba(255, 255, 255, 0.2)",
-                                  userSelect: "none",
-                                  fontSize: "9.5px",
-                                  textAlign: "right",
-                                  marginRight: "12px",
-                                  paddingTop: "1px",
-                                }}
-                              >
-                                {idx + 1}
-                              </span>
-                              <pre
-                                style={{
-                                  margin: 0,
-                                  color,
-                                  fontFamily: "inherit",
-                                  whiteSpace: "pre-wrap",
-                                  wordBreak: "break-all",
-                                }}
-                              >
-                                {line || " "}
-                              </pre>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Diff Viewer Status Bar */}
-                <div
-                  style={{
-                    padding: "6px 14px",
-                    background: "rgba(9, 15, 24, 0.8)",
-                    borderTop: "1px solid rgba(255, 255, 255, 0.06)",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    fontSize: "9.5px",
-                    color: "rgba(255, 255, 255, 0.4)",
-                  }}
-                >
-                  <span>HEAD ↔ WORKING COPY{diffData ? ` · ${diffData.path}` : ""}</span>
-                  <span>PRESS ESC TO CLOSE</span>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Empty / Error state */}
           {cards.length === 0 && (
             <div className="graph-empty" style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
@@ -1551,7 +1198,552 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             </div>
           )}
         </div>
+
+        {/* DRAGGABLE RESIZABLE SPLITTER (SHOWN WHEN FILE IS SELECTED) */}
+        {selectedFile && (
+          <div
+            className="graph-diff-splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize git diff panel"
+            title="Drag to resize Git Diff panel (Double-click to reset 50%)"
+            onPointerDown={handleSplitterPointerDown}
+            onDoubleClick={() => setSplitRatio(0.5)}
+          >
+            <span className="graph-diff-splitter-rule" />
+          </div>
+        )}
+
+        {/* RIGHT: GIT CHANGES & DIFF PANEL */}
+        {selectedFile && (
+          <div
+            style={{
+              flex: 1,
+              minWidth: "280px",
+              display: "flex",
+              flexDirection: "column",
+              background: "#04070c",
+              overflow: "hidden",
+              zIndex: 20,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            {/* Diff Viewer Top Header */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                padding: "8px 12px 10px",
+                background: "rgba(9, 15, 24, 0.98)",
+                borderBottom: "1px solid rgba(45, 212, 191, 0.2)",
+                gap: "6px",
+                flexShrink: 0,
+              }}
+            >
+              {/* Top Row: Title, Badges, Delta, Mode Toggle, Close */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: "13px", color: "#2dd4bf" }}>⬡</span>
+                  <span style={{ fontSize: "11px", fontWeight: "bold", color: "#fff", letterSpacing: "0.08em" }}>
+                    GIT CHANGES
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "9px",
+                      padding: "1px 6px",
+                      borderRadius: "2px",
+                      background: selectedFile.isPrimaryRepo ? "rgba(45, 212, 191, 0.15)" : "rgba(255, 154, 60, 0.15)",
+                      color: selectedFile.isPrimaryRepo ? "#5eead4" : "#ff9a3c",
+                      border: `1px solid ${selectedFile.isPrimaryRepo ? "rgba(45, 212, 191, 0.3)" : "rgba(255, 154, 60, 0.3)"}`,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {selectedFile.repoName}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "9px",
+                      color: statusColor(selectedFile.status),
+                      fontWeight: 600,
+                    }}
+                  >
+                    [{statusLabel(selectedFile.status)}]
+                  </span>
+                  {selectedFile.agentEdited && (
+                    <span
+                      style={{
+                        fontSize: "8.5px",
+                        padding: "1px 5px",
+                        borderRadius: "2px",
+                        background: "rgba(232, 168, 73, 0.25)",
+                        color: "#e8a849",
+                        border: "1px solid rgba(232, 168, 73, 0.5)",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      ⚡ AGENT
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+                  {!diffLoading && !diffError && diffData && !diffData.is_binary && (
+                    <div style={{ display: "flex", gap: "6px", fontSize: "10px", fontWeight: "bold" }}>
+                      <span style={{ color: "#2dd4bf" }}>+{diffStats.adds}</span>
+                      <span style={{ color: "#f87171" }}>-{diffStats.rems}</span>
+                    </div>
+                  )}
+
+                  {/* View Mode Toggle */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      background: "rgba(0, 0, 0, 0.5)",
+                      padding: "2px",
+                      borderRadius: "3px",
+                      border: "1px solid rgba(45, 212, 191, 0.25)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setDiffViewMode("unified")}
+                      style={{
+                        background: diffViewMode === "unified" ? "rgba(45, 212, 191, 0.25)" : "transparent",
+                        color: diffViewMode === "unified" ? "#2dd4bf" : "rgba(255, 255, 255, 0.45)",
+                        border: "none",
+                        padding: "2px 7px",
+                        fontSize: "8.5px",
+                        borderRadius: "2px",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        fontWeight: diffViewMode === "unified" ? 600 : 400,
+                      }}
+                      title="Unified Inline Diff View"
+                    >
+                      UNIFIED
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDiffViewMode("split")}
+                      style={{
+                        background: diffViewMode === "split" ? "rgba(45, 212, 191, 0.25)" : "transparent",
+                        color: diffViewMode === "split" ? "#2dd4bf" : "rgba(255, 255, 255, 0.45)",
+                        border: "none",
+                        padding: "2px 7px",
+                        fontSize: "8.5px",
+                        borderRadius: "2px",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        fontWeight: diffViewMode === "split" ? 600 : 400,
+                      }}
+                      title="Side-by-Side Split Diff View"
+                    >
+                      SIDE-BY-SIDE
+                    </button>
+                  </div>
+
+                  {/* Close button */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCardId(null)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "rgba(255, 255, 255, 0.5)",
+                      fontSize: "14px",
+                      cursor: "pointer",
+                      padding: "2px 6px",
+                      lineHeight: 1,
+                    }}
+                    title="Close Diff Pane (Esc)"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {/* Second Row: Filename & Path */}
+              <div style={{ display: "flex", alignItems: "baseline", gap: "8px", overflow: "hidden" }}>
+                <span style={{ fontSize: "12px", fontWeight: "bold", color: "#fff", whiteSpace: "nowrap" }}>
+                  {selectedFile.filename}
+                </span>
+                <span
+                  style={{
+                    fontSize: "10px",
+                    color: "rgba(255, 255, 255, 0.45)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={selectedFile.path}
+                >
+                  {selectedFile.path}
+                </span>
+              </div>
+
+              {/* Third Row: Connected Chain Links Pills (if any) */}
+              {selectedFileLinks.length > 0 && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    flexWrap: "wrap",
+                    marginTop: "2px",
+                    paddingTop: "4px",
+                    borderTop: "1px solid rgba(255, 255, 255, 0.05)",
+                  }}
+                >
+                  <span style={{ fontSize: "8.5px", color: "#5eead4", fontWeight: "bold" }}>
+                    CONNECTED CHAINS ({selectedFileLinks.length}):
+                  </span>
+                  {selectedFileLinks.map((link) => {
+                    const peerId = link.fromId === selectedFile.id ? link.toId : link.fromId;
+                    const peerCard = cards.find((c) => c.id === peerId);
+                    if (!peerCard) return null;
+                    return (
+                      <button
+                        key={link.id}
+                        type="button"
+                        onClick={() => {
+                          centerOnCard(peerCard);
+                          setSelectedCardId(peerCard.id);
+                        }}
+                        style={{
+                          background: "rgba(45, 212, 191, 0.12)",
+                          border: "1px solid rgba(45, 212, 191, 0.3)",
+                          borderRadius: "3px",
+                          padding: "1px 6px",
+                          fontSize: "8.5px",
+                          color: "#99f6e4",
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                        title={`View diff for ${peerCard.filename} (${link.label})`}
+                      >
+                        <span>{peerCard.filename}</span>
+                        <span style={{ color: "rgba(255,255,255,0.3)", fontSize: "7.5px" }}>({link.label})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Diff Viewer Body */}
+            <div
+              style={{
+                flex: 1,
+                overflow: "auto",
+                padding: "10px 14px",
+                background: "#04070c",
+                fontSize: "11px",
+                lineHeight: "1.45",
+              }}
+            >
+              {diffLoading && (
+                <div style={{ padding: "40px 20px", textAlign: "center", color: "rgba(255, 255, 255, 0.5)" }}>
+                  <div style={{ color: "#2dd4bf", marginBottom: "6px" }}>⚡ RETRIEVING WORKING COPY DIFF...</div>
+                  <span>Querying git repository state for {selectedFile.filename}</span>
+                </div>
+              )}
+
+              {diffError && (
+                <div
+                  style={{
+                    padding: "16px",
+                    background: "rgba(248, 113, 113, 0.1)",
+                    border: "1px solid rgba(248, 113, 113, 0.3)",
+                    borderRadius: "4px",
+                    color: "#f87171",
+                  }}
+                >
+                  <b>Failed to load diff:</b> {diffError}
+                </div>
+              )}
+
+              {!diffLoading && !diffError && diffData && (
+                diffData.is_binary ? (
+                  <div style={{ padding: "30px 16px", textAlign: "center", color: "rgba(255, 255, 255, 0.5)" }}>
+                    <div style={{ color: "#ff9a3c", marginBottom: "6px", fontSize: "12px", fontWeight: "bold" }}>
+                      BINARY FILE MODIFIED
+                    </div>
+                    <span>Binary file changes cannot be displayed as text diff.</span>
+                  </div>
+                ) : !diffData.diff.trim() ? (
+                  <div style={{ padding: "30px 16px", textAlign: "center", color: "rgba(255, 255, 255, 0.5)" }}>
+                    <div style={{ color: "#2dd4bf", marginBottom: "6px", fontSize: "12px", fontWeight: "bold" }}>
+                      CLEAN WORKING COPY
+                    </div>
+                    <span>No unstaged or uncommitted working copy diff detected against HEAD.</span>
+                  </div>
+                ) : diffViewMode === "unified" ? (
+                  <div style={{ display: "flex", flexDirection: "column" }}>
+                    {diffData.diff.split("\n").map((line, idx) => {
+                      const isAdd = line.startsWith("+") && !line.startsWith("+++");
+                      const isRem = line.startsWith("-") && !line.startsWith("---");
+                      const isHunk = line.startsWith("@@");
+                      const isComment = line.startsWith("#");
+                      const isHeader =
+                        line.startsWith("diff --git") ||
+                        line.startsWith("index ") ||
+                        line.startsWith("---") ||
+                        line.startsWith("+++");
+
+                      let bg = "transparent";
+                      let color = "rgba(255, 255, 255, 0.75)";
+                      if (isComment) {
+                        bg = "rgba(45, 212, 191, 0.08)";
+                        color = "#5eead4";
+                      } else if (isAdd) {
+                        bg = "rgba(45, 212, 191, 0.12)";
+                        color = "#34d399";
+                      } else if (isRem) {
+                        bg = "rgba(248, 113, 113, 0.12)";
+                        color = "#f87171";
+                      } else if (isHunk) {
+                        bg = "rgba(56, 189, 248, 0.08)";
+                        color = "#38bdf8";
+                      } else if (isHeader) {
+                        color = "rgba(255, 255, 255, 0.4)";
+                      }
+
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            display: "flex",
+                            background: bg,
+                            minHeight: "18px",
+                            padding: "0 6px",
+                            borderRadius: "2px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: "36px",
+                              flexShrink: 0,
+                              color: "rgba(255, 255, 255, 0.2)",
+                              userSelect: "none",
+                              fontSize: "9.5px",
+                              textAlign: "right",
+                              marginRight: "12px",
+                              paddingTop: "1px",
+                            }}
+                          >
+                            {idx + 1}
+                          </span>
+                          <pre
+                            style={{
+                              margin: 0,
+                              color,
+                              fontFamily: "inherit",
+                              whiteSpace: "pre-wrap",
+                              wordBreak: "break-all",
+                            }}
+                          >
+                            {line || " "}
+                          </pre>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  /* SIDE-BY-SIDE DIFF VIEW */
+                  <div style={{ display: "flex", flexDirection: "column", minWidth: "100%" }}>
+                    {/* Column Headers */}
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "38px 1fr 38px 1fr",
+                        gap: "0 4px",
+                        background: "rgba(255, 255, 255, 0.03)",
+                        borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+                        padding: "4px 6px",
+                        fontSize: "9.5px",
+                        fontWeight: "bold",
+                        color: "rgba(255, 255, 255, 0.4)",
+                        userSelect: "none",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      <span style={{ textAlign: "right" }}>#</span>
+                      <span style={{ color: "#f87171" }}>HEAD (ORIGINAL)</span>
+                      <span style={{ textAlign: "right" }}>#</span>
+                      <span style={{ color: "#34d399" }}>WORKING COPY (MODIFIED)</span>
+                    </div>
+
+                    {splitDiffRows.map((row, idx) => {
+                      if (row.type === "hunk") {
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              padding: "3px 8px",
+                              margin: "4px 0",
+                              background: "rgba(56, 189, 248, 0.1)",
+                              border: "1px solid rgba(56, 189, 248, 0.2)",
+                              borderRadius: "2px",
+                              color: "#38bdf8",
+                              fontSize: "10px",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {row.metaText}
+                          </div>
+                        );
+                      }
+
+                      if (row.type === "meta") {
+                        return (
+                          <div
+                            key={idx}
+                            style={{
+                              padding: "1px 8px",
+                              color: "rgba(255, 255, 255, 0.35)",
+                              fontSize: "9.5px",
+                              whiteSpace: "pre-wrap",
+                              wordBreak: "break-all",
+                            }}
+                          >
+                            {row.metaText}
+                          </div>
+                        );
+                      }
+
+                      // Line row: 4 grid columns
+                      const leftBg =
+                        row.oldKind === "removed"
+                          ? "rgba(248, 113, 113, 0.12)"
+                          : "transparent";
+                      const rightBg =
+                        row.newKind === "added"
+                          ? "rgba(45, 212, 191, 0.12)"
+                          : "transparent";
+
+                      const leftColor =
+                        row.oldKind === "removed"
+                          ? "#f87171"
+                          : "rgba(255, 255, 255, 0.75)";
+                      const rightColor =
+                        row.newKind === "added"
+                          ? "#34d399"
+                          : "rgba(255, 255, 255, 0.75)";
+
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "38px minmax(0, 1fr) 38px minmax(0, 1fr)",
+                            gap: "0 4px",
+                            minHeight: "18px",
+                            alignItems: "stretch",
+                          }}
+                        >
+                          {/* Left Line Number */}
+                          <div
+                            style={{
+                              background: leftBg,
+                              textAlign: "right",
+                              paddingRight: "6px",
+                              color: "rgba(255, 255, 255, 0.2)",
+                              userSelect: "none",
+                              fontSize: "9.5px",
+                            }}
+                          >
+                            {row.oldLineNo ?? ""}
+                          </div>
+                          {/* Left Code Text */}
+                          <div
+                            style={{
+                              background: leftBg,
+                              padding: "0 6px",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <pre
+                              style={{
+                                margin: 0,
+                                color: leftColor,
+                                fontFamily: "inherit",
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-all",
+                              }}
+                            >
+                              {row.oldText ?? " "}
+                            </pre>
+                          </div>
+
+                          {/* Right Line Number */}
+                          <div
+                            style={{
+                              background: rightBg,
+                              textAlign: "right",
+                              paddingRight: "6px",
+                              color: "rgba(255, 255, 255, 0.2)",
+                              userSelect: "none",
+                              fontSize: "9.5px",
+                            }}
+                          >
+                            {row.newLineNo ?? ""}
+                          </div>
+                          {/* Right Code Text */}
+                          <div
+                            style={{
+                              background: rightBg,
+                              padding: "0 6px",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <pre
+                              style={{
+                                margin: 0,
+                                color: rightColor,
+                                fontFamily: "inherit",
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-all",
+                              }}
+                            >
+                              {row.newText ?? " "}
+                            </pre>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              )}
+            </div>
+
+            {/* Diff Viewer Status Bar */}
+            <div
+              style={{
+                padding: "6px 12px",
+                background: "rgba(9, 15, 24, 0.9)",
+                borderTop: "1px solid rgba(255, 255, 255, 0.06)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                fontSize: "9px",
+                color: "rgba(255, 255, 255, 0.4)",
+                flexShrink: 0,
+              }}
+            >
+              <span>HEAD ↔ WORKING COPY{diffData ? ` · ${diffData.path}` : ""}</span>
+              <span>ESC: CLOSE DIFF · DOUBLE-CLICK SPLITTER: RESET 50%</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
-  );
+  </div>
+);
 }

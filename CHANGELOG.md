@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.30
+
+### Improvements
+
+- In the Gits screen, clicking a file card now displays an inline, resizable 50% split-pane git diff viewer instead of a floating popup inspector card or modal dialog.
+- Added a draggable vertical splitter between the 2D graph canvas and the git changes panel, supporting double-click to reset back to 50%.
+- Added support for both Unified and synchronized Side-by-Side diff viewing modes with a header toggle.
+- Integrated file details, line deltas, and quick-jump connected chain links directly into the diff panel header.
+
 ## 0.1.29
 
 ### Fixes

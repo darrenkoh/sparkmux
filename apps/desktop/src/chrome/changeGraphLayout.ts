@@ -258,3 +258,100 @@ function curveBetween(
     cy: (y1 + y2) / 2 + ux * bend,
   };
 }
+
+export interface SplitDiffRow {
+  type: "meta" | "hunk" | "line";
+  metaText?: string;
+  oldLineNo?: number | null;
+  oldText?: string;
+  oldKind?: "context" | "removed" | "empty";
+  newLineNo?: number | null;
+  newText?: string;
+  newKind?: "context" | "added" | "empty";
+}
+
+export function parseSideBySideDiff(rawDiff: string): SplitDiffRow[] {
+  if (!rawDiff) return [];
+  const lines = rawDiff.split("\n");
+  const rows: SplitDiffRow[] = [];
+  let oldLine = 1;
+  let newLine = 1;
+
+  let pendingRemovals: { lineNo: number; text: string }[] = [];
+  let pendingAdditions: { lineNo: number; text: string }[] = [];
+
+  const flushPending = () => {
+    const maxLen = Math.max(pendingRemovals.length, pendingAdditions.length);
+    for (let i = 0; i < maxLen; i++) {
+      const rem = pendingRemovals[i];
+      const add = pendingAdditions[i];
+      rows.push({
+        type: "line",
+        oldLineNo: rem ? rem.lineNo : null,
+        oldText: rem ? rem.text : "",
+        oldKind: rem ? "removed" : "empty",
+        newLineNo: add ? add.lineNo : null,
+        newText: add ? add.text : "",
+        newKind: add ? "added" : "empty",
+      });
+    }
+    pendingRemovals = [];
+    pendingAdditions = [];
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      flushPending();
+      const match = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (match) {
+        oldLine = parseInt(match[1]!, 10);
+        newLine = parseInt(match[2]!, 10);
+      }
+      rows.push({
+        type: "hunk",
+        metaText: line,
+      });
+    } else if (
+      line.startsWith("diff --git") ||
+      line.startsWith("index ") ||
+      line.startsWith("---") ||
+      line.startsWith("+++")
+    ) {
+      flushPending();
+      rows.push({
+        type: "meta",
+        metaText: line,
+      });
+    } else if (line.startsWith("-")) {
+      pendingRemovals.push({
+        lineNo: oldLine++,
+        text: line.slice(1),
+      });
+    } else if (line.startsWith("+")) {
+      pendingAdditions.push({
+        lineNo: newLine++,
+        text: line.slice(1),
+      });
+    } else if (line.startsWith(" ")) {
+      flushPending();
+      rows.push({
+        type: "line",
+        oldLineNo: oldLine++,
+        oldText: line.slice(1),
+        oldKind: "context",
+        newLineNo: newLine++,
+        newText: line.slice(1),
+        newKind: "context",
+      });
+    } else if (line.trim().length > 0) {
+      flushPending();
+      rows.push({
+        type: "meta",
+        metaText: line,
+      });
+    }
+  }
+  flushPending();
+  return rows;
+}
+
