@@ -16,7 +16,7 @@ import {
   type ChronicleKeyAction,
   type ChronicleKeyState,
 } from "./chronicleKeys";
-import { type ChronicleScene, type StationLayoutInput } from "./chronicleLayout";
+import { type StationLayoutInput } from "./chronicleLayout";
 import {
   acceptHologram,
   generationFromSession,
@@ -68,7 +68,6 @@ export default function ChronicleView(props: {
   const [hologramError, setHologramError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [pollNonce, setPollNonce] = useState(0);
-  const [scene, setScene] = useState<ChronicleScene>("transit");
   const [autoRotate, setAutoRotate] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const activeRef = useRef<string | null>(null);
@@ -164,7 +163,6 @@ export default function ChronicleView(props: {
   applyRef.current = (action) => {
     if (!action.swallow) return;
     if (action.action === "scene") {
-      setScene(action.scene);
       return;
     }
     if (!session) return;
@@ -195,7 +193,6 @@ export default function ChronicleView(props: {
   useEffect(() => {
     let cancel = false;
     let token = 0;
-    // A new pane is not a slid window. Drop the previous station before the next payload.
     activeRef.current = null;
     newestRef.current = null;
     genRef.current = null;
@@ -260,7 +257,7 @@ export default function ChronicleView(props: {
   useEffect(() => {
     onKeyContext({
       onNewest: isNewestScrubStop(activeId ?? "", session?.stations ?? [], nowAvailable),
-      scene,
+      scene: "ridge",
       files: (session?.files ?? []).map((file) => ({ path: file.path, lane: file.lane })),
       stations: (session?.stations ?? []).map((station) => ({
         id: station.id,
@@ -270,7 +267,7 @@ export default function ChronicleView(props: {
       activeId: activeId ?? "",
       nowAvailable,
     });
-  }, [onKeyContext, activeId, session, scene]);
+  }, [onKeyContext, activeId, session]);
 
   const layoutStations = useMemo(() => {
     if (!session) return [];
@@ -321,8 +318,8 @@ export default function ChronicleView(props: {
 
   useEffect(() => {
     const nowPaths = session?.now.filter((entry) => entry.available).map((entry) => entry.path) ?? [];
-    handleRef.current?.setStations(layoutStations, scene, activeId ?? "", nowPaths);
-  }, [layoutStations, scene, activeId, session]);
+    handleRef.current?.setStations(layoutStations, "ridge", activeId ?? "", nowPaths);
+  }, [layoutStations, activeId, session]);
 
   useEffect(() => {
     if (!session || !activeId || stale) {
@@ -378,44 +375,12 @@ export default function ChronicleView(props: {
         ? `${activePath} · Now`
         : `${activePath} · #${activeStation?.ordinal ?? ""} · ${activeStation?.tool ?? ""} · +${activeStation?.added ?? 0} −${activeStation?.removed ?? 0}${when ? ` · ${when}` : ""}`;
 
-  const sceneButtons = (
+  const toolbarControls = (
     <>
-      <button
-        type="button"
-        className={`graph-mode-btn ${scene === "transit" ? "on" : ""}`}
-        aria-pressed={scene === "transit"}
-        title="Transit (1)"
-        onClick={() => setScene("transit")}
-      >
-        Transit (1)
-      </button>
-      <button
-        type="button"
-        className={`graph-mode-btn ${scene === "rivers" ? "on" : ""}`}
-        aria-pressed={scene === "rivers"}
-        title="Rivers (2)"
-        onClick={() => setScene("rivers")}
-      >
-        Rivers (2)
-      </button>
-      <button
-        type="button"
-        className={`graph-mode-btn ${scene === "helix" ? "on" : ""}`}
-        aria-pressed={scene === "helix"}
-        title="Helix (3)"
-        onClick={() => setScene("helix")}
-      >
-        Helix (3)
-      </button>
-      <button
-        type="button"
-        className={`graph-mode-btn ${scene === "ridge" ? "on" : ""}`}
-        aria-pressed={scene === "ridge"}
-        title="Ridge (4)"
-        onClick={() => setScene("ridge")}
-      >
-        Ridge (4)
-      </button>
+      <div className="chronicle-mode-tag">
+        <span className="tag">01</span>
+        <span>QUANTUM TOPOGRAPHY</span>
+      </div>
       <button
         type="button"
         className={`graph-mode-btn ${autoRotate ? "on" : ""}`}
@@ -423,15 +388,15 @@ export default function ChronicleView(props: {
         title="Toggle auto-rotation"
         onClick={toggleAutoRotate}
       >
-        {autoRotate ? "Auto: ON" : "Auto: OFF"}
+        {autoRotate ? "AUTO: ON" : "AUTO: OFF"}
       </button>
       <button
         type="button"
         className="graph-mode-btn"
-        title="Reset camera view"
+        title="Reset camera perspective"
         onClick={handleResetCamera}
       >
-        Reset Cam
+        RESET CAM
       </button>
     </>
   );
@@ -439,21 +404,21 @@ export default function ChronicleView(props: {
   return (
     <div className="graph-stage chronicle-view">
       {sceneSlot ? (
-        createPortal(sceneButtons, sceneSlot)
+        createPortal(toolbarControls, sceneSlot)
       ) : (
-        <div className="graph-mode-group chronicle-scene-bar" role="group" aria-label="Chronicle scene">
-          {sceneButtons}
+        <div className="graph-mode-group chronicle-scene-bar" role="group" aria-label="Chronicle Controls">
+          {toolbarControls}
         </div>
       )}
 
-      {/* 3D Canvas Host */}
+      {/* 3D Canvas Host with WebGL2 + 2D Tactical HUD */}
       <div ref={hostRef} className="chronicle-canvas-host" />
 
       {/* Top HUD Overlay Header & Viewport Hint */}
       <div className="chronicle-hud-overlay">
         <div className="chronicle-hud-badge">
           <span className="tag">CH</span>
-          <span className="hud-title">CHRONICLE // REVISION MESH</span>
+          <span className="hud-title">CHRONICLE // QUANTUM TOPOGRAPHICAL RELIEF</span>
           {session && (
             <span className="hud-metric">
               {session.stations.length} EDITS · {session.files.length} FILES
@@ -461,7 +426,7 @@ export default function ChronicleView(props: {
           )}
         </div>
         <div className="chronicle-viewport-hint">
-          DRAG · ORBIT &nbsp;&nbsp; CLICK · SELECT &nbsp;&nbsp; WHEEL/ARROWS · SCRUB &nbsp;&nbsp; 1–4 · SCENE
+          DRAG · ORBIT &nbsp;&nbsp; CLICK · SELECT &nbsp;&nbsp; WHEEL/ARROWS · SCRUB
         </div>
       </div>
 

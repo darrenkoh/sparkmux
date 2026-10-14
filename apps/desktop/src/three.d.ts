@@ -72,6 +72,26 @@ declare module "three" {
     constructor(radiusTop?: number, radiusBottom?: number, height?: number, radialSegments?: number);
   }
 
+  export class OctahedronGeometry extends BufferGeometry {
+    constructor(radius?: number, detail?: number);
+  }
+
+  export class LineBasicMaterial extends Material {
+    constructor(parameters?: {
+      color?: number;
+      transparent?: boolean;
+      opacity?: number;
+      linewidth?: number;
+    });
+    color: Color;
+  }
+
+  export class LineSegments extends Object3D {
+    constructor(geometry?: BufferGeometry, material?: Material);
+    geometry?: BufferGeometry;
+    material?: Material;
+  }
+
   export class Material {
     transparent: boolean;
     opacity: number;
@@ -86,6 +106,7 @@ declare module "three" {
       opacity?: number;
       depthWrite?: boolean;
       vertexColors?: boolean;
+      wireframe?: boolean;
     });
     color: Color;
     map: { dispose(): void } | null;
