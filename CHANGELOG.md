@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.39
+
+### Improvements
+
+- The Gits screen fills the window the same way Stats does. Canvas and Chronicle cover the viewport. Close stays on the header and Escape.
+
 ## 0.1.38
 
 ### Improvements
