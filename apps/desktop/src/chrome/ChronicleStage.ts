@@ -616,6 +616,18 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     };
   };
 
+  const camTargetLook = new Vector3();
+  const camTargetPos = new Vector3();
+  let isFraming = false;
+
+  const frameCard = (card: Station3DCard) => {
+    const aspect = camera.aspect || 1.0;
+    const dist = Math.max(2.25, 3.25 / aspect);
+    camTargetLook.set(card.baseX, card.baseY, card.baseZ);
+    camTargetPos.set(card.baseX, card.baseY + 0.04, card.baseZ + dist);
+    isFraming = true;
+  };
+
   const placeTarget = (x: number, y: number, z: number) => {
     offset.subVectors(camera.position, controls.target);
     if (offset.lengthSq() < 1e-8) {
@@ -631,11 +643,10 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     const center = cardCentroid(laidOut, realCount);
     const active = resolveActive();
     const activeCard = stationCards.find((c) => c.station.id === active?.id);
-    const activeX = activeCard ? activeCard.baseX : center.x;
-    const activeZ = activeCard ? activeCard.baseZ : center.z;
     const path = active?.path ?? (active?.id.startsWith("now:") ? active.id.slice(4) : null);
 
     if (fresh) {
+      isFraming = false;
       const off = cardCameraOffset(laidOut);
       controls.target.set(center.x, center.y, center.z);
       camera.position.set(center.x + off.x, center.y + off.y, center.z + off.z);
@@ -643,12 +654,17 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       framedPath = path;
       return;
     }
-    if (path !== framedPath || rebuilt) {
-      placeTarget(activeX, center.y, activeZ);
+    if (activeCard) {
+      frameCard(activeCard);
       framedPath = path;
       return;
     }
-    placeTarget(activeX, controls.target.y, activeZ);
+    if (path !== framedPath || rebuilt) {
+      placeTarget(center.x, center.y, center.z);
+      framedPath = path;
+      return;
+    }
+    placeTarget(center.x, controls.target.y, center.z);
   };
 
   const rebuildRidgeScene = (stations: StationLayoutInput[]) => {
@@ -759,6 +775,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   };
 
   const onPointerDown = (event: PointerEvent) => {
+    isFraming = false;
     downPos = { x: event.clientX, y: event.clientY };
     isDown = true;
     renderer.domElement.style.cursor = "grabbing";
@@ -783,11 +800,16 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     let id: string | null = null;
     if (typeof hit.object.userData.stationId === "string") id = hit.object.userData.stationId;
 
-    if (id && id !== currentActive) {
-      currentActive = id;
-      follow(false, false);
-      paintActiveNodes(id);
-      hooks.onActiveId(id);
+    if (id) {
+      if (id !== currentActive) {
+        currentActive = id;
+        follow(false, false);
+        paintActiveNodes(id);
+        hooks.onActiveId(id);
+      } else {
+        const card = stationCards.find((c) => c.station.id === id);
+        if (card) frameCard(card);
+      }
     }
   };
 
@@ -1022,7 +1044,20 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       beaconGroup.visible = false;
     }
 
-    // 4. Cosmic dust slow drift
+    // 4. Smooth camera framing transition when card is focused
+    if (isFraming) {
+      controls.target.lerp(camTargetLook, 0.12);
+      camera.position.lerp(camTargetPos, 0.12);
+      controls.update();
+      if (camera.position.distanceToSquared(camTargetPos) < 0.0005) {
+        camera.position.copy(camTargetPos);
+        controls.target.copy(camTargetLook);
+        controls.update();
+        isFraming = false;
+      }
+    }
+
+    // 5. Cosmic dust slow drift
     particles.rotation.y = now * 0.00003;
 
     if (controls.autoRotate || controls.enableDamping) controls.update();
@@ -1100,6 +1135,13 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       hudCanvas.width = hostWidth * pixelRatio;
       hudCanvas.height = hostHeight * pixelRatio;
       if (hud) hud.scale(pixelRatio, pixelRatio);
+
+      // Adapt framing when left panel dimensions change so active card keeps filling the space
+      const active = resolveActive();
+      const activeCard = stationCards.find((c) => c.station.id === active?.id);
+      if (activeCard && !isDown) {
+        frameCard(activeCard);
+      }
     },
     setAutoRotate(enabled) {
       controls.autoRotate = enabled;

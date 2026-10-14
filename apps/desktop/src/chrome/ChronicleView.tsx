@@ -70,6 +70,7 @@ export default function ChronicleView(props: {
   const [pollNonce, setPollNonce] = useState(0);
   const [autoRotate, setAutoRotate] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [dockMinimized, setDockMinimized] = useState(false);
   const activeRef = useRef<string | null>(null);
   const newestRef = useRef<string | null>(null);
   const genRef = useRef<ChronicleGeneration | null>(null);
@@ -382,12 +383,25 @@ export default function ChronicleView(props: {
         ? `${activePath} · Now`
         : `${activePath} · #${activeStation?.ordinal ?? ""} · ${activeStation?.tool ?? ""} · +${activeStation?.added ?? 0} −${activeStation?.removed ?? 0}${when ? ` · ${when}` : ""}`;
 
+  const isDockOpen = !dockMinimized && Boolean(activeId && activePath);
+
   const toolbarControls = (
     <>
       <div className="chronicle-mode-tag">
         <span className="tag">01</span>
-        <span>QUANTUM TOPOGRAPHY</span>
+        <span>REVISION DECK</span>
       </div>
+      {activeId && activePath && (
+        <button
+          type="button"
+          className={`graph-mode-btn ${isDockOpen ? "on" : ""}`}
+          aria-pressed={isDockOpen}
+          title="Toggle right diff dock"
+          onClick={() => setDockMinimized(!dockMinimized)}
+        >
+          {isDockOpen ? "DIFF DOCK: ON" : "DIFF DOCK: OFF"}
+        </button>
+      )}
       <button
         type="button"
         className={`graph-mode-btn ${autoRotate ? "on" : ""}`}
@@ -409,7 +423,7 @@ export default function ChronicleView(props: {
   );
 
   return (
-    <div className="graph-stage chronicle-view">
+    <div className={`graph-stage chronicle-view ${isDockOpen ? "has-docked-diff" : ""}`}>
       {sceneSlot ? (
         createPortal(toolbarControls, sceneSlot)
       ) : (
@@ -418,24 +432,26 @@ export default function ChronicleView(props: {
         </div>
       )}
 
-      {/* 3D Canvas Host with WebGL2 + 2D Tactical HUD */}
-      <div ref={hostRef} className="chronicle-canvas-host" />
+      {/* Left Stage Area: 3D Canvas, HUD Overlay, Status, Bottombar */}
+      <div className="chronicle-stage-area">
+        {/* 3D Canvas Host with WebGL2 + 2D Tactical HUD */}
+        <div ref={hostRef} className="chronicle-canvas-host" />
 
-      {/* Top HUD Overlay Header & Viewport Hint */}
-      <div className="chronicle-hud-overlay">
-        <div className="chronicle-hud-badge">
-          <span className="tag">CH</span>
-          <span className="hud-title">CHRONICLE // QUANTUM TOPOGRAPHICAL RELIEF</span>
-          {session && (
-            <span className="hud-metric">
-              {session.stations.length} EDITS · {session.files.length} FILES
-            </span>
-          )}
+        {/* Top HUD Overlay Header & Viewport Hint */}
+        <div className="chronicle-hud-overlay">
+          <div className="chronicle-hud-badge">
+            <span className="tag">CH</span>
+            <span className="hud-title">CHRONICLE // 3D REVISION DECK</span>
+            {session && (
+              <span className="hud-metric">
+                {session.stations.length} EDITS · {session.files.length} FILES
+              </span>
+            )}
+          </div>
+          <div className="chronicle-viewport-hint">
+            CLICK CARD TO FILL LEFT · DRAG TO ORBIT · WHEEL TO SCROLL CODE
+          </div>
         </div>
-        <div className="chronicle-viewport-hint">
-          DRAG · ORBIT &nbsp;&nbsp; CLICK · SELECT &nbsp;&nbsp; WHEEL/ARROWS · SCRUB
-        </div>
-      </div>
 
       {/* Status Notifications */}
       <div className="chronicle-status">
@@ -566,10 +582,19 @@ export default function ChronicleView(props: {
           )}
         </div>
       </div>
+      </div>
 
-      {/* Hologram Inspector Panel */}
+      {/* Right-Docked Diff & Snapshot Inspector */}
       {activeId && activePath && (
-        <ChronicleHologramPanel title={panelTitle} banners={banners} tab={tab} onTab={setTab} text={text} />
+        <ChronicleHologramPanel
+          title={panelTitle}
+          banners={banners}
+          tab={tab}
+          onTab={setTab}
+          text={text}
+          minimized={dockMinimized}
+          onToggleMinimize={() => setDockMinimized(!dockMinimized)}
+        />
       )}
     </div>
   );

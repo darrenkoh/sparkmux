@@ -18,6 +18,8 @@ declare module "three" {
     copy(v: Vector3): this;
     add(v: Vector3): this;
     subVectors(a: Vector3, b: Vector3): this;
+    lerp(v: Vector3, alpha: number): this;
+    distanceToSquared(v: Vector3): number;
     lengthSq(): number;
     project(camera: Camera): this;
   }

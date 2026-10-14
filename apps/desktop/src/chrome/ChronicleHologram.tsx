@@ -39,9 +39,17 @@ export default function ChronicleHologram(props: {
   tab: "file" | "diff";
   onTab: (tab: "file" | "diff") => void;
   text: string;
+  minimized?: boolean;
+  onToggleMinimize?: () => void;
 }) {
-  const [minimized, setMinimized] = useState(false);
+  const [internalMinimized, setInternalMinimized] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const isMinimized = props.minimized !== undefined ? props.minimized : internalMinimized;
+  const toggleMin = () => {
+    if (props.onToggleMinimize) props.onToggleMinimize();
+    else setInternalMinimized(!internalMinimized);
+  };
 
   const handleCopy = () => {
     if (!props.text) return;
@@ -56,13 +64,13 @@ export default function ChronicleHologram(props: {
     return props.text.split("\n");
   }, [props.text]);
 
-  if (minimized) {
+  if (isMinimized) {
     return (
       <aside className="chronicle-hologram-minimized" aria-live="polite">
         <button
           type="button"
           className="chronicle-hologram-min-pill"
-          onClick={() => setMinimized(false)}
+          onClick={toggleMin}
           title="Expand right diff dock"
         >
           <span className="tag">DIFF DOCK</span>
@@ -92,7 +100,7 @@ export default function ChronicleHologram(props: {
           <button
             type="button"
             className="chronicle-btn-icon"
-            onClick={() => setMinimized(true)}
+            onClick={toggleMin}
             title="Collapse dock to right"
             aria-label="Collapse dock to right"
           >
