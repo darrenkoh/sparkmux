@@ -195,13 +195,6 @@ enum Fidelity {
     Binary,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IdHit {
-    Unknown,
-    Ok,
-    Error,
-}
-
 #[derive(Clone, Debug)]
 struct Hunk {
     old: String,
@@ -221,7 +214,7 @@ struct Call {
     time_source: TimeSource,
     outcome: Outcome,
     tool_id: Option<String>,
-    id_hit: Option<IdHit>,
+    id_hit: Option<Outcome>,
 }
 
 #[derive(Clone, Debug)]
@@ -404,7 +397,6 @@ fn build_chronicle_session(command: &str, cwd: &str, title: &str, pid: u32) -> C
 }
 
 fn load_for_pane(command: &str, cwd: &str, title: &str, pid: u32) -> Loaded {
-    let started = Instant::now();
     let roots = artifacts::default_roots();
     let family = artifacts::pane_family(pid);
     let Some(kind) = artifacts::detect_cli(command, title, &family) else {
@@ -413,28 +405,7 @@ fn load_for_pane(command: &str, cwd: &str, title: &str, pid: u32) -> Loaded {
     let Some(path) = artifacts::select_transcript(kind, cwd, title, &family, &roots) else {
         return Loaded::empty(Some(kind));
     };
-    let loaded = load_path(kind, &path, Path::new(cwd));
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    tracing::debug!(
-        target: "chronicle",
-        stations = loaded.session.stations.len(),
-        omitted = loaded.session.omitted,
-        truncated_tail = loaded.session.truncated_tail,
-        exact = 0,
-        patch = 0,
-        elapsed_ms,
-    );
-    if loaded.session.truncated_tail {
-        tracing::warn!(target: "chronicle", "truncated_tail");
-    }
-    if loaded.session.files.iter().any(|file| file.outside) {
-        tracing::warn!(
-            target: "chronicle",
-            reason = "outside the pane directory",
-            "worktree read refused"
-        );
-    }
-    loaded
+    load_path(kind, &path, Path::new(cwd))
 }
 
 impl Loaded {
@@ -462,12 +433,73 @@ impl Loaded {
     }
 }
 
+fn trace_load(loaded: &Loaded, elapsed_ms: u64) {
+    let visible: HashSet<&str> = loaded
+        .session
+        .stations
+        .iter()
+        .map(|station| station.id.as_str())
+        .collect();
+    let mut exact = 0u64;
+    let mut patch = 0u64;
+    let mut seen: HashSet<&str> = HashSet::new();
+    for station in &loaded.session.stations {
+        if !seen.insert(station.path.as_str()) {
+            continue;
+        }
+        let path = station.path.as_str();
+        let now = now_text(loaded, path);
+        let ops = path_ops(loaded, path);
+        let revs = rebuild(&ops, now);
+        for (op, rev) in ops.iter().zip(revs.iter()) {
+            if !visible.contains(op.id.as_str()) {
+                continue;
+            }
+            match rev.fidelity {
+                Fidelity::Exact => exact += 1,
+                Fidelity::Patch => patch += 1,
+                _ => {}
+            }
+        }
+        for draft in loaded.ops.iter().filter(|draft| {
+            draft.path == path
+                && draft.kind == Kind::Notebook
+                && visible.contains(draft.id.as_str())
+        }) {
+            match notebook_rev(draft, now).fidelity {
+                Fidelity::Exact => exact += 1,
+                Fidelity::Patch => patch += 1,
+                _ => {}
+            }
+        }
+    }
+    tracing::debug!(
+        target: "chronicle",
+        stations = loaded.session.stations.len(),
+        omitted = loaded.session.omitted,
+        truncated_tail = loaded.session.truncated_tail,
+        exact,
+        patch,
+        elapsed_ms,
+    );
+    if loaded.session.truncated_tail {
+        tracing::warn!(target: "chronicle", "truncated_tail");
+    }
+    if loaded.session.files.iter().any(|file| file.outside) {
+        tracing::warn!(
+            target: "chronicle",
+            reason = "outside the pane directory",
+            "worktree read refused"
+        );
+    }
+}
+
 fn load_path(kind: CliKind, transcript: &Path, cwd: &Path) -> Loaded {
     let started = Instant::now();
     let primary = artifacts::jailed_sibling(transcript, "transcript_full.jsonl")
         .unwrap_or_else(|| transcript.to_path_buf());
     let primary = primary.canonicalize().unwrap_or(primary);
-    let tail = read_tail_lines(&primary, MAX_TRANSCRIPT);
+    let tail = read_tail_lines(&primary, MAX_TRANSCRIPT, Some(MAX_LINE));
     let events_path = artifacts::jailed_sibling(&primary, "events.jsonl");
     let events_mtime_ms = events_path.as_ref().and_then(|path| symlink_mtime_ms(path));
     let events = events_path
@@ -485,16 +517,7 @@ fn load_path(kind: CliKind, transcript: &Path, cwd: &Path) -> Loaded {
         cwd_canon.as_deref(),
     );
     let loaded = assemble(kind, ops, &tail, &primary, events_mtime_ms);
-    let elapsed_ms = started.elapsed().as_millis() as u64;
-    tracing::debug!(
-        target: "chronicle",
-        stations = loaded.session.stations.len(),
-        omitted = loaded.session.omitted,
-        truncated_tail = loaded.session.truncated_tail,
-        exact = 0,
-        patch = 0,
-        elapsed_ms,
-    );
+    trace_load(&loaded, started.elapsed().as_millis() as u64);
     loaded
 }
 
@@ -506,18 +529,7 @@ fn assemble(
     events_mtime_ms: Option<i64>,
 ) -> Loaded {
     let (visible, omitted) = select_window(&ops);
-    let mut rank: HashMap<String, (usize, u32)> = HashMap::new();
-    for (pos, index) in visible.iter().enumerate() {
-        let path = ops[*index].path.clone();
-        let entry = rank.entry(path).or_insert((pos, 0));
-        entry.0 = pos;
-        entry.1 = entry.1.saturating_add(1);
-    }
-    let mut paths: Vec<(String, usize, u32)> = rank
-        .into_iter()
-        .map(|(path, (pos, edits))| (path, pos, edits))
-        .collect();
-    paths.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
+    let paths = rank_paths(&ops, &visible);
     let lane_of: HashMap<String, u32> = paths
         .iter()
         .enumerate()
@@ -592,18 +604,6 @@ fn assemble(
         });
     }
 
-    let outside = files.iter().any(|file| file.outside);
-    if tail.truncated_tail {
-        tracing::warn!(target: "chronicle", "truncated_tail");
-    }
-    if outside {
-        tracing::warn!(
-            target: "chronicle",
-            reason = "outside the pane directory",
-            "worktree read refused"
-        );
-    }
-
     Loaded {
         session: ChronicleSession {
             cli: Some(kind.as_str().to_string()),
@@ -634,18 +634,7 @@ fn select_window(drafts: &[Draft]) -> (Vec<usize>, u32) {
         idxs.drain(0..drop_n);
         omitted = omitted.saturating_add(drop_n as u32);
     }
-    let mut rank: HashMap<String, (usize, u32)> = HashMap::new();
-    for (pos, index) in idxs.iter().enumerate() {
-        let path = drafts[*index].path.clone();
-        let entry = rank.entry(path).or_insert((pos, 0));
-        entry.0 = pos;
-        entry.1 = entry.1.saturating_add(1);
-    }
-    let mut paths: Vec<(String, usize, u32)> = rank
-        .into_iter()
-        .map(|(path, (pos, edits))| (path, pos, edits))
-        .collect();
-    paths.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
+    let paths = rank_paths(drafts, &idxs);
     if paths.len() > MAX_LANES {
         let keep: HashSet<String> = paths
             .iter()
@@ -659,7 +648,23 @@ fn select_window(drafts: &[Draft]) -> (Vec<usize>, u32) {
     (idxs, omitted)
 }
 
-fn read_tail_lines(path: &Path, max: u64) -> Tail {
+fn rank_paths(drafts: &[Draft], idxs: &[usize]) -> Vec<(String, usize, u32)> {
+    let mut rank: HashMap<String, (usize, u32)> = HashMap::new();
+    for (pos, index) in idxs.iter().enumerate() {
+        let path = drafts[*index].path.clone();
+        let entry = rank.entry(path).or_insert((pos, 0));
+        entry.0 = pos;
+        entry.1 = entry.1.saturating_add(1);
+    }
+    let mut paths: Vec<(String, usize, u32)> = rank
+        .into_iter()
+        .map(|(path, (pos, edits))| (path, pos, edits))
+        .collect();
+    paths.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
+    paths
+}
+
+fn read_tail_lines(path: &Path, max: u64, line_cap: Option<usize>) -> Tail {
     let Ok(mut file) = File::open(path) else {
         return Tail::empty();
     };
@@ -713,7 +718,7 @@ fn read_tail_lines(path: &Path, max: u64) -> Tail {
             None => (rest, kept.len()),
         };
         let offset = first + pos as u64;
-        if line.len() > MAX_LINE {
+        if line_cap.is_some_and(|cap| line.len() > cap) {
             truncated_tail = true;
         } else if !line.is_empty() {
             lines.push((offset, line.to_vec()));
@@ -787,7 +792,7 @@ fn maybe_merge_truncated(kind: CliKind, primary: &Path, records: &mut [(u64, Val
             };
             full
         };
-    let tail = read_tail_lines(&source, MAX_FULL_MERGE);
+    let tail = read_tail_lines(&source, MAX_FULL_MERGE, None);
     let mut full_steps = HashMap::new();
     for (_, line) in &tail.lines {
         let text = String::from_utf8_lossy(line);
@@ -857,7 +862,7 @@ fn cap_merged(value: &Value) -> Value {
 }
 
 fn read_events(path: &Path) -> Events {
-    let tail = read_tail_lines(path, MAX_EVENTS);
+    let tail = read_tail_lines(path, MAX_EVENTS, Some(MAX_LINE));
     let mut started = Vec::new();
     let mut completed = Vec::new();
     for (_, line) in tail.lines {
@@ -901,7 +906,7 @@ fn stations_from_records(
 ) -> Vec<Draft> {
     let mut calls = Vec::new();
     let mut agy_queue = VecDeque::new();
-    let mut grok_hits: HashMap<String, IdHit> = HashMap::new();
+    let mut grok_hits: HashMap<String, Outcome> = HashMap::new();
     let mut claude_hits: HashMap<String, Outcome> = HashMap::new();
     for (offset, value) in records {
         let Some(obj) = value.as_object() else {
@@ -962,7 +967,7 @@ fn walk_grok(
     obj: &Map<String, Value>,
     offset: u64,
     calls: &mut Vec<Call>,
-    hits: &mut HashMap<String, IdHit>,
+    hits: &mut HashMap<String, Outcome>,
 ) {
     let record = obj.get("type").and_then(Value::as_str).unwrap_or("");
     if record == "tool_result" {
@@ -1093,29 +1098,29 @@ fn push_call(calls: &mut Vec<Call>, offset: u64, call_index: u32, call: &Value, 
     });
 }
 
-fn grok_hit(obj: &Map<String, Value>) -> IdHit {
+fn grok_hit(obj: &Map<String, Value>) -> Outcome {
     if obj.get("is_error").and_then(Value::as_bool) == Some(true) {
-        return IdHit::Error;
+        return Outcome::Error;
     }
     match obj.get("error") {
-        Some(Value::String(text)) if !text.trim().is_empty() => return IdHit::Error,
-        Some(Value::Bool(true)) => return IdHit::Error,
-        Some(Value::Object(_)) => return IdHit::Error,
+        Some(Value::String(text)) if !text.trim().is_empty() => return Outcome::Error,
+        Some(Value::Bool(true)) => return Outcome::Error,
+        Some(Value::Object(_)) => return Outcome::Error,
         _ => {}
     }
     if let Some(outcome) = obj.get("outcome").and_then(Value::as_str) {
         if outcome == "success" {
-            return IdHit::Ok;
+            return Outcome::Ok;
         }
         if !outcome.is_empty() {
-            return IdHit::Error;
+            return Outcome::Error;
         }
     }
-    IdHit::Unknown
+    Outcome::Unknown
 }
 
-fn merge_grok(hit: Option<IdHit>, zip: Option<Outcome>) -> Outcome {
-    let id_err = matches!(hit, Some(IdHit::Error));
+fn merge_grok(hit: Option<Outcome>, zip: Option<Outcome>) -> Outcome {
+    let id_err = matches!(hit, Some(Outcome::Error));
     let zip_err = matches!(zip, Some(Outcome::Error));
     if id_err || zip_err {
         Outcome::Error
@@ -1193,6 +1198,7 @@ fn expand_write(
     let body = str_of(map, WRITE_KEYS);
     let resolved = resolve_cached(&raw, cwd_canon, cache);
     let preview = one_line(&first_line(&body));
+    let display = format_write(&body);
     vec![draft_from(
         call,
         &resolved,
@@ -1203,7 +1209,7 @@ fn expand_write(
         Vec::new(),
         Some(body.into_bytes()),
         None,
-        String::new(),
+        display,
     )]
 }
 
@@ -1761,25 +1767,34 @@ fn walk_patch_body(body: &str) -> Walked {
     let mut failed = false;
     let mut added_line = None;
     let mut have = false;
+    let mut omit_old = false;
+    let mut omit_new = false;
+    let mut saw_marker = false;
+    let mut marked: Option<Marked> = None;
     let flush = |hunks: &mut Vec<Hunk>,
                  needle: &mut Vec<String>,
                  replacement: &mut Vec<String>,
                  hint: usize,
-                 have: &mut bool| {
-        if !*have {
-            needle.clear();
-            replacement.clear();
-            return;
+                 have: &mut bool,
+                 omit_old: &mut bool,
+                 omit_new: &mut bool,
+                 saw_marker: &mut bool,
+                 marked: &mut Option<Marked>| {
+        if *have {
+            hunks.push(Hunk {
+                old: join_hunk_side(needle, *omit_old, *saw_marker),
+                new: join_hunk_side(replacement, *omit_new, *saw_marker),
+                replace_all: false,
+                hint,
+            });
         }
-        hunks.push(Hunk {
-            old: needle.join("\n"),
-            new: replacement.join("\n"),
-            replace_all: false,
-            hint,
-        });
         needle.clear();
         replacement.clear();
         *have = false;
+        *omit_old = false;
+        *omit_new = false;
+        *saw_marker = false;
+        *marked = None;
     };
     if body.is_empty() {
         return Walked {
@@ -1796,13 +1811,33 @@ fn walk_patch_body(body: &str) -> Walked {
     }
     for line in lines {
         if is_hunk_header(line) {
-            flush(&mut hunks, &mut needle, &mut replacement, hint, &mut have);
+            flush(
+                &mut hunks,
+                &mut needle,
+                &mut replacement,
+                hint,
+                &mut have,
+                &mut omit_old,
+                &mut omit_new,
+                &mut saw_marker,
+                &mut marked,
+            );
             if line.starts_with("@@") {
                 hint = at_hint(line);
             }
             continue;
         }
         if line == "\\ No newline at end of file" {
+            saw_marker = true;
+            match marked {
+                Some(Marked::Old) => omit_old = true,
+                Some(Marked::New) => omit_new = true,
+                Some(Marked::Both) => {
+                    omit_old = true;
+                    omit_new = true;
+                }
+                None => {}
+            }
             continue;
         }
         let bytes = line.as_bytes();
@@ -1816,6 +1851,7 @@ fn walk_patch_body(body: &str) -> Walked {
                 needle.push(rest.to_string());
                 replacement.push(rest.to_string());
                 have = true;
+                marked = Some(Marked::Both);
             }
             b'+' => {
                 replacement.push(rest.to_string());
@@ -1824,16 +1860,28 @@ fn walk_patch_body(body: &str) -> Walked {
                     added_line = Some(rest.to_string());
                 }
                 have = true;
+                marked = Some(Marked::New);
             }
             b'-' => {
                 needle.push(rest.to_string());
                 removed = removed.saturating_add(1);
                 have = true;
+                marked = Some(Marked::Old);
             }
             _ => failed = true,
         }
     }
-    flush(&mut hunks, &mut needle, &mut replacement, hint, &mut have);
+    flush(
+        &mut hunks,
+        &mut needle,
+        &mut replacement,
+        hint,
+        &mut have,
+        &mut omit_old,
+        &mut omit_new,
+        &mut saw_marker,
+        &mut marked,
+    );
     Walked {
         hunks,
         added,
@@ -1841,6 +1889,21 @@ fn walk_patch_body(body: &str) -> Walked {
         failed,
         added_line,
     }
+}
+
+#[derive(Clone, Copy)]
+enum Marked {
+    Old,
+    New,
+    Both,
+}
+
+fn join_hunk_side(lines: &[String], omit_nl: bool, saw_marker: bool) -> String {
+    let mut text = lines.join("\n");
+    if saw_marker && !omit_nl && !text.is_empty() {
+        text.push('\n');
+    }
+    text
 }
 
 fn is_hunk_header(line: &str) -> bool {
@@ -2271,6 +2334,18 @@ fn now_text<'a>(loaded: &'a Loaded, path: &str) -> Option<&'a str> {
 }
 
 fn notebook_rev(draft: &Draft, now_text: Option<&str>) -> Rev {
+    if draft.outcome == Outcome::Error {
+        return match now_text {
+            Some(text) => Rev {
+                fidelity: Fidelity::Exact,
+                reason: Some("tool reported failure".to_string()),
+                before: Some(text.to_string()),
+                after: Some(text.to_string()),
+                diff_kind: "hunk",
+            },
+            None => patch_rev("tool reported failure"),
+        };
+    }
     let Some(now_text) = now_text else {
         return patch_rev("notebook cell only");
     };
@@ -2307,7 +2382,8 @@ fn rebuild(ops: &[&Draft], now_text: Option<&str>) -> Vec<Rev> {
             continue;
         }
         if op.outcome == Outcome::Error {
-            if let Some(prev) = state.clone() {
+            if let Some(prev) = state.as_deref() {
+                let prev = prev.to_string();
                 rev[index] = Rev {
                     fidelity: Fidelity::Exact,
                     reason: Some("tool reported failure".to_string()),
@@ -2321,11 +2397,11 @@ fn rebuild(ops: &[&Draft], now_text: Option<&str>) -> Vec<Rev> {
             continue;
         }
         if op.kind == Kind::Delete {
-            if let Some(prev) = state.clone() {
+            if let Some(prev) = state.as_deref() {
                 rev[index] = Rev {
                     fidelity: Fidelity::Deleted,
                     reason: None,
-                    before: Some(prev),
+                    before: Some(prev.to_string()),
                     after: Some(String::new()),
                     diff_kind: "session",
                 };
@@ -2366,14 +2442,14 @@ fn rebuild(ops: &[&Draft], now_text: Option<&str>) -> Vec<Rev> {
             rev[index] = patch_rev(reason);
             continue;
         }
-        if let Some(current) = state.clone() {
-            match apply_op(op, &current) {
+        if let Some(current) = state.as_deref() {
+            match apply_op(op, current) {
                 Ok((next, partial)) => {
                     if let Some(reason) = partial {
                         rev[index] = Rev {
                             fidelity: Fidelity::Partial,
                             reason: Some(reason),
-                            before: Some(current),
+                            before: Some(current.to_string()),
                             after: Some(next.clone()),
                             diff_kind: "session",
                         };
@@ -2381,7 +2457,7 @@ fn rebuild(ops: &[&Draft], now_text: Option<&str>) -> Vec<Rev> {
                         rev[index] = Rev {
                             fidelity: Fidelity::Exact,
                             reason: None,
-                            before: Some(current),
+                            before: Some(current.to_string()),
                             after: Some(next.clone()),
                             diff_kind: "session",
                         };
@@ -2409,14 +2485,14 @@ fn rebuild(ops: &[&Draft], now_text: Option<&str>) -> Vec<Rev> {
             }
             Fidelity::Binary => {}
             Fidelity::Patch => {
-                if let Some(current) = cursor.clone() {
-                    match invert_op(ops[index], &current) {
+                if let Some(current) = cursor.as_deref() {
+                    match invert_op(ops[index], current) {
                         Ok(prev) => {
                             rev[index] = Rev {
                                 fidelity: Fidelity::Exact,
                                 reason: None,
                                 before: Some(prev.clone()),
-                                after: Some(current),
+                                after: Some(current.to_string()),
                                 diff_kind: "session",
                             };
                             cursor = Some(prev);
@@ -2582,6 +2658,9 @@ fn invert_all(text: &str, old: &str, new: &str) -> Result<String, String> {
         return Err("empty new_string".to_string());
     }
     let back = find_all(text, new);
+    if back.is_empty() {
+        return Err("new_string not in file".to_string());
+    }
     let prev = replace_spans(text, &back, new.len(), old);
     let forward = find_all(&prev, old);
     if back.len() != forward.len() {
@@ -2919,10 +2998,18 @@ fn ses<'a>(left: &'a [&str], right: &'a [&str]) -> Option<Vec<Change<'a>>> {
 fn diff_counts(diff: &str) -> (u64, u64) {
     let mut added = 0u64;
     let mut removed = 0u64;
+    let mut in_hunk = false;
     for line in diff.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
+        if line.starts_with("@@") {
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+        if line.starts_with('+') {
             added += 1;
-        } else if line.starts_with('-') && !line.starts_with("---") {
+        } else if line.starts_with('-') {
             removed += 1;
         }
     }
@@ -3029,6 +3116,16 @@ fn added_preview(text: &str) -> String {
     first_nonempty(text)
         .map(|line| plus_preview(&line))
         .unwrap_or_default()
+}
+
+fn format_write(body: &str) -> String {
+    let mut out = String::new();
+    for line in split_lines(body) {
+        out.push('+');
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 fn format_replace(old: &str, new: &str) -> String {
@@ -4078,5 +4175,192 @@ mod tests {
         assert!(panel.diff_text.contains("-AAA"), "{}", panel.diff_text);
         assert!(panel.diff_text.contains("+CCC"), "{}", panel.diff_text);
         assert!(!panel.diff_text.contains("-0,0"), "{}", panel.diff_text);
+    }
+
+    #[test]
+    fn no_newline_marker_follows_one_side() {
+        let old_marked = scratch("nnold");
+        put(&old_marked, "src/a.rs", b"world\n");
+        let patch = [
+            "*** Update File: src/a.rs",
+            "@@",
+            "-hello",
+            "\\ No newline at end of file",
+            "+world",
+        ]
+        .join("\n");
+        let loaded = load_grok(
+            &old_marked,
+            &ndjson(&[
+                grok_calls(serde_json::json!([write_call("src/a.rs", "hello")])),
+                grok_calls(serde_json::json!([{
+                    "name": "apply_patch",
+                    "arguments": {"patch": patch}
+                }])),
+            ]),
+        );
+        let panel = holo(&loaded, 1);
+        assert_eq!(panel.fidelity, "exact");
+        assert_eq!(panel.file_text.as_deref(), Some("world\n"));
+
+        let new_marked = scratch("nnnew");
+        put(&new_marked, "src/a.rs", b"world");
+        let patch = [
+            "*** Update File: src/a.rs",
+            "@@",
+            "-hello",
+            "+world",
+            "\\ No newline at end of file",
+        ]
+        .join("\n");
+        let loaded = load_grok(
+            &new_marked,
+            &ndjson(&[
+                grok_calls(serde_json::json!([write_call("src/a.rs", "hello\n")])),
+                grok_calls(serde_json::json!([{
+                    "name": "apply_patch",
+                    "arguments": {"patch": patch}
+                }])),
+            ]),
+        );
+        let panel = holo(&loaded, 1);
+        assert_eq!(panel.fidelity, "exact");
+        assert_eq!(panel.file_text.as_deref(), Some("world"));
+    }
+
+    #[test]
+    fn notebook_error_is_not_applied() {
+        let dir = scratch("nerr");
+        put(&dir, "n.ipynb", b"CELL");
+        let assistant = claude_msg(
+            "2026-10-10T08:00:00.000Z",
+            serde_json::json!([
+                {"type":"tool_use","id":"bad","name":"notebook_edit","input":{
+                    "notebook_path":"n.ipynb","old_string":"CELL","new_string":"REJECTED"
+                }}
+            ]),
+        );
+        let user = serde_json::json!({
+            "type": "user",
+            "message": {"content": [
+                {"type":"tool_result","tool_use_id":"bad","is_error":true,"content":"fail"}
+            ]}
+        })
+        .to_string();
+        let loaded = load_in(CliKind::Claude, &dir, &ndjson(&[assistant, user]));
+        assert_eq!(loaded.session.stations[0].outcome, "error");
+        let panel = holo(&loaded, 0);
+        assert_eq!(panel.fidelity, "exact");
+        assert_eq!(panel.file_text.as_deref(), Some("CELL"));
+        assert_eq!(panel.diff_kind, "hunk");
+        assert_eq!(panel.reason.as_deref(), Some("tool reported failure"));
+        assert!(panel.diff_text.contains("+REJECTED"), "{}", panel.diff_text);
+        assert!(!panel.file_text.as_deref().unwrap().contains("REJECTED"));
+    }
+
+    #[test]
+    fn error_write_hunk_shows_rejected_body() {
+        let dir = scratch("werr");
+        let assistant = claude_msg(
+            "2026-10-10T08:00:00.000Z",
+            serde_json::json!([
+                {"type":"tool_use","id":"ok","name":"write","input":{"file_path":"a.rs","content":"AAA"}},
+                {"type":"tool_use","id":"bad","name":"write","input":{"file_path":"a.rs","content":"REJECTED\nBODY"}}
+            ]),
+        );
+        let user = serde_json::json!({
+            "type": "user",
+            "message": {"content": [
+                {"type":"tool_result","tool_use_id":"bad","is_error":true,"content":"fail"}
+            ]}
+        })
+        .to_string();
+        let loaded = load_in(CliKind::Claude, &dir, &ndjson(&[assistant, user]));
+        let panel = holo(&loaded, 1);
+        assert_eq!(panel.fidelity, "exact");
+        assert_eq!(panel.file_text.as_deref(), Some("AAA"));
+        assert_eq!(panel.diff_kind, "hunk");
+        assert_eq!(panel.reason.as_deref(), Some("tool reported failure"));
+        assert!(panel.diff_text.contains("+REJECTED"), "{}", panel.diff_text);
+        assert!(panel.diff_text.contains("+BODY"), "{}", panel.diff_text);
+    }
+
+    #[test]
+    fn now_diff_counts_header_shaped_body_lines() {
+        let dir = scratch("dcount");
+        put(&dir, "src/a.rs", b"++x");
+        put(&dir, "src/b.rs", b"a");
+        let body = ndjson(&[
+            grok_calls(serde_json::json!([write_call("src/a.rs", "a")])),
+            grok_calls(serde_json::json!([write_call("src/b.rs", "--x")])),
+        ]);
+        let loaded = load_grok(&dir, &body);
+        let added = hologram_for(&loaded, "now:src/a.rs").unwrap();
+        assert_eq!(added.added, 1, "{}", added.diff_text);
+        assert_eq!(added.removed, 1, "{}", added.diff_text);
+        assert!(added.diff_text.contains("+++x"), "{}", added.diff_text);
+        let removed = hologram_for(&loaded, "now:src/b.rs").unwrap();
+        assert_eq!(removed.removed, 1, "{}", removed.diff_text);
+        assert_eq!(removed.added, 1, "{}", removed.diff_text);
+        assert!(removed.diff_text.contains("---x"), "{}", removed.diff_text);
+    }
+
+    #[test]
+    fn replace_all_missing_new_string_stays_patch() {
+        let dir = scratch("allmiss");
+        put(&dir, "src/a.rs", b"zzz");
+        let loaded = load_grok(
+            &dir,
+            &grok_calls(serde_json::json!([{
+                "name": "search_replace",
+                "arguments": {
+                    "file_path": "src/a.rs",
+                    "old_string": "foo",
+                    "new_string": "bar",
+                    "replace_all": true
+                }
+            }])),
+        );
+        let panel = holo(&loaded, 0);
+        assert_eq!(panel.fidelity, "patch");
+        assert!(panel.file_text.is_none());
+    }
+
+    #[test]
+    fn full_step_over_one_mib_replaces_truncated_tool_calls() {
+        let dir = scratch("fullstep");
+        let short = serde_json::json!({
+            "step_index": 7,
+            "type": "PLANNER_RESPONSE",
+            "truncated_fields": ["tool_calls"],
+            "tool_calls": [{
+                "name": "write",
+                "args": {"file_path": "src/a.rs", "content": "SHORT"}
+            }]
+        })
+        .to_string();
+        let long = serde_json::json!({
+            "step_index": 7,
+            "type": "PLANNER_RESPONSE",
+            "tool_calls": [{
+                "name": "write",
+                "args": {"file_path": "src/a.rs", "content": "LONGBODY"}
+            }],
+            "pad": "x".repeat(MAX_LINE)
+        })
+        .to_string();
+        assert!(long.len() > MAX_LINE);
+        let transcript = dir.join("session.jsonl");
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        std::fs::write(
+            dir.join("transcript_full.jsonl"),
+            format!("{short}\n{long}\n"),
+        )
+        .unwrap();
+        let loaded = load_path(CliKind::Antigravity, &transcript, &dir);
+        assert!(loaded.session.truncated_tail);
+        assert_eq!(loaded.session.stations.len(), 1);
+        let panel = holo(&loaded, 0);
+        assert_eq!(panel.file_text.as_deref(), Some("LONGBODY"));
     }
 }
