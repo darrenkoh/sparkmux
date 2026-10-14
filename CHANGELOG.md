@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.41
+
+### Improvements
+
+- The Gits header wraps onto extra rows instead of scrolling sideways.
+- Canvas layout modes are a dropdown: Grid, Pipeline, Modules, Impact, and Radial.
+
 ## 0.1.40
 
 ### Bug Fixes
