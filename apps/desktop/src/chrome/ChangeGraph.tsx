@@ -893,24 +893,9 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
         aria-label={view === "chronicle" ? "Gits Chronicle" : "File Change Card Chain Graph"}
       >
         {/* 1. TOP HEADER & FILTER TOOLBAR */}
-        <div
-          style={{
-            flex: "0 0 46px",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-            background: "#080b11",
-            borderBottom: "1px solid rgba(45, 212, 191, 0.18)",
-            padding: "0 14px",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: "11px",
-            zIndex: 10,
-            flexWrap: "nowrap",
-            overflowX: "auto",
-          }}
-        >
+        <div className="gits-toolbar">
           {/* Logo / Badge */}
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold", color: "#2dd4bf", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold", color: "#2dd4bf" }}>
             <span style={{ fontSize: "14px" }}>⬡</span>
             <span style={{ letterSpacing: "0.14em" }}>
               {view === "chronicle" ? "GITS · CHRONICLE" : "GITS · CHAIN GRAPH"}
@@ -919,7 +904,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
 
           {/* Repo Cluster Filter Tabs */}
           {view === "canvas" && (
-          <div style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "12px", flexShrink: 0 }}>
+          <div className="gits-clusters">
             <button
               type="button"
               onClick={() => setFilterRepo(null)}
@@ -967,7 +952,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
 
           {/* Search Box & Quick Scope Toggle */}
           {view === "canvas" && (
-          <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", maxWidth: "100%", minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
               <input
                 type="text"
@@ -978,6 +963,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                     ? "Search path or diff..."
                     : "Search path or full file..."
                 }
+                className="gits-search"
                 style={{
                   background: "rgba(0, 0, 0, 0.45)",
                   border: isSearching
@@ -990,7 +976,6 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                   fontSize: "10px",
                   color: "#fff",
                   outline: "none",
-                  width: "185px",
                   fontFamily: "inherit",
                   transition: "border-color 0.15s ease",
                 }}
@@ -1069,7 +1054,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
           )}
 
           {/* Card Organization Modes Toggle & Auto-Fit */}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+          <div className="gits-toolbar-modes">
             <div className="graph-mode-group" role="group" aria-label="Gits view">
               <button
                 type="button"
@@ -1160,7 +1145,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
           </div>
 
           {/* Summary Metric Counters */}
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "14px", flexShrink: 0 }}>
+          <div className="gits-toolbar-end">
             {view === "canvas" && (
             <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "10px" }}>
               <span style={{ color: "rgba(255,255,255,0.4)" }}>Files:</span>

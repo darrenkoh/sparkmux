@@ -3044,12 +3044,88 @@ code {
 
 .graph-overlay {
   z-index: 120;
+  align-items: stretch;
+  justify-content: flex-start;
+  overflow: hidden;
 }
 
 .graph-frame.fullscreen {
   padding: 0;
   background: #05070a;
   box-shadow: none;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.gits-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  box-sizing: border-box;
+  background: #080b11;
+  border-bottom: 1px solid rgba(45, 212, 191, 0.18);
+  padding: 8px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  z-index: 10;
+  overflow: hidden;
+}
+
+.gits-toolbar > * {
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.gits-clusters,
+.gits-toolbar-modes,
+.gits-toolbar-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.gits-clusters {
+  gap: 4px;
+}
+
+.gits-clusters > button {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gits-toolbar-modes {
+  gap: 6px;
+}
+
+.gits-toolbar-end {
+  margin-left: auto;
+  justify-content: flex-end;
+  gap: 8px 14px;
+}
+
+.gits-toolbar .graph-mode-group {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.gits-search {
+  width: min(185px, 100%);
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .graph-frame::before,
