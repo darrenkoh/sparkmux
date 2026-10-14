@@ -1,0 +1,166 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  applyChronicleKeyEvent,
+  chronicleKeyAction,
+  isNewestScrubStop,
+  laneTarget,
+  type ChronicleKeyAction,
+  type ChronicleKeyInput,
+} from "./chronicleKeys.ts";
+
+function input(partial: Partial<ChronicleKeyInput>): ChronicleKeyInput {
+  return {
+    key: "x",
+    shift: false,
+    meta: false,
+    ctrl: false,
+    inHologram: false,
+    onNewest: false,
+    enabledScenes: ["transit"],
+    scene: "transit",
+    files: [],
+    stations: [],
+    activeId: "",
+    nowAvailable: () => false,
+    ...partial,
+  };
+}
+
+function fakeEvent() {
+  const calls: string[] = [];
+  return {
+    calls,
+    preventDefault() {
+      calls.push("preventDefault");
+    },
+    stopImmediatePropagation() {
+      calls.push("stopImmediatePropagation");
+    },
+  };
+}
+
+function dispatch(action: ChronicleKeyAction, onClose: () => void) {
+  const event = fakeEvent();
+  const swallowed = applyChronicleKeyEvent(event, action);
+  if (swallowed && action.swallow && action.action === "close") onClose();
+  return event;
+}
+
+const files = [
+  { path: "A", lane: 0 },
+  { path: "B", lane: 1 },
+  { path: "C", lane: 2 },
+];
+
+const stations = [
+  { id: "a", path: "A", ordinal: 0 },
+  { id: "c1", path: "C", ordinal: 1 },
+  { id: "b", path: "B", ordinal: 4 },
+  { id: "c6", path: "C", ordinal: 6 },
+];
+
+test("escape on an older stop jumps latest and does not close", () => {
+  let closed = false;
+  const action = chronicleKeyAction(input({ key: "Escape", onNewest: false }));
+  assert.deepEqual(action, { swallow: true, action: "latest" });
+  dispatch(action, () => {
+    closed = true;
+  });
+  assert.equal(closed, false);
+});
+
+test("escape on the newest scrub stop closes", () => {
+  let closed = false;
+  const action = chronicleKeyAction(input({ key: "Escape", onNewest: true }));
+  assert.deepEqual(action, { swallow: true, action: "close" });
+  const event = dispatch(action, () => {
+    closed = true;
+  });
+  assert.equal(closed, true);
+  assert.deepEqual(event.calls, ["preventDefault", "stopImmediatePropagation"]);
+});
+
+test("a swallowed letter calls preventDefault and stopImmediatePropagation", () => {
+  const action = chronicleKeyAction(input({ key: "x" }));
+  assert.deepEqual(action, { swallow: true, action: "none" });
+  const event = fakeEvent();
+  assert.equal(applyChronicleKeyEvent(event, action), true);
+  assert.deepEqual(event.calls, ["preventDefault", "stopImmediatePropagation"]);
+});
+
+test("meta+c inside the hologram is not swallowed", () => {
+  const action = chronicleKeyAction(input({ key: "c", meta: true, inHologram: true }));
+  assert.deepEqual(action, { swallow: false });
+  const event = fakeEvent();
+  assert.equal(applyChronicleKeyEvent(event, action), false);
+  assert.deepEqual(event.calls, []);
+});
+
+test("key 2 swallows with action none until that scene is enabled", () => {
+  const disabled = chronicleKeyAction(input({ key: "2", enabledScenes: ["transit"] }));
+  assert.deepEqual(disabled, { swallow: true, action: "none" });
+  const event = fakeEvent();
+  assert.equal(applyChronicleKeyEvent(event, disabled), true);
+  assert.deepEqual(event.calls, ["preventDefault", "stopImmediatePropagation"]);
+
+  const enabled = chronicleKeyAction(input({ key: "2", enabledScenes: ["transit", "rivers"] }));
+  assert.deepEqual(enabled, { swallow: true, action: "scene", scene: "rivers" });
+  assert.deepEqual(chronicleKeyAction(input({ key: "3" })), { swallow: true, action: "none" });
+  assert.deepEqual(chronicleKeyAction(input({ key: "4" })), { swallow: true, action: "none" });
+  assert.deepEqual(chronicleKeyAction(input({ key: "1" })), {
+    swallow: true,
+    action: "scene",
+    scene: "transit",
+  });
+});
+
+test("arrow left inside the hologram is not swallowed", () => {
+  const action = chronicleKeyAction(input({ key: "ArrowLeft", inHologram: true }));
+  assert.deepEqual(action, { swallow: false });
+  const event = fakeEvent();
+  assert.equal(applyChronicleKeyEvent(event, action), false);
+  assert.deepEqual(event.calls, []);
+});
+
+test("transit arrow up does not move the selection", () => {
+  const action = chronicleKeyAction(
+    input({ key: "ArrowUp", scene: "transit", files, stations, activeId: "b" }),
+  );
+  assert.deepEqual(action, { swallow: true, action: "none" });
+});
+
+test("laneTarget steps files by lane and breaks ordinal ties upward", () => {
+  const down = laneTarget(files, stations, () => false, "b", 1);
+  assert.deepEqual(down, { swallow: true, action: "lane", stationId: "c6" });
+
+  const up = laneTarget(files, stations, () => false, "a", -1);
+  assert.deepEqual(up, { swallow: true, action: "none" });
+
+  const tieStations = [
+    { id: "b", path: "B", ordinal: 4 },
+    { id: "c2", path: "C", ordinal: 2 },
+    { id: "c6", path: "C", ordinal: 6 },
+  ];
+  const tie = laneTarget(files, tieStations, () => false, "b", 1);
+  assert.deepEqual(tie, { swallow: true, action: "lane", stationId: "c6" });
+});
+
+test("laneTarget keeps Now only when the next file has Now", () => {
+  const withNow = laneTarget(files, stations, (path) => path === "C", "now:B", 1);
+  assert.deepEqual(withNow, { swallow: true, action: "lane", stationId: "now:C" });
+
+  const withoutNow = laneTarget(files, stations, () => false, "now:B", 1);
+  assert.deepEqual(withoutNow, { swallow: true, action: "lane", stationId: "c6" });
+});
+
+test("newest scrub stop is Now when that read exists", () => {
+  const nowOn = (path: string) => path === "B";
+  assert.equal(isNewestScrubStop("now:B", stations, nowOn), true);
+  assert.equal(isNewestScrubStop("b", stations, nowOn), false);
+  assert.equal(isNewestScrubStop("c6", stations, nowOn), true);
+  assert.equal(isNewestScrubStop("c6", stations, () => false), true);
+  assert.equal(isNewestScrubStop("b", stations, () => false), false);
+  assert.equal(isNewestScrubStop("missing", stations, () => false), false);
+});

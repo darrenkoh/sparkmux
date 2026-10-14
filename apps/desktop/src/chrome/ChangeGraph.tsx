@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   changeGraph,
+  clearChronicleCache,
   fileDiff,
   searchChangedFiles,
   type ChangeGraphResponse,
@@ -19,7 +20,35 @@ import {
   type GraphFile,
   type GraphRepo,
 } from "./changeGraphLayout";
+import {
+  applyChronicleKeyEvent,
+  chronicleKeyAction,
+  type ChronicleKeyAction,
+  type ChronicleKeyState,
+} from "./chronicleKeys";
+import type { ChronicleScene } from "./chronicleLayout";
 import VerticalZoomDial from "./VerticalZoomDial";
+
+const ChronicleView = lazy(() => import("./ChronicleView"));
+
+const GITS_VIEW_KEY = "sparkmux.gitsView";
+const CHRONICLE_SCENES: readonly ChronicleScene[] = ["transit"];
+
+function readGitsView(): "canvas" | "chronicle" {
+  try {
+    return sessionStorage.getItem(GITS_VIEW_KEY) === "chronicle" ? "chronicle" : "canvas";
+  } catch {
+    return "canvas";
+  }
+}
+
+function writeGitsView(view: "canvas" | "chronicle") {
+  try {
+    sessionStorage.setItem(GITS_VIEW_KEY, view);
+  } catch {
+    // Private mode can reject storage. The in-memory view still switches.
+  }
+}
 
 export interface ChangeGraphProps {
   command: string;
@@ -171,6 +200,31 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   const [orgMode, setOrgMode] = useState<CardOrganizationMode>("grid");
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 900, height: 600 });
   const hasInitialFitRef = useRef(false);
+  const [view, setView] = useState<"canvas" | "chronicle">(readGitsView);
+  const chronicleApplyRef = useRef<(action: ChronicleKeyAction) => void>(() => {});
+  const [chronicleKeys, setChronicleKeys] = useState<ChronicleKeyState>({
+    onNewest: true,
+    scene: "transit",
+    files: [],
+    stations: [],
+    activeId: "",
+    nowAvailable: () => false,
+  });
+  const chronicleKeysRef = useRef(chronicleKeys);
+  chronicleKeysRef.current = chronicleKeys;
+  const onChronicleKeyContext = useCallback((state: ChronicleKeyState) => {
+    setChronicleKeys(state);
+  }, []);
+  const closeGraph = useCallback(() => {
+    void clearChronicleCache().catch((err: unknown) => {
+      console.error(err);
+    });
+    onClose();
+  }, [onClose]);
+  const setGitsView = useCallback((next: "canvas" | "chronicle") => {
+    writeGitsView(next);
+    setView(next);
+  }, []);
 
   // Multi-touch pinch state for touchscreen
   const touchPinchRef = useRef<{
@@ -183,6 +237,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
 
   // Track viewport real-estate with ResizeObserver
   useEffect(() => {
+    if (view !== "canvas") return;
     const el = viewportRef.current;
     if (!el) return;
     const updateSize = () => {
@@ -196,10 +251,11 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
     const ro = new ResizeObserver(updateSize);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [view]);
 
   // WebKit native trackpad multi-touch gestures (Safari/macOS WKWebView)
   useEffect(() => {
+    if (view !== "canvas") return;
     const el = viewportRef.current;
     if (!el) return;
 
@@ -237,7 +293,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
       el.removeEventListener("gesturestart", onGestureStart);
       el.removeEventListener("gesturechange", onGestureChange);
     };
-  }, [zoom, pan]);
+  }, [view, zoom, pan]);
 
   // Dragging individual cards
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
@@ -250,25 +306,61 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
     hasMoved: false,
   });
 
-  // Keydown close
+  // One capture listener. Canvas stays Escape-only; Chronicle swallows before xterm sees the key.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (view === "canvas") {
+        if (event.key !== "Escape") return;
         event.preventDefault();
-        event.stopPropagation();
+        event.stopImmediatePropagation();
         if (selectedCardId) {
           setSelectedCardId(null);
         } else {
-          onClose();
+          closeGraph();
         }
+        return;
       }
+      const state = chronicleKeysRef.current;
+      const action = chronicleKeyAction({
+        key: event.key,
+        shift: event.shiftKey,
+        meta: event.metaKey,
+        ctrl: event.ctrlKey,
+        inHologram: event.target instanceof Element && event.target.closest(".chronicle-hologram") != null,
+        onNewest: state.onNewest,
+        enabledScenes: CHRONICLE_SCENES,
+        scene: state.scene,
+        files: state.files,
+        stations: state.stations,
+        activeId: state.activeId,
+        nowAvailable: state.nowAvailable,
+      });
+      if (!applyChronicleKeyEvent(event, action)) return;
+      if (!action.swallow || action.action === "none") return;
+      if (action.action === "close") {
+        closeGraph();
+        return;
+      }
+      chronicleApplyRef.current(action);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [selectedCardId, onClose]);
+  }, [view, selectedCardId, closeGraph]);
+
+  useEffect(() => {
+    if (view !== "chronicle") return;
+    const blurXterm = (event?: FocusEvent) => {
+      const node = (event?.target ?? document.activeElement) as Element | null;
+      if (node instanceof HTMLElement && node.matches(".xterm-helper-textarea")) node.blur();
+    };
+    blurXterm();
+    document.addEventListener("focusin", blurXterm, true);
+    return () => document.removeEventListener("focusin", blurXterm, true);
+  }, [view]);
 
   // Fetch changeGraph API
   useEffect(() => {
+    if (view !== "canvas") return;
     let cancel = false;
     let generation = 0;
     const load = () => {
@@ -292,7 +384,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
       cancel = true;
       clearInterval(interval);
     };
-  }, [command, cwd, title, pid]);
+  }, [command, cwd, title, pid, view]);
 
   // Construct Cards and Chain Connections
   const COL_GAP = 90;
@@ -784,7 +876,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   return (
     <div
       className="scifi-hud-overlay graph-overlay"
-      onClick={onClose}
+      onClick={closeGraph}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div
@@ -804,7 +896,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
         }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label="File Change Card Chain Graph"
+        aria-label={view === "chronicle" ? "Chronicle transit timeline" : "File Change Card Chain Graph"}
       >
         {/* 1. TOP HEADER & FILTER TOOLBAR */}
         <div
@@ -819,28 +911,21 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
             fontSize: "11px",
             zIndex: 10,
+            flexWrap: "nowrap",
+            overflowX: "auto",
           }}
         >
           {/* Logo / Badge */}
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold", color: "#2dd4bf" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold", color: "#2dd4bf", flexShrink: 0 }}>
             <span style={{ fontSize: "14px" }}>⬡</span>
-            <span style={{ letterSpacing: "0.14em" }}>GITS · CHAIN GRAPH</span>
-            <span
-              style={{
-                fontSize: "9px",
-                padding: "2px 6px",
-                borderRadius: "3px",
-                background: "rgba(45, 212, 191, 0.15)",
-                color: "#5eead4",
-                border: "1px solid rgba(45, 212, 191, 0.3)",
-              }}
-            >
-              DIFF & CHAIN FLOW
+            <span style={{ letterSpacing: "0.14em" }}>
+              {view === "chronicle" ? "GITS · CHRONICLE" : "GITS · CHAIN GRAPH"}
             </span>
           </div>
 
           {/* Repo Cluster Filter Tabs */}
-          <div style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "12px" }}>
+          {view === "canvas" && (
+          <div style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "12px", flexShrink: 0 }}>
             <button
               type="button"
               onClick={() => setFilterRepo(null)}
@@ -884,9 +969,11 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               );
             })}
           </div>
+          )}
 
           {/* Search Box & Quick Scope Toggle */}
-          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+          {view === "canvas" && (
+          <div style={{ display: "flex", alignItems: "center", gap: "5px", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
               <input
                 type="text"
@@ -985,9 +1072,29 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               <span>{searchScope === "diff" ? "⚡ DIFF" : "📄 FULL"}</span>
             </button>
           </div>
+          )}
 
           {/* Card Organization Modes Toggle & Auto-Fit */}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+            <div className="graph-mode-group" role="group" aria-label="Gits view">
+              <button
+                type="button"
+                className={`graph-mode-btn ${view === "canvas" ? "on" : ""}`}
+                aria-pressed={view === "canvas"}
+                onClick={() => setGitsView("canvas")}
+              >
+                Canvas
+              </button>
+              <button
+                type="button"
+                className={`graph-mode-btn ${view === "chronicle" ? "on" : ""}`}
+                aria-pressed={view === "chronicle"}
+                onClick={() => setGitsView("chronicle")}
+              >
+                Chronicle
+              </button>
+            </div>
+            {view === "canvas" ? (
             <div className="graph-mode-group" role="group" aria-label="Card Organization Modes">
               <button
                 type="button"
@@ -1030,7 +1137,15 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                 ◎ RADIAL
               </button>
             </div>
+            ) : (
+            <div className="graph-mode-group" role="group" aria-label="Chronicle scene">
+              <button type="button" className="graph-mode-btn on" aria-pressed={true}>
+                Transit
+              </button>
+            </div>
+            )}
 
+            {view === "canvas" && (
             <button
               type="button"
               onClick={handleAutoFit}
@@ -1051,10 +1166,12 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             >
               ⤢ AUTO FIT
             </button>
+            )}
           </div>
 
           {/* Summary Metric Counters */}
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "14px" }}>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "14px", flexShrink: 0 }}>
+            {view === "canvas" && (
             <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "10px" }}>
               <span style={{ color: "rgba(255,255,255,0.4)" }}>Files:</span>
               <strong style={{ color: "#fff" }}>{totalFiles}</strong>
@@ -1076,8 +1193,11 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                 </span>
               )}
             </div>
+            )}
 
             {/* Pulse Animation Toggle */}
+            {view === "canvas" && (
+            <>
             <button
               type="button"
               onClick={() => setAnimatePulses(!animatePulses)}
@@ -1114,12 +1234,14 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             >
               RESET VIEW ({(zoom * 100).toFixed(0)}%)
             </button>
+            </>
+            )}
 
             {/* Close Button */}
             <button
               type="button"
               className="scifi-close graph-close"
-              onClick={onClose}
+              onClick={closeGraph}
               aria-label="Close graph"
               style={{
                 padding: "0 8px",
@@ -1146,6 +1268,29 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             overflow: "hidden",
           }}
         >
+          {view === "chronicle" ? (
+            <Suspense
+              fallback={
+                <div className="graph-stage chronicle-view">
+                  <div className="chronicle-status">
+                    <div>
+                      <b>READING SESSION…</b>
+                    </div>
+                  </div>
+                </div>
+              }
+            >
+              <ChronicleView
+                command={command}
+                cwd={cwd}
+                title={title}
+                pid={pid}
+                onKeyContext={onChronicleKeyContext}
+                applyRef={chronicleApplyRef}
+              />
+            </Suspense>
+          ) : (
+          <>
           {/* LEFT: 2D GRAPH WORKSPACE */}
           <div
             ref={viewportRef}
@@ -2305,6 +2450,8 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             </div>
           </div>
         )}
+          </>
+          )}
       </div>
     </div>
   </div>
