@@ -10,30 +10,12 @@ import {
 import ChronicleHologramPanel, { chroniclePanelBanners, chroniclePanelText } from "./ChronicleHologram";
 import { mountChronicle, type ChronicleHandle, type ChronicleHooks } from "./ChronicleStage";
 import {
-  ENABLED_CHRONICLE_SCENES,
   isNewestScrubStop,
   stepScrub,
   type ChronicleKeyAction,
   type ChronicleKeyState,
 } from "./chronicleKeys";
-import {
-  type ChronicleScene,
-  type StationLayoutInput,
-} from "./chronicleLayout";
-
-const SCENE_LABEL: Record<ChronicleScene, string> = {
-  transit: "Transit",
-  rivers: "Rivers",
-  helix: "Helix",
-  ridge: "Ridge",
-};
-
-const SCENE_KEY: Record<ChronicleScene, string> = {
-  transit: "1",
-  rivers: "2",
-  helix: "3",
-  ridge: "4",
-};
+import { type ChronicleScene, type StationLayoutInput } from "./chronicleLayout";
 import {
   acceptHologram,
   generationFromSession,
@@ -324,18 +306,46 @@ export default function ChronicleView(props: {
         ? `${activePath} · Now`
         : `${activePath} · #${activeStation?.ordinal ?? ""} · ${activeStation?.tool ?? ""} · +${activeStation?.added ?? 0} −${activeStation?.removed ?? 0}${when ? ` · ${when}` : ""}`;
 
-  const sceneButtons = ENABLED_CHRONICLE_SCENES.map((id) => (
-    <button
-      key={id}
-      type="button"
-      className={`graph-mode-btn ${scene === id ? "on" : ""}`}
-      aria-pressed={scene === id}
-      title={`${SCENE_LABEL[id]} (${SCENE_KEY[id]})`}
-      onClick={() => setScene(id)}
-    >
-      {SCENE_LABEL[id]}
-    </button>
-  ));
+  const sceneButtons = (
+    <>
+      <button
+        type="button"
+        className={`graph-mode-btn ${scene === "transit" ? "on" : ""}`}
+        aria-pressed={scene === "transit"}
+        title="Transit (1)"
+        onClick={() => setScene("transit")}
+      >
+        Transit
+      </button>
+      <button
+        type="button"
+        className={`graph-mode-btn ${scene === "rivers" ? "on" : ""}`}
+        aria-pressed={scene === "rivers"}
+        title="Rivers (2)"
+        onClick={() => setScene("rivers")}
+      >
+        Rivers
+      </button>
+      <button
+        type="button"
+        className={`graph-mode-btn ${scene === "helix" ? "on" : ""}`}
+        aria-pressed={scene === "helix"}
+        title="Helix (3)"
+        onClick={() => setScene("helix")}
+      >
+        Helix
+      </button>
+      <button
+        type="button"
+        className={`graph-mode-btn ${scene === "ridge" ? "on" : ""}`}
+        aria-pressed={scene === "ridge"}
+        title="Ridge (4)"
+        onClick={() => setScene("ridge")}
+      >
+        Ridge
+      </button>
+    </>
+  );
 
   return (
     <div className="graph-stage chronicle-view">

@@ -58,7 +58,6 @@ declare module "three" {
   export class BufferGeometry {
     dispose(): void;
     setAttribute(name: string, attribute: BufferAttribute): this;
-    getAttribute(name: string): BufferAttribute;
   }
 
   export class BoxGeometry extends BufferGeometry {
@@ -92,7 +91,6 @@ declare module "three" {
     map: { dispose(): void } | null;
     side: number;
     depthWrite: boolean;
-    vertexColors: boolean;
   }
 
   export class Object3D {

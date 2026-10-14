@@ -144,13 +144,6 @@ function pushRiverFin(dst: number[], x0: number, y0: number, x1: number, y1: num
   pushTri(dst, x0, RIVER_BASE_Y, z, x0, top0, z, x1, top1, z);
 }
 
-function geometryFromPositions(positions: number[]): BufferGeometry | null {
-  if (positions.length < 9) return null;
-  const geometry = new BufferGeometry();
-  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-  return geometry;
-}
-
 function signatureOf(scene: ChronicleScene, stations: StationLayoutInput[]): string {
   const nowOn = stations.some((station) => station.kind === "now") ? "1" : "0";
   return `${scene}\n${nowOn}\n${realStations(stations)
@@ -195,11 +188,6 @@ function disposeObject(object: Object3DType) {
   const material = meshed.material;
   if (Array.isArray(material)) material.forEach(disposeMaterial);
   else if (material) disposeMaterial(material);
-}
-
-function disposeTree(object: Object3DType) {
-  for (const child of [...object.children]) disposeTree(child);
-  disposeObject(object);
 }
 
 function labelText(station: StationLayoutInput): string {
@@ -309,8 +297,8 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   let currentActive = "";
   let currentScene: ChronicleScene = "transit";
   let posedScene: ChronicleScene | "" = "";
-  let framedLane: number | null = null;
-  let framedOrdinal: number | null = null;
+  // File the camera last framed. A new path takes the whole station point; the same file only slides x.
+  let framedPath: string | null = null;
   let built = "";
   let gates: InstancedMesh | null = null;
   let shards: InstancedMesh | null = null;
@@ -345,7 +333,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     pick.length = 0;
     for (const child of [...root.children]) {
       root.remove(child);
-      disposeTree(child);
+      child.traverse(disposeObject);
     }
   };
 
@@ -433,13 +421,11 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     controls.update();
   };
 
-  const slideCamera = (axis: "x" | "y" | "z", value: number) => {
-    if (axis === "x") placeTarget(value, controls.target.y, controls.target.z);
-    else if (axis === "y") placeTarget(controls.target.x, value, controls.target.z);
-    else placeTarget(controls.target.x, controls.target.y, value);
+  const slideCamera = (x: number) => {
+    placeTarget(x, controls.target.y, controls.target.z);
   };
 
-  const follow = (fresh: boolean, rebuilt: boolean, force: boolean) => {
+  const follow = (fresh: boolean, rebuilt: boolean) => {
     scan.visible = currentScene === "transit";
     grid.visible = currentScene !== "ridge";
     if (fresh) applyLimits(currentScene);
@@ -456,13 +442,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
         camera.position.set(placed.camera.x, placed.camera.y, placed.camera.z);
         controls.update();
       } else {
-        offset.subVectors(camera.position, controls.target);
-        if (offset.lengthSq() < 1e-6) {
-          offset.set(TRANSIT_CAMERA_OFFSET.x, TRANSIT_CAMERA_OFFSET.y, TRANSIT_CAMERA_OFFSET.z);
-        }
-        controls.target.set(0, TRANSIT_TARGET_Y, z);
-        camera.position.copy(controls.target).add(offset);
-        controls.update();
+        placeTarget(0, TRANSIT_TARGET_Y, z);
       }
       scan.position.z = z;
       return;
@@ -480,32 +460,47 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     }
     const center = centroid(currentScene, laidOut, realCount);
     const point = active ? stationWorld(currentScene, active, realCount) : center;
+    const path = active?.path ?? (active?.id.startsWith("now:") ? active.id.slice(4) : null);
     if (fresh) {
       const off = currentScene === "rivers" ? RIVER_OFFSET : ridgeCameraOffset(laidOut);
-      controls.target.set(point.x, center.y, center.z);
-      camera.position.set(point.x + off.x, center.y + off.y, center.z + off.z);
+      controls.target.set(center.x, center.y, center.z);
+      camera.position.set(center.x + off.x, center.y + off.y, center.z + off.z);
       controls.update();
-      framedLane = active?.lane ?? null;
-      framedOrdinal = active?.ordinal ?? null;
+      framedPath = path;
+      return;
+    }
+    if (path !== framedPath) {
+      placeTarget(point.x, point.y, point.z);
+      framedPath = path;
       return;
     }
     if (rebuilt) {
-      placeTarget(point.x, center.y, center.z);
-      framedLane = active?.lane ?? null;
-      framedOrdinal = active?.ordinal ?? null;
+      placeTarget(center.x, center.y, center.z);
       return;
     }
-    // A far lane change is ArrowUp/Down selecting another file, not a time scrub.
-    const farLane =
-      !force &&
-      framedLane !== null &&
-      active != null &&
-      active.lane !== framedLane &&
-      framedOrdinal !== null &&
-      Math.abs(active.ordinal - framedOrdinal) > 1;
-    framedLane = active?.lane ?? framedLane;
-    framedOrdinal = active?.ordinal ?? framedOrdinal;
-    if (!farLane) slideCamera("x", point.x);
+    slideCamera(point.x);
+  };
+
+  const addStationShards = (
+    geometry: BufferGeometry,
+    stations: StationLayoutInput[],
+    place: (station: StationLayoutInput) => void,
+  ) => {
+    if (stations.length === 0) return;
+    const mesh = new InstancedMesh(
+      geometry,
+      new MeshBasicMaterial({ color: 0xffffff, side: FrontSide }),
+      stations.length,
+    );
+    stations.forEach((station, index) => {
+      place(station);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(index, dummy.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    shards = mesh;
+    shardIds = stations.map((station) => station.id);
+    track(mesh, shardIds);
   };
 
   const rebuildTransit = (stations: StationLayoutInput[]) => {
@@ -596,34 +591,21 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
           pushRiverFin(positions, point.x - 0.18, point.y, point.x + 0.18, point.y, point.z);
         }
       }
-      const geometry = geometryFromPositions(positions);
-      if (!geometry) continue;
+      if (positions.length < 9) continue;
+      const geometry = new BufferGeometry();
+      geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
       const material = new MeshBasicMaterial({ color: TEAL, side: FrontSide });
       const mesh = new Mesh(geometry, material);
       mesh.userData.surface = true;
       riverLanes.push({ lane, material });
       track(mesh);
     }
-    if (real.length === 0) return;
-    const mesh = new InstancedMesh(
-      new BoxGeometry(0.14, 0.14, 0.14),
-      new MeshBasicMaterial({ color: 0xffffff, side: FrontSide }),
-      real.length,
-    );
-    real.forEach((station, index) => {
+    addStationShards(new BoxGeometry(0.14, 0.14, 0.14), real, (station) => {
       const point = stationWorld("rivers", station, real.length);
       dummy.position.set(point.x, point.y, point.z);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.set(1, 1, 1);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(index, dummy.matrix);
-      mesh.setColorAt(index, color.set(TEAL));
     });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    shards = mesh;
-    shardIds = real.map((station) => station.id);
-    track(mesh, shardIds);
   };
 
   const rebuildHelix = (stations: StationLayoutInput[]) => {
@@ -639,31 +621,17 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       tube.position.set(0, top / 2, 0);
       root.add(tube);
     }
-    if (real.length === 0) return;
-    const mesh = new InstancedMesh(
-      new BoxGeometry(1, 1, 1),
-      new MeshBasicMaterial({ color: 0xffffff, side: FrontSide }),
-      real.length,
-    );
-    real.forEach((station, index) => {
+    addStationShards(new BoxGeometry(1, 1, 1), real, (station) => {
       const point = stationWorld("helix", station, real.length);
       // Local +z points outward. At ordinal 0 the radial is (0,0,1), so the quaternion is identity.
       radial.set(point.x / HELIX_R, 0, point.z / HELIX_R);
       dummy.position.set(point.x, point.y, point.z);
       dummy.quaternion.setFromUnitVectors(localZ, radial);
       dummy.scale.set(0.34, transitShardScaleY(station), 0.55);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(index, dummy.matrix);
-      mesh.setColorAt(index, color.set(TEAL));
     });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    shards = mesh;
-    shardIds = real.map((station) => station.id);
-    track(mesh, shardIds);
   };
 
-  const rebuildRidge = (stations: StationLayoutInput[], activeLane: number) => {
+  const rebuildRidge = (stations: StationLayoutInput[]) => {
     const real = realStations(stations);
     realCount = real.length;
     const byOrdinal = new Map<number, StationLayoutInput>();
@@ -686,13 +654,10 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       return ridgeHeight(station.added, station.removed);
     };
     const positions: number[] = [];
-    const colors: number[] = [];
     const lanes: number[] = [];
     const heights: number[] = [];
     const pushVertex = (vertex: Vec3, lane: number) => {
       positions.push(vertex.x, vertex.y + RIDGE_LIFT, vertex.z);
-      const [r, g, b] = ridgeChannels(vertex.y, lane === activeLane);
-      colors.push(r, g, b);
       lanes.push(lane);
       heights.push(vertex.y);
     };
@@ -710,7 +675,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     if (positions.length >= 9) {
       const geometry = new BufferGeometry();
       geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
-      const attr = new Float32BufferAttribute(colors, 3);
+      const attr = new Float32BufferAttribute(new Float32Array(lanes.length * 3), 3);
       geometry.setAttribute("color", attr);
       const material = new MeshBasicMaterial({ color: 0xffffff, vertexColors: true, side: FrontSide });
       const mesh = new Mesh(geometry, material);
@@ -718,26 +683,12 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       ridgePaint = { attr, lanes, heights };
       track(mesh);
     }
-    if (real.length === 0) return;
-    const mesh = new InstancedMesh(
-      new BoxGeometry(0.16, 0.16, 0.16),
-      new MeshBasicMaterial({ color: 0xffffff, side: FrontSide }),
-      real.length,
-    );
-    real.forEach((station, index) => {
+    addStationShards(new BoxGeometry(0.16, 0.16, 0.16), real, (station) => {
       const point = stationWorld("ridge", station, real.length);
       dummy.position.set(point.x, point.y + 0.12, point.z);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.set(1, 1, 1);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(index, dummy.matrix);
-      mesh.setColorAt(index, color.set(TEAL));
     });
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    shards = mesh;
-    shardIds = real.map((station) => station.id);
-    track(mesh, shardIds);
   };
 
   const paintActive = (activeId: string) => {
@@ -818,7 +769,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     const nextId = stepScrub(laidOut, currentActive, (path) => nowReady.has(path), delta);
     if (!nextId) return;
     currentActive = nextId;
-    follow(false, false, true);
+    follow(false, false);
     paintActive(nextId);
     hooks.onActiveId(nextId);
   };
@@ -918,11 +869,11 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
         if (scene === "transit") rebuildTransit(stations);
         else if (scene === "rivers") rebuildRivers(stations);
         else if (scene === "helix") rebuildHelix(stations);
-        else rebuildRidge(stations, stations.find((entry) => entry.id === activeId)?.lane ?? -1);
+        else rebuildRidge(stations);
       }
       paintActive(activeId);
       syncNow(stations);
-      follow(sceneChanged, rebuilt && !sceneChanged, false);
+      follow(sceneChanged, rebuilt && !sceneChanged);
       if (sceneChanged) posedScene = scene;
     },
     setSize(nextWidth, nextHeight) {

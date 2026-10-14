@@ -896,7 +896,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
         }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label={view === "chronicle" ? "Chronicle transit timeline" : "File Change Card Chain Graph"}
+        aria-label={view === "chronicle" ? "Gits Chronicle" : "File Change Card Chain Graph"}
       >
         {/* 1. TOP HEADER & FILTER TOOLBAR */}
         <div

@@ -49,7 +49,6 @@ const SCENE_BY_KEY: Record<string, ChronicleScene> = {
   "4": "ridge",
 };
 
-// PR 3 draws every layout. Keys 2–4 select a scene instead of swallowing as none.
 export const ENABLED_CHRONICLE_SCENES: readonly ChronicleScene[] = ["transit", "rivers", "helix", "ridge"];
 
 const HOLOGRAM_KEYS = new Set([
