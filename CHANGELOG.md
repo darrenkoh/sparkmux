@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.35
+
+### Bug Fixes
+
+- Clicking [Dashboard] in a Grok Build session still works after switching tabs. The terminal keeps the mouse tracking Grok already turned on.
+
 ## 0.1.34
 
 ### Bug Fixes
