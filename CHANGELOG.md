@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.33
+
+### Improvements
+
+- The status bar shows Bedrock API cost for the focused Claude conversation and for today when that Claude process is using Bedrock. The chip uses Claude's recorded cost, or an estimate from token rates when Claude recorded no price. There is no quota meter. Subscription Claude is unchanged.
+
 ## 0.1.32
 
 ### Improvements
