@@ -6,7 +6,6 @@ import {
   CylinderGeometry,
   DoubleSide,
   Float32BufferAttribute,
-  FrontSide,
   GridHelper,
   Group,
   Mesh,
@@ -31,99 +30,64 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import {
   FLOOR_ROTATION_X,
-  RIDGE_HEIGHT_MAX,
-  RIDGE_LANE_Z,
-  RIDGE_STEP_X,
-  ridgeCellCorners,
-  ridgeHeight,
-  stationWorld,
   type ChronicleScene,
   type StationLayoutInput,
   type Vec3,
 } from "./chronicleLayout";
-import { stepScrub } from "./chronicleKeys";
 
 // Cybernetic Sci-Fi Palette
 const TEAL = 0x2dd4bf;
-const CYAN = 0x38bdf8;
 const GOLD = 0xff9a3c;
-const RED = 0xf87171;
 const FLOOR = 0x050e18;
 const VOID = 0x020408;
-const RIDGE_LIFT = 0.04;
 
-const RIDGE_LOW = new Color(0x061524);
-const RIDGE_MID = new Color(TEAL);
-const RIDGE_HIGH = new Color(GOLD);
-const RIDGE_PEAK = new Color(RED);
-const colorScratch = new Color();
-
-function ridgeColor(height: number, isActiveLane: boolean): [number, number, number] {
-  const t = Math.min(1, Math.max(0, height / RIDGE_HEIGHT_MAX));
-  if (t < 0.3) {
-    colorScratch.copy(RIDGE_LOW).lerp(RIDGE_MID, t / 0.3);
-  } else if (t < 0.75) {
-    colorScratch.copy(RIDGE_MID).lerp(RIDGE_HIGH, (t - 0.3) / 0.45);
-  } else {
-    colorScratch.copy(RIDGE_HIGH).lerp(RIDGE_PEAK, (t - 0.75) / 0.25);
-  }
-  if (isActiveLane) {
-    colorScratch.lerp(RIDGE_HIGH, 0.25);
-  }
-  return [colorScratch.r, colorScratch.g, colorScratch.b];
-}
+// 3D Card Architecture Constants
+const CARD_WIDTH = 2.8;
+const CARD_HEIGHT = 1.84;
+const CARD_SPACING_X = 2.2;
+const CARD_BASE_Y = 1.02;
+// Stood vertically at ~50° angle (resting rolodex gallery tilt)
+const RESTING_ROTATION_Y = -0.8726; // -50 degrees in radians
 
 function realStations(stations: StationLayoutInput[]): StationLayoutInput[] {
   return stations.filter((station) => station.kind !== "now");
 }
 
-function ridgeCentroid(stations: StationLayoutInput[], count: number): Vec3 {
+function cardCentroid(stations: StationLayoutInput[], _count?: number): Vec3 {
   const real = realStations(stations);
-  if (real.length === 0) return { x: 0, y: 0.5, z: 0 };
-  let x = 0;
-  let y = 0;
-  let z = 0;
-  for (const station of real) {
-    const point = stationWorld("ridge", station, count);
-    x += point.x;
-    y += point.y;
-    z += point.z;
+  if (real.length === 0) return { x: 0, y: CARD_BASE_Y, z: 0 };
+  let maxOrdinal = 0;
+  let maxLane = 0;
+  for (const s of real) {
+    maxOrdinal = Math.max(maxOrdinal, s.ordinal);
+    maxLane = Math.max(maxLane, s.lane);
   }
-  return { x: x / real.length, y: y / real.length, z: z / real.length };
+  return {
+    x: (maxOrdinal * CARD_SPACING_X) / 2,
+    y: CARD_BASE_Y,
+    z: (maxLane * 1.1) / 2,
+  };
 }
 
-function ridgeCameraOffset(stations: StationLayoutInput[]): Vec3 {
-  let minLane = 0;
-  let maxLane = 0;
-  let maxOrdinal = 0;
-  let any = false;
-  for (const station of stations) {
-    if (station.kind === "now") continue;
-    if (!any) {
-      minLane = station.lane;
-      maxLane = station.lane;
-      maxOrdinal = station.ordinal;
-      any = true;
-    } else {
-      minLane = Math.min(minLane, station.lane);
-      maxLane = Math.max(maxLane, station.lane);
-      maxOrdinal = Math.max(maxOrdinal, station.ordinal);
-    }
-  }
-  const spanZ = Math.max(1, maxLane - minLane) * RIDGE_LANE_Z;
-  const spanX = Math.max(2, maxOrdinal * RIDGE_STEP_X);
-  const dist = Math.max(spanZ, spanX * 0.6) * 1.25;
-  return { x: 0, y: Math.max(5, dist * 0.55), z: Math.max(6, dist * 0.75) };
+function cardCameraOffset(stations: StationLayoutInput[]): Vec3 {
+  const count = stations.length;
+  const spanX = Math.max(3, count * CARD_SPACING_X);
+  return {
+    x: 0,
+    y: 2.1,
+    z: Math.max(5.6, Math.min(16, spanX * 0.52)),
+  };
 }
 
 // ---------------------------------------------------------------------------
-// 3D Transparent Station Card Canvas Renderer
+// 3D Transparent Station Card Canvas Renderer with Scrollable Diff
 // ---------------------------------------------------------------------------
 function redrawStationCard(
   canvas: HTMLCanvasElement,
   station: StationLayoutInput,
   isActive: boolean,
   isHovered: boolean,
+  scrollLine = 0,
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -132,7 +96,7 @@ function redrawStationCard(
   ctx.clearRect(0, 0, w, h);
 
   // 1. Semi-transparent Cybernetic Glass Panel Background
-  const r = 12;
+  const r = 14;
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(r, 0);
@@ -148,14 +112,14 @@ function redrawStationCard(
 
   const grad = ctx.createLinearGradient(0, 0, 0, h);
   if (isActive) {
-    grad.addColorStop(0, "rgba(22, 30, 42, 0.94)");
-    grad.addColorStop(1, "rgba(10, 16, 24, 0.96)");
+    grad.addColorStop(0, "rgba(22, 32, 46, 0.95)");
+    grad.addColorStop(1, "rgba(10, 16, 26, 0.97)");
   } else if (isHovered) {
-    grad.addColorStop(0, "rgba(16, 24, 34, 0.92)");
-    grad.addColorStop(1, "rgba(8, 14, 22, 0.94)");
+    grad.addColorStop(0, "rgba(16, 26, 38, 0.93)");
+    grad.addColorStop(1, "rgba(8, 14, 24, 0.95)");
   } else {
-    grad.addColorStop(0, "rgba(8, 16, 24, 0.86)");
-    grad.addColorStop(1, "rgba(5, 10, 16, 0.88)");
+    grad.addColorStop(0, "rgba(8, 16, 26, 0.86)");
+    grad.addColorStop(1, "rgba(5, 10, 18, 0.88)");
   }
   ctx.fillStyle = grad;
   ctx.fill();
@@ -165,12 +129,12 @@ function redrawStationCard(
   ctx.strokeStyle = isActive
     ? "rgba(255, 154, 60, 0.95)"
     : isHovered
-    ? "rgba(45, 212, 191, 0.9)"
+    ? "rgba(45, 212, 191, 0.95)"
     : "rgba(45, 212, 191, 0.45)";
   ctx.stroke();
 
   // Corner Accents (Sci-fi brackets)
-  const cSize = 10;
+  const cSize = 12;
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = isActive ? "#ff9a3c" : "#2dd4bf";
   ctx.beginPath();
@@ -196,26 +160,26 @@ function redrawStationCard(
 
   // 2. Header Bar
   ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
-  ctx.fillRect(4, 4, w - 8, 44);
+  ctx.fillRect(4, 4, w - 8, 46);
   ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(4, 48);
-  ctx.lineTo(w - 4, 48);
+  ctx.moveTo(4, 50);
+  ctx.lineTo(w - 4, 50);
   ctx.stroke();
 
   // Revision Chip
   const isNow = station.kind === "now";
   const revLabel = isNow ? "LIVE NOW" : `#${station.ordinal}`;
-  ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.font = "bold 14px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = isActive ? "#ff9a3c" : "#2dd4bf";
-  ctx.fillText(revLabel, 16, 31);
+  ctx.fillText(revLabel, 16, 32);
 
   // Tool / Kind Tag
   const toolName = (station.tool || station.kind || "edit").toUpperCase();
   ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
   const toolW = ctx.measureText(toolName).width + 12;
-  const toolX = isNow ? 96 : 60;
+  const toolX = isNow ? 104 : 64;
   ctx.fillStyle = "rgba(91, 141, 239, 0.22)";
   ctx.fillRect(toolX, 18, toolW, 20);
   ctx.strokeStyle = "rgba(91, 141, 239, 0.45)";
@@ -240,60 +204,134 @@ function redrawStationCard(
   const baseName = fullPath.split(/[/\\]/).pop() || fullPath;
   ctx.font = "bold 17px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(baseName, 16, 76);
+  ctx.fillText(baseName, 16, 78);
 
   ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, monospace";
   const plusText = `+${station.added}`;
   const minusText = `−${station.removed}`;
   ctx.fillStyle = "#2dd4bf";
-  ctx.fillText(plusText, 16, 98);
+  ctx.fillText(plusText, 16, 100);
   const plusW = ctx.measureText(plusText).width;
   ctx.fillStyle = "#f87171";
-  ctx.fillText(minusText, 16 + plusW + 10, 98);
+  ctx.fillText(minusText, 16 + plusW + 10, 100);
 
-  // 4. Actual Content of the Changes (Code preview)
+  // Outcome Tag
+  const isErr = station.outcome === "error";
+  const statusLabel = isErr ? "● FAILED" : "● OK";
+  ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = isErr ? "#f87171" : "rgba(45, 212, 191, 0.75)";
+  ctx.fillText(statusLabel, 16 + plusW + 10 + ctx.measureText(minusText).width + 12, 100);
+
+  // 4. Actual Content of the Changes (Scrollable Diff Box)
   const previewBoxX = 14;
-  const previewBoxY = 112;
+  const previewBoxY = 114;
   const previewBoxW = w - 28;
-  const previewBoxH = h - 124;
+  const previewBoxH = h - 146;
 
-  ctx.fillStyle = "rgba(3, 7, 12, 0.78)";
+  ctx.fillStyle = "rgba(3, 7, 14, 0.88)";
   ctx.fillRect(previewBoxX, previewBoxY, previewBoxW, previewBoxH);
   ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
   ctx.strokeRect(previewBoxX, previewBoxY, previewBoxW, previewBoxH);
 
+  // Header of diff container
+  ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
+  ctx.fillRect(previewBoxX, previewBoxY, previewBoxW, 22);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+  ctx.beginPath();
+  ctx.moveTo(previewBoxX, previewBoxY + 22);
+  ctx.lineTo(previewBoxX + previewBoxW, previewBoxY + 22);
+  ctx.stroke();
+
   const rawPreview = station.preview || (isNow ? "Current worktree state" : "No preview available");
-  const lines = rawPreview.split("\n").slice(0, 9);
-  const lineH = 21;
+  const allLines = rawPreview.split("\n");
+  const visibleLines = 12;
+  const maxScroll = Math.max(0, allLines.length - visibleLines);
+  const safeScroll = Math.max(0, Math.min(maxScroll, scrollLine));
+  const linesToRender = allLines.slice(safeScroll, safeScroll + visibleLines);
+
+  ctx.font = "9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "rgba(226, 232, 240, 0.55)";
+  const rangeEnd = Math.min(allLines.length, safeScroll + visibleLines);
+  ctx.fillText(
+    `CHANGES // L ${safeScroll + 1}–${rangeEnd} OF ${allLines.length}`,
+    previewBoxX + 8,
+    previewBoxY + 15,
+  );
+
+  if (maxScroll > 0) {
+    ctx.fillStyle = isHovered ? "#ff9a3c" : "#38bdf8";
+    ctx.fillText("↕ WHEEL TO SCROLL", previewBoxX + previewBoxW - 110, previewBoxY + 15);
+  }
+
+  // Render Diff Lines
+  const lineH = 20;
   ctx.font = "11.5px ui-monospace, SFMono-Regular, Menlo, monospace";
 
-  lines.forEach((line, idx) => {
-    const yLine = previewBoxY + 16 + idx * lineH;
-    if (yLine > previewBoxY + previewBoxH - 6) return;
+  linesToRender.forEach((line, idx) => {
+    const yLine = previewBoxY + 38 + idx * lineH;
+    if (yLine > previewBoxY + previewBoxH - 4) return;
 
+    const lineNum = (safeScroll + idx + 1).toString().padStart(2, "0");
     const isAdd = line.startsWith("+") && !line.startsWith("+++");
     const isDel = line.startsWith("-") && !line.startsWith("---");
     const isHunk = line.startsWith("@@");
 
     if (isAdd) {
       ctx.fillStyle = "rgba(45, 212, 191, 0.14)";
-      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 2, lineH);
+      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 8, lineH);
       ctx.fillStyle = "#2dd4bf";
     } else if (isDel) {
       ctx.fillStyle = "rgba(248, 113, 113, 0.14)";
-      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 2, lineH);
+      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 8, lineH);
       ctx.fillStyle = "#f87171";
     } else if (isHunk) {
       ctx.fillStyle = "rgba(56, 189, 248, 0.12)";
-      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 2, lineH);
+      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 8, lineH);
       ctx.fillStyle = "#38bdf8";
     } else {
       ctx.fillStyle = "rgba(226, 232, 240, 0.75)";
     }
 
-    const displayLine = line.length > 56 ? line.slice(0, 53) + "…" : line;
-    ctx.fillText(displayLine, previewBoxX + 8, yLine);
+    // Line number prefix
+    ctx.fillStyle = "rgba(148, 163, 184, 0.38)";
+    ctx.fillText(lineNum, previewBoxX + 6, yLine);
+
+    // Line text
+    if (isAdd) ctx.fillStyle = "#2dd4bf";
+    else if (isDel) ctx.fillStyle = "#f87171";
+    else if (isHunk) ctx.fillStyle = "#38bdf8";
+    else ctx.fillStyle = "rgba(226, 232, 240, 0.75)";
+
+    const displayLine = line.length > 58 ? line.slice(0, 55) + "…" : line;
+    ctx.fillText(displayLine, previewBoxX + 28, yLine);
   });
+
+  // Sci-Fi Scrollbar Track & Thumb
+  if (maxScroll > 0) {
+    const sbTrackX = previewBoxX + previewBoxW - 6;
+    const sbTrackY = previewBoxY + 23;
+    const sbTrackH = previewBoxH - 24;
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.fillRect(sbTrackX, sbTrackY, 4, sbTrackH);
+
+    const thumbH = Math.max(16, (visibleLines / allLines.length) * sbTrackH);
+    const thumbY = sbTrackY + (safeScroll / maxScroll) * (sbTrackH - thumbH);
+
+    ctx.fillStyle = isHovered ? "#ff9a3c" : "#2dd4bf";
+    ctx.fillRect(sbTrackX, thumbY, 4, thumbH);
+  }
+
+  // 5. Card Footer Interaction Hint
+  ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = isHovered ? "rgba(255, 154, 60, 0.85)" : "rgba(226, 232, 240, 0.4)";
+  ctx.fillText(
+    isHovered
+      ? "⚡ ACTIVE INSPECTION · SCROLL WHEEL TO BROWSE DIFF"
+      : "HOVER TO EXPAND · CLICK TO SELECT",
+    16,
+    h - 12,
+  );
 
   ctx.restore();
 }
@@ -302,11 +340,12 @@ function drawStationCardCanvas(
   station: StationLayoutInput,
   isActive: boolean,
   isHovered: boolean,
+  scrollLine = 0,
 ): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 340;
-  redrawStationCard(canvas, station, isActive, isHovered);
+  canvas.width = 640;
+  canvas.height = 420;
+  redrawStationCard(canvas, station, isActive, isHovered, scrollLine);
   return canvas;
 }
 
@@ -329,9 +368,18 @@ export interface ChronicleHandle {
 
 interface Station3DCard {
   mesh: Mesh;
+  pedestalMesh: Mesh;
+  pedestalMat: MeshBasicMaterial;
   texture: CanvasTexture;
   canvas: HTMLCanvasElement;
   station: StationLayoutInput;
+  baseX: number;
+  baseY: number;
+  baseZ: number;
+  scrollLine: number;
+  allLines: string[];
+  visibleLines: number;
+  maxScroll: number;
 }
 
 function disposeMaterial(material: Material) {
@@ -386,7 +434,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   controls.minDistance = 2.5;
   controls.maxDistance = 60;
   controls.minPolarAngle = 0.12;
-  controls.maxPolarAngle = Math.PI / 2 - 0.06;
+  controls.maxPolarAngle = Math.PI / 2 - 0.04;
   controls.dampingFactor = 0.08;
 
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -419,7 +467,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   floor.position.set(0, 0, 0);
   scene.add(floor);
 
-  // Subdued neon grid
+  // Subdued neon floor grid
   const grid = new GridHelper(2000, 100, TEAL, TEAL);
   grid.position.y = 0.015;
   const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
@@ -518,13 +566,11 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
 
   const raycaster = new Raycaster();
   const pointer = new Vector2();
-  const projVec = new Vector3();
   const offset = new Vector3();
   const pick: Object3DType[] = [];
   const nodeMeshById = new Map<Object3DType, string>();
 
   let laidOut: StationLayoutInput[] = [];
-  let nowReady = new Set<string>();
   let realCount = 0;
   let currentActive = "";
   let framedPath: string | null = null;
@@ -535,28 +581,16 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   let disposed = false;
   let downPos = { x: 0, y: 0 };
   let isDown = false;
-  let terrainWidth = 10;
-  let terrainDepth = 6;
-  let maxTerrainChurn = 10;
+  let timelineSpanX = 10;
 
-  // 3D Transparent Station Cards
+  // 3D Standing Station Cards
   const stationCards: Station3DCard[] = [];
-  let ridgePaint: { attr: Float32BufferAttribute; lanes: number[]; heights: number[] } | null = null;
-
-  const projectToScreen = (p: { x: number; y: number; z: number }): [number, number] | null => {
-    projVec.set(p.x, p.y, p.z).project(camera);
-    if (projVec.z > 1.0) return null;
-    const sx = (projVec.x * 0.5 + 0.5) * hostWidth;
-    const sy = (-projVec.y * 0.5 + 0.5) * hostHeight;
-    return [sx, sy];
-  };
 
   const clearRoot = () => {
     for (const card of stationCards) {
       card.texture.dispose();
     }
     stationCards.length = 0;
-    ridgePaint = null;
     nodeMeshById.clear();
     pick.length = 0;
     for (const child of [...root.children]) {
@@ -583,7 +617,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   const placeTarget = (x: number, y: number, z: number) => {
     offset.subVectors(camera.position, controls.target);
     if (offset.lengthSq() < 1e-8) {
-      const fallback = ridgeCameraOffset(laidOut);
+      const fallback = cardCameraOffset(laidOut);
       offset.set(fallback.x, fallback.y, fallback.z);
     }
     controls.target.set(x, y, z);
@@ -592,12 +626,15 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   };
 
   const follow = (fresh: boolean, rebuilt: boolean) => {
-    const center = ridgeCentroid(laidOut, realCount);
+    const center = cardCentroid(laidOut, realCount);
     const active = resolveActive();
-    const point = active ? stationWorld("ridge", active, realCount) : center;
+    const activeCard = stationCards.find((c) => c.station.id === active?.id);
+    const activeX = activeCard ? activeCard.baseX : center.x;
+    const activeZ = activeCard ? activeCard.baseZ : center.z;
     const path = active?.path ?? (active?.id.startsWith("now:") ? active.id.slice(4) : null);
+
     if (fresh) {
-      const off = ridgeCameraOffset(laidOut);
+      const off = cardCameraOffset(laidOut);
       controls.target.set(center.x, center.y, center.z);
       camera.position.set(center.x + off.x, center.y + off.y, center.z + off.z);
       controls.update();
@@ -605,163 +642,118 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       return;
     }
     if (path !== framedPath || rebuilt) {
-      placeTarget(point.x, center.y, center.z);
+      placeTarget(activeX, center.y, activeZ);
       framedPath = path;
       return;
     }
-    placeTarget(point.x, controls.target.y, controls.target.z);
-  };
-
-  const nearestStation = (point: Vector3): string | null => {
-    let best: string | null = null;
-    let bestD = Infinity;
-    for (const station of laidOut) {
-      const world = stationWorld("ridge", station, realCount);
-      const dx = world.x - point.x;
-      const dy = world.y - point.y;
-      const dz = world.z - point.z;
-      const d = dx * dx + dy * dy + dz * dz;
-      if (d < bestD) {
-        bestD = d;
-        best = station.id;
-      }
-    }
-    return best;
+    placeTarget(activeX, controls.target.y, activeZ);
   };
 
   const rebuildRidgeScene = (stations: StationLayoutInput[]) => {
     const real = realStations(stations);
     realCount = real.length;
 
-    const byOrdinal = new Map<number, StationLayoutInput>();
     let maxOrdinal = 0;
-    let maxLane = 0;
-    let maxChurn = 1;
     for (const s of real) {
-      byOrdinal.set(s.ordinal, s);
       maxOrdinal = Math.max(maxOrdinal, s.ordinal);
-      maxLane = Math.max(maxLane, s.lane);
-      maxChurn = Math.max(maxChurn, s.added + s.removed);
     }
-    maxTerrainChurn = maxChurn;
-    const columns = Math.max(real.length, maxOrdinal + 1);
-    const laneCount = maxLane + 1;
-    const xCells = Math.max(0, columns - 1);
-    const zCells = Math.max(0, laneCount);
 
-    terrainWidth = Math.max(xCells * RIDGE_STEP_X, 2);
-    terrainDepth = Math.max(zCells * RIDGE_LANE_Z, 2);
+    timelineSpanX = Math.max(2, (maxOrdinal + 1) * CARD_SPACING_X);
 
     // Reposition laser scan curtain
     scanPlane.geometry?.dispose();
-    scanPlane.geometry = new PlaneGeometry(terrainDepth + 4, 8);
+    scanPlane.geometry = new PlaneGeometry(8, 8);
 
-    const heightAt = (ordinal: number, lane: number) => {
-      const s = byOrdinal.get(ordinal);
-      if (!s || s.lane !== lane) return 0;
-      return ridgeHeight(s.added, s.removed);
-    };
+    // Timeline Runway Ground Rails (Cybernetic track under cards)
+    const railMat = new MeshBasicMaterial({
+      color: TEAL,
+      transparent: true,
+      opacity: 0.25,
+      side: DoubleSide,
+    });
+    const railGeo = new PlaneGeometry(timelineSpanX + 4, 0.06);
+    const railMesh = new Mesh(railGeo, railMat);
+    railMesh.rotation.x = -Math.PI / 2;
+    railMesh.position.set(timelineSpanX / 2 - 1, 0.02, 0);
+    root.add(railMesh);
 
-    const positions: number[] = [];
-    const lanes: number[] = [];
-    const heights: number[] = [];
+    // 3D Station Cards standing vertically at ~50° angle
+    const cardGeo = new PlaneGeometry(CARD_WIDTH, CARD_HEIGHT);
+    const padGeo = new PlaneGeometry(CARD_WIDTH * 0.95, 0.35);
 
-    const pushVertex = (vertex: Vec3, lane: number) => {
-      positions.push(vertex.x, vertex.y + RIDGE_LIFT, vertex.z);
-      lanes.push(lane);
-      heights.push(vertex.y);
-    };
-
-    for (let i = 0; i < xCells; i += 1) {
-      for (let lane = 0; lane < zCells; lane += 1) {
-        const cell = ridgeCellCorners(i, lane, heightAt);
-        pushVertex(cell.v00, lane);
-        pushVertex(cell.v01, lane);
-        pushVertex(cell.v11, lane);
-        pushVertex(cell.v00, lane);
-        pushVertex(cell.v11, lane);
-        pushVertex(cell.v10, lane);
-      }
-    }
-
-    if (positions.length >= 9) {
-      // 1. Solid Topographical Terrain with dynamic vertex color shading
-      const terrainGeo = new BufferGeometry();
-      terrainGeo.setAttribute("position", new Float32BufferAttribute(positions, 3));
-      const colorAttr = new Float32BufferAttribute(new Float32Array(lanes.length * 3), 3);
-      terrainGeo.setAttribute("color", colorAttr);
-      const terrainMat = new MeshBasicMaterial({ vertexColors: true, side: FrontSide });
-      const terrainMesh = new Mesh(terrainGeo, terrainMat);
-      terrainMesh.userData.surface = true;
-      root.add(terrainMesh);
-      pick.push(terrainMesh);
-
-      // 2. Holographic Digital Elevation Model (DEM) Wireframe Overlay
-      const wireframeMat = new MeshBasicMaterial({
-        color: CYAN,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.28,
-        side: FrontSide,
-      });
-      const wireframeMesh = new Mesh(terrainGeo, wireframeMat);
-      wireframeMesh.position.y = 0.005;
-      root.add(wireframeMesh);
-
-      ridgePaint = { attr: colorAttr, lanes, heights };
-    }
-
-    // 3. 3D Transparent Station Cards (showing file name, metrics, and actual code changes)
-    const cardGeo = new PlaneGeometry(2.3, 1.55);
     for (const station of real) {
-      const pt = stationWorld("ridge", station, real.length);
+      const baseX = station.ordinal * CARD_SPACING_X;
+      const baseY = CARD_BASE_Y;
+      const baseZ = station.lane * 1.1;
+
       const isAct = station.id === currentActive;
-      const canvas = drawStationCardCanvas(station, isAct, false);
+      const canvas = drawStationCardCanvas(station, isAct, false, 0);
       const texture = new CanvasTexture(canvas);
       const cardMat = new MeshBasicMaterial({
         map: texture,
         transparent: true,
-        opacity: 0.92,
+        opacity: 0.95,
         side: DoubleSide,
         depthWrite: false,
       });
+
       const cardMesh = new Mesh(cardGeo, cardMat);
-      cardMesh.position.set(pt.x, pt.y + 1.25, pt.z);
+      cardMesh.position.set(baseX, baseY, baseZ);
+      cardMesh.rotation.y = RESTING_ROTATION_Y;
       cardMesh.userData.stationId = station.id;
       root.add(cardMesh);
       pick.push(cardMesh);
       nodeMeshById.set(cardMesh, station.id);
-      stationCards.push({ mesh: cardMesh, texture, canvas, station });
 
-      // Ground anchor stem
-      const stemMat = new MeshBasicMaterial({
-        color: TEAL,
+      // Floor Pedestal Pad under each card
+      const padMat = new MeshBasicMaterial({
+        color: isAct ? GOLD : TEAL,
+        wireframe: true,
         transparent: true,
-        opacity: 0.45,
+        opacity: isAct ? 0.75 : 0.35,
+        side: DoubleSide,
       });
-      const stem = new Mesh(new CylinderGeometry(0.015, 0.015, 0.5, 6), stemMat);
-      stem.position.set(pt.x, pt.y + 0.25, pt.z);
-      root.add(stem);
+      const padMesh = new Mesh(padGeo, padMat);
+      padMesh.rotation.x = -Math.PI / 2;
+      padMesh.rotation.z = -RESTING_ROTATION_Y;
+      padMesh.position.set(baseX, 0.02, baseZ);
+      root.add(padMesh);
+
+      const rawPreview =
+        station.preview || (station.kind === "now" ? "Current worktree state" : "No preview available");
+      const allLines = rawPreview.split("\n");
+      const visibleLines = 12;
+      const maxScroll = Math.max(0, allLines.length - visibleLines);
+
+      stationCards.push({
+        mesh: cardMesh,
+        pedestalMesh: padMesh,
+        pedestalMat: padMat,
+        texture,
+        canvas,
+        station,
+        baseX,
+        baseY,
+        baseZ,
+        scrollLine: 0,
+        allLines,
+        visibleLines,
+        maxScroll,
+      });
     }
   };
 
   const paintActiveNodes = (activeId: string) => {
-    const activeLane = laidOut.find((s) => s.id === activeId)?.lane ?? -1;
     for (const entry of stationCards) {
       const isAct = entry.station.id === activeId;
       const isHov = entry.station.id === hoveredId;
-      redrawStationCard(entry.canvas, entry.station, isAct, isHov);
+      redrawStationCard(entry.canvas, entry.station, isAct, isHov, entry.scrollLine);
       entry.texture.needsUpdate = true;
+
+      // Update pedestal color
+      entry.pedestalMat.color.set(isAct ? GOLD : TEAL);
+      entry.pedestalMat.opacity = isAct ? 0.8 : isHov ? 0.6 : 0.35;
     }
-    if (!ridgePaint) return;
-    for (let index = 0; index < ridgePaint.lanes.length; index += 1) {
-      const [r, g, b] = ridgeColor(
-        ridgePaint.heights[index] ?? 0,
-        ridgePaint.lanes[index] === activeLane,
-      );
-      ridgePaint.attr.setXYZ(index, r, g, b);
-    }
-    ridgePaint.attr.needsUpdate = true;
   };
 
   const onPointerDown = (event: PointerEvent) => {
@@ -788,7 +780,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
 
     let id: string | null = null;
     if (typeof hit.object.userData.stationId === "string") id = hit.object.userData.stationId;
-    else if (hit.object.userData.surface === true) id = nearestStation(hit.point);
 
     if (id && id !== currentActive) {
       currentActive = id;
@@ -813,9 +804,9 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       if (!isDown) renderer.domElement.style.cursor = "grab";
       return;
     }
+
     let id: string | null = null;
     if (typeof hit.object.userData.stationId === "string") id = hit.object.userData.stationId;
-    else if (hit.object.userData.surface === true) id = nearestStation(hit.point);
 
     if (id !== hoveredId) {
       hoveredId = id;
@@ -835,27 +826,28 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     renderer.domElement.style.cursor = "grab";
   };
 
-  const stopWheel = (event: WheelEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-  };
-
   const onWheel = (event: WheelEvent) => {
-    if (!event.shiftKey && laidOut.length > 0) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const dir = event.deltaY > 0 ? -1 : 1;
-      const nextId = stepScrub(laidOut, currentActive, (path) => nowReady.has(path), dir);
-      if (!nextId) return;
-      currentActive = nextId;
-      follow(false, false);
-      paintActiveNodes(nextId);
-      hooks.onActiveId(nextId);
+    // If hovering over a card with scrollable diff lines, wheel scrolls inside the card!
+    if (hoveredId) {
+      const card = stationCards.find((c) => c.station.id === hoveredId);
+      if (card && card.maxScroll > 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const dir = event.deltaY > 0 ? 1 : -1;
+        card.scrollLine = Math.max(0, Math.min(card.maxScroll, card.scrollLine + dir * 2));
+        redrawStationCard(
+          card.canvas,
+          card.station,
+          card.station.id === currentActive,
+          true,
+          card.scrollLine,
+        );
+        card.texture.needsUpdate = true;
+      }
     }
   };
 
   renderer.domElement.addEventListener("wheel", onWheel, { passive: false, capture: true });
-  renderer.domElement.addEventListener("wheel", stopWheel, { passive: false });
   renderer.domElement.addEventListener("pointerdown", onPointerDown);
   renderer.domElement.addEventListener("pointerup", onPointerUp);
   renderer.domElement.addEventListener("pointermove", onPointerMove);
@@ -915,85 +907,57 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     hud.fillText(`BEARING ${((sweepAngle * 180) / Math.PI).toFixed(0)}°`, rcX + rcRad + 12, rcY + 8);
     hud.restore();
 
-    // 2. Churn Altitude Value Ruler (Left Screen Edge)
-    const rulerTop = 110;
-    const rulerBottom = hostHeight - 75;
-    const rulerH = Math.max(10, rulerBottom - rulerTop);
+    // 2. Vertical Revision Ladder (Left Screen Edge)
+    const ladderTop = 110;
+    const ladderBottom = hostHeight - 75;
+    const ladderH = Math.max(10, ladderBottom - ladderTop);
 
     hud.save();
-    hud.strokeStyle = "rgba(45, 212, 191, 0.35)";
+    hud.strokeStyle = "rgba(45, 212, 191, 0.3)";
     hud.fillStyle = "rgba(226, 232, 240, 0.4)";
     hud.lineWidth = 1;
     hud.beginPath();
-    hud.moveTo(18, rulerTop);
-    hud.lineTo(18, rulerBottom);
-
-    const steps = 4;
-    for (let s = 0; s <= steps; s++) {
-      const y = rulerBottom - (s / steps) * rulerH;
-      hud.moveTo(18, y);
-      hud.lineTo(26, y);
-    }
+    hud.moveTo(18, ladderTop);
+    hud.lineTo(18, ladderBottom);
     hud.stroke();
 
     hud.font = "8px ui-monospace, SFMono-Regular, Menlo, monospace";
     hud.textAlign = "left";
-    hud.fillText("CHURN ▲", 14, rulerTop - 8);
-
-    for (let s = 0; s <= steps; s++) {
-      const y = rulerBottom - (s / steps) * rulerH;
-      const val = Math.round((s / steps) * maxTerrainChurn);
-      hud.fillText(`+${val}`, 30, y + 3);
-    }
+    hud.fillStyle = "rgba(45, 212, 191, 0.75)";
+    hud.fillText("REVS ▼", 14, ladderTop - 8);
 
     const act = resolveActive();
-    const actChurn = act ? act.added + act.removed : 0;
-    const actFrac = maxTerrainChurn > 0 ? Math.min(1, actChurn / maxTerrainChurn) : 0;
-    const curY = rulerBottom - actFrac * rulerH;
+    const actOrd = act ? act.ordinal : 0;
+    const totalRev = Math.max(1, realCount);
 
-    hud.fillStyle = "#ff9a3c";
-    hud.beginPath();
-    hud.moveTo(18, curY);
-    hud.lineTo(10, curY - 4);
-    hud.lineTo(10, curY + 4);
-    hud.closePath();
-    hud.fill();
-    hud.restore();
+    if (totalRev > 1) {
+      const stepCount = Math.min(8, totalRev);
+      for (let s = 0; s < stepCount; s++) {
+        const frac = s / (stepCount - 1);
+        const y = ladderTop + frac * ladderH;
+        const revIdx = Math.round(frac * (totalRev - 1));
+        const isCurrent = revIdx === actOrd;
 
-    // 3. File Lane Ground Labels (Z-Axis)
-    hud.save();
-    hud.font = "8.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-    hud.textAlign = "right";
-    const uniqueFiles = new Map<number, string>();
-    for (const s of laidOut) {
-      if (s.path && !uniqueFiles.has(s.lane)) {
-        const base = s.path.split(/[/\\]/).pop() || s.path;
-        uniqueFiles.set(s.lane, base);
-      }
-    }
-    const actLane = act?.lane ?? -1;
-    for (const [lane, fname] of uniqueFiles.entries()) {
-      const sp = projectToScreen({ x: -0.8, y: 0, z: lane * RIDGE_LANE_Z });
-      if (sp && sp[0] > 0 && sp[0] < hostWidth && sp[1] > 0 && sp[1] < hostHeight) {
-        hud.fillStyle = lane === actLane ? "#ff9a3c" : "rgba(45, 212, 191, 0.55)";
-        hud.fillText(`[LANE ${lane}] ${fname}`, sp[0] - 8, sp[1]);
-        hud.strokeStyle = lane === actLane ? "rgba(255, 154, 60, 0.4)" : "rgba(45, 212, 191, 0.2)";
+        hud.strokeStyle = isCurrent ? "#ff9a3c" : "rgba(45, 212, 191, 0.35)";
         hud.beginPath();
-        hud.moveTo(sp[0] - 4, sp[1] - 3);
-        hud.lineTo(sp[0] + 12, sp[1] - 3);
+        hud.moveTo(18, y);
+        hud.lineTo(26, y);
         hud.stroke();
+
+        hud.fillStyle = isCurrent ? "#ff9a3c" : "rgba(226, 232, 240, 0.45)";
+        hud.fillText(`#${revIdx}`, 30, y + 3);
       }
     }
     hud.restore();
 
-    // 4. Bottom Right Telemetry Stream
+    // 3. Bottom Right Telemetry Stream
     if (hostWidth >= 520) {
       hud.save();
       hud.font = "8px ui-monospace, SFMono-Regular, Menlo, monospace";
       hud.textAlign = "right";
       hud.fillStyle = "rgba(226, 232, 240, 0.45)";
       hud.fillText(
-        `SWEEP X: ${scanX.toFixed(1)}   REVS: ${realCount}   MAX CHURN: +${maxTerrainChurn}   60 FPS`,
+        `SWEEP X: ${scanX.toFixed(1)}   REVS: ${realCount}   ACTIVE: ${act ? `#${act.ordinal}` : "NONE"}   60 FPS`,
         hostWidth - 16,
         hostHeight - 14,
       );
@@ -1006,27 +970,39 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     if (disposed || document.hidden) return;
 
     // 1. Animate Chronological Laser Scanning Plane
-    const scanPeriod = Math.max(terrainWidth * 250, 3000);
+    const scanPeriod = Math.max(timelineSpanX * 250, 3000);
     const scanProgress = (now % scanPeriod) / scanPeriod;
-    const scanX = scanProgress * (terrainWidth + 2) - 1;
+    const scanX = scanProgress * (timelineSpanX + 2) - 1;
     scanPlane.position.x = scanX;
-    scanPlane.position.z = terrainDepth / 2;
+    scanPlane.position.z = 0;
     scanMat.opacity = 0.16 + 0.12 * Math.sin(now * 0.004);
 
-    // 2. Animate and Billboard 3D Cards
+    // 2. Smoothly Animate 3D Cards: Tilt, Face-front on Hover, Scale & Lift
     for (const card of stationCards) {
-      card.mesh.quaternion.copy(camera.quaternion);
-      const isAct = card.station.id === currentActive;
       const isHov = card.station.id === hoveredId;
-      const targetScale = isAct ? 1.10 : isHov ? 1.05 : 1.0;
-      card.mesh.scale.set(targetScale, targetScale, targetScale);
+      const isAct = card.station.id === currentActive;
+      const faceFront = isHov || (isAct && hoveredId === null);
+
+      const targetRotY = faceFront ? 0 : RESTING_ROTATION_Y;
+      const targetScale = isHov ? 1.22 : isAct ? 1.10 : 1.0;
+      const targetZ = card.baseZ + (isHov ? 0.65 : isAct ? 0.35 : 0);
+      const targetY = card.baseY + (isHov ? 0.12 : isAct ? 0.05 : 0);
+
+      // Smooth damping interpolation
+      card.mesh.rotation.y += (targetRotY - card.mesh.rotation.y) * 0.14;
+      card.mesh.position.z += (targetZ - card.mesh.position.z) * 0.14;
+      card.mesh.position.y += (targetY - card.mesh.position.y) * 0.14;
+
+      const s = card.mesh.scale.x;
+      const nextScale = s + (targetScale - s) * 0.14;
+      card.mesh.scale.set(nextScale, nextScale, nextScale);
     }
 
-    // 3. Telemetry Landmark Beacon tracking and sonar animation
+    // 3. Telemetry Landmark Beacon tracking and sonar animation on the floor
     const act = resolveActive();
-    if (act) {
-      const worldPos = stationWorld("ridge", act, realCount);
-      beaconGroup.position.set(worldPos.x, worldPos.y, worldPos.z);
+    const actCard = stationCards.find((c) => c.station.id === act?.id);
+    if (actCard) {
+      beaconGroup.position.set(actCard.baseX, 0, actCard.baseZ);
       beaconGroup.visible = true;
 
       const phase1 = (now % 1600) / 1600;
@@ -1077,13 +1053,12 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   raf = requestAnimationFrame(frame);
 
   return {
-    setStations(stations, _scene, activeId, nowPaths = []) {
+    setStations(stations, _scene, activeId) {
       if (disposed) return;
       laidOut = stations;
-      nowReady = new Set(nowPaths);
       realCount = realStations(stations).length;
       currentActive = activeId;
-      const signature = `ridge\n${stations.map((s) => `${s.id}:${s.ordinal}:${s.lane}:${s.added}:${s.removed}`).join("\n")}`;
+      const signature = `timeline\n${stations.map((s) => `${s.id}:${s.ordinal}:${s.lane}:${s.added}:${s.removed}`).join("\n")}`;
       const rebuilt = signature !== built;
       if (rebuilt) {
         built = signature;
@@ -1120,7 +1095,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       document.removeEventListener("visibilitychange", onVisibility);
       motionQuery.removeEventListener("change", syncMotion);
       renderer.domElement.removeEventListener("wheel", onWheel, { capture: true });
-      renderer.domElement.removeEventListener("wheel", stopWheel);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
