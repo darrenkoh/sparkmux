@@ -1477,6 +1477,7 @@ fn piece_draft(
                 )
             } else {
                 let preview = one_line(&first_line(&body));
+                let display = format_write(&body);
                 draft_from(
                     call,
                     &resolved,
@@ -1487,7 +1488,7 @@ fn piece_draft(
                     Vec::new(),
                     Some(body.into_bytes()),
                     None,
-                    String::new(),
+                    display,
                 )
             }
         }
@@ -1514,6 +1515,7 @@ fn piece_draft(
             let resolved = resolve_cached(&path, cwd_canon, cache);
             if from_add {
                 let preview = one_line(&first_line(&body));
+                let display = format_write(&body);
                 draft_from(
                     call,
                     &resolved,
@@ -1524,7 +1526,7 @@ fn piece_draft(
                     Vec::new(),
                     Some(body.into_bytes()),
                     None,
-                    String::new(),
+                    display,
                 )
             } else {
                 draft_from(
@@ -4362,5 +4364,46 @@ mod tests {
         assert_eq!(loaded.session.stations.len(), 1);
         let panel = holo(&loaded, 0);
         assert_eq!(panel.file_text.as_deref(), Some("LONGBODY"));
+    }
+
+    #[test]
+    fn add_file_error_hunk_shows_the_body() {
+        let dir = scratch("addh");
+        let patch = [
+            "*** Add File: src/a.rs",
+            "+PLAIN",
+            "+BODY",
+            "*** Add File: src/c.rs",
+            "+MOVED",
+            "+BODY",
+            "*** Move to: src/b.rs",
+        ]
+        .join("\n");
+        let assistant = claude_msg(
+            "2026-10-10T08:00:00.000Z",
+            serde_json::json!([
+                {"type":"tool_use","id":"bad","name":"apply_patch","input":{"patch": patch}}
+            ]),
+        );
+        let user = serde_json::json!({
+            "type": "user",
+            "message": {"content": [
+                {"type":"tool_result","tool_use_id":"bad","is_error":true,"content":"fail"}
+            ]}
+        })
+        .to_string();
+        let loaded = load_in(CliKind::Claude, &dir, &ndjson(&[assistant, user]));
+        let plain = holo_kind(&loaded, "src/a.rs", "write");
+        assert_eq!(plain.fidelity, "patch");
+        assert!(plain.file_text.is_none());
+        assert_eq!(plain.diff_kind, "hunk");
+        assert_eq!(plain.reason.as_deref(), Some("tool reported failure"));
+        assert!(plain.diff_text.contains("+PLAIN"), "{}", plain.diff_text);
+        assert!(plain.diff_text.contains("+BODY"), "{}", plain.diff_text);
+        let moved = holo_kind(&loaded, "src/b.rs", "write");
+        assert_eq!(moved.fidelity, "patch");
+        assert_eq!(moved.diff_kind, "hunk");
+        assert!(moved.diff_text.contains("+MOVED"), "{}", moved.diff_text);
+        assert!(moved.diff_text.contains("+BODY"), "{}", moved.diff_text);
     }
 }
