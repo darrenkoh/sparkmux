@@ -1165,7 +1165,7 @@ body.is-resizing * {
   justify-content: center;
   gap: 2px;
   min-width: 0;
-  max-width: 52ch;
+  max-width: 64ch;
   flex: 0 1 auto;
   line-height: 1.15;
 }
@@ -1200,6 +1200,10 @@ body.is-resizing * {
 
 .status-usage.hot {
   color: var(--danger);
+}
+
+.status-usage.cost {
+  color: #facc15;
 }
 
 .status-helper {

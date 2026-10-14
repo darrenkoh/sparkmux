@@ -58,12 +58,18 @@ export default function StatusBar({
                 key={`${chip.text}-${index}`}
                 className={`status-usage ${chip.tone}`}
                 title={chip.title}
-                aria-label={`Model allowance: ${chip.text}`}
+                aria-label={
+                  chip.meter
+                    ? `Model allowance: ${chip.text}`
+                    : `Bedrock usage: ${chip.text}`
+                }
               >
                 <span className="status-usage-text">{chip.text}</span>
-                <span className="status-usage-track" aria-hidden="true">
-                  <span className="status-usage-fill" style={{ width: `${chip.fill}%` }} />
-                </span>
+                {chip.meter && (
+                  <span className="status-usage-track" aria-hidden="true">
+                    <span className="status-usage-fill" style={{ width: `${chip.fill}%` }} />
+                  </span>
+                )}
               </span>
             ))}
           </span>

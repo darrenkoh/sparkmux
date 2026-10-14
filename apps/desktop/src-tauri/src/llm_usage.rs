@@ -2,7 +2,8 @@
 //!
 //! Grok writes the weekly used percent to `~/.grok/logs/unified.jsonl`.
 //! Claude keeps its reset meter inside the CLI process, so those bars stay
-//! empty until a local payload is handed to the parser.
+//! empty until a local payload is handed to the parser. A Claude process with
+//! `CLAUDE_CODE_USE_BEDROCK` set reports session and today API cost instead.
 //! Antigravity prints the same table as `/usage` from `agy --print /usage`.
 //! While an agy pane is focused, that command runs on the interval chosen in
 //! the Sparkmux menu: 1, 3, 5, 10, or 15 minutes.
@@ -92,6 +93,9 @@ pub struct LlmUsage {
     pub fetched_at_ms: Option<i64>,
     pub plan: Option<String>,
     pub credits_usd: Option<f64>,
+    /// Bedrock API cost for this pane. Absent for subscription Claude, Grok, and Antigravity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<crate::bedrock_cost::BedrockCost>,
 }
 
 impl LlmUsage {
@@ -102,6 +106,7 @@ impl LlmUsage {
             fetched_at_ms: None,
             plan: None,
             credits_usd: None,
+            cost: None,
         }
     }
 
@@ -112,6 +117,7 @@ impl LlmUsage {
             fetched_at_ms: None,
             plan: None,
             credits_usd: None,
+            cost: None,
         }
     }
 }
@@ -123,15 +129,20 @@ struct UsagePaths {
 }
 
 #[tauri::command]
-pub fn llm_usage(command: String, title: String) -> LlmUsage {
+pub fn llm_usage(command: String, title: String, cwd: String, pid: u32) -> LlmUsage {
     let now = now_ms();
-    let usage = usage_for(&command, &title, &default_paths(), now);
+    let mut usage = usage_for(&command, &title, &default_paths(), now);
     if usage.cli.as_deref() == Some("antigravity") {
         if agy_refresh_minutes() == 0 {
             return LlmUsage::empty();
         }
         if usage.bars.is_empty() {
             return agy_print_cached(now);
+        }
+    }
+    if usage.cli.as_deref() == Some("claude") {
+        if let Some(cost) = crate::bedrock_cost::cost_for(&command, &cwd, &title, pid, now) {
+            usage.cost = Some(cost);
         }
     }
     usage
@@ -484,6 +495,7 @@ fn grok_from_value(value: &Value) -> Option<LlmUsage> {
         fetched_at_ms,
         plan,
         credits_usd,
+        cost: None,
     })
 }
 
@@ -512,6 +524,7 @@ fn parse_claude_usage(text: &str) -> Option<LlmUsage> {
         fetched_at_ms: None,
         plan: None,
         credits_usd: None,
+        cost: None,
     })
 }
 
@@ -587,6 +600,7 @@ fn parse_agy_usage(text: &str, now: i64) -> Option<LlmUsage> {
         fetched_at_ms: None,
         plan: None,
         credits_usd: None,
+        cost: None,
     })
 }
 
@@ -635,6 +649,7 @@ fn parse_agy_print(text: &str) -> Option<LlmUsage> {
         fetched_at_ms: None,
         plan: None,
         credits_usd: None,
+        cost: None,
     })
 }
 
@@ -761,7 +776,7 @@ fn clamp_percent(percent: f64) -> Option<f64> {
     Some(percent.clamp(0.0, 100.0))
 }
 
-fn parse_rfc3339_ms(input: &str) -> Option<i64> {
+pub(crate) fn parse_rfc3339_ms(input: &str) -> Option<i64> {
     let text = input.trim();
     if text.len() < 20 {
         return None;
@@ -1102,6 +1117,8 @@ Claude and GPT models  Five Hour Limit Remaining  100%  2026-10-11 16:48 PDT
         assert!(bar.contains("status-usage"));
         let app = include_str!("../../src/App.tsx");
         assert!(app.contains("llmUsage"));
+        assert!(app.contains("usageCwdRef"));
+        assert!(app.contains("usagePidRef"));
         assert!(app.contains("15_000"));
         let lib = include_str!("lib.rs");
         assert!(lib.contains("llm_usage::llm_usage"));

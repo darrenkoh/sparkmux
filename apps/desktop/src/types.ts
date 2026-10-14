@@ -73,12 +73,34 @@ export interface UsageBar {
   resets_at_ms: number | null;
 }
 
+export interface UsageCostModel {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}
+
+/** Dollars Claude recorded, plus token totals the UI prices when Claude did not. */
+export interface UsageCostPart {
+  known_usd: number;
+  estimated: boolean;
+  models: UsageCostModel[];
+}
+
+export interface UsageCost {
+  session: UsageCostPart;
+  today: UsageCostPart;
+}
+
 export interface LlmUsage {
   cli: string | null;
   bars: UsageBar[];
   fetched_at_ms: number | null;
   plan: string | null;
   credits_usd: number | null;
+  /** Present only for a Claude pane running on Bedrock. */
+  cost?: UsageCost | null;
 }
 
 export interface TmuxStatus {

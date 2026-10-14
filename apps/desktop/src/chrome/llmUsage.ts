@@ -1,8 +1,9 @@
-import type { LlmUsage, UsageBar } from "../types";
+import { estimateTotalCost } from "./analyticsFormat.ts";
+import type { LlmUsage, UsageBar, UsageCostPart } from "../types";
 
 export type { LlmUsage, UsageBar };
 
-export type UsageTone = "ok" | "warn" | "hot";
+export type UsageTone = "ok" | "warn" | "hot" | "cost";
 
 export interface UsageChip {
   text: string;
@@ -10,6 +11,8 @@ export interface UsageChip {
   /** Width of the meter, matching the percent the label quotes. */
   fill: number;
   tone: UsageTone;
+  /** Quota chips draw a remaining-percent bar. A Bedrock cost chip does not. */
+  meter: boolean;
 }
 
 const MONTHS = [
@@ -53,7 +56,11 @@ export function usageChips(
   now: number,
   timeZone?: string,
 ): UsageChip[] {
-  if (!usage?.cli || usage.bars.length === 0) return [];
+  if (!usage?.cli) return [];
+  if (usage.cli === "claude" && usage.cost) {
+    return [costChip(usage.cost)];
+  }
+  if (usage.bars.length === 0) return [];
   const title = tooltip(usage, now, timeZone);
   if (usage.cli === "grok") {
     const bar = usage.bars[0];
@@ -185,7 +192,64 @@ function chip(text: string, title: string, bar: UsageBar): UsageChip {
     title,
     fill: amountLeft(bar),
     tone: usageTone(amountLeft(bar)),
+    meter: true,
   };
+}
+
+function costChip(cost: NonNullable<LlmUsage["cost"]>): UsageChip {
+  const session = pricePart(cost.session);
+  const today = pricePart(cost.today);
+  const text = `Claude ${costAmount(session.usd, session.estimated)} session · ${costAmount(today.usd, today.estimated)} today`;
+  return {
+    text,
+    title: costTooltip(session, today),
+    fill: 0,
+    tone: "cost",
+    meter: false,
+  };
+}
+
+function pricePart(part: UsageCostPart): { usd: number; estimated: boolean } {
+  const models = part.models ?? [];
+  const extra = models.length > 0 ? estimateTotalCost(models, undefined, 0, 0, 0, 0) : 0;
+  return {
+    usd: finiteUsd(part.known_usd) + finiteUsd(extra),
+    estimated: part.estimated || models.length > 0,
+  };
+}
+
+function finiteUsd(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+/** `$1.23`, or four decimals under one cent so a new session can move. */
+function formatCostUsd(usd: number): string {
+  if (usd <= 0) return "$0.00";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+function costAmount(usd: number, estimated: boolean): string {
+  const body = formatCostUsd(usd);
+  return estimated ? `est. ${body}` : body;
+}
+
+function costTooltip(
+  session: { usd: number; estimated: boolean },
+  today: { usd: number; estimated: boolean },
+): string {
+  const lines = [
+    "Bedrock API",
+    `Session ${costAmount(session.usd, session.estimated)}`,
+    `Today ${costAmount(today.usd, today.estimated)} since local midnight`,
+  ];
+  if (session.estimated || today.estimated) {
+    lines.push("Estimated from token rates where Claude recorded no price");
+  } else {
+    lines.push("Recorded by Claude");
+  }
+  return lines.join("\n");
 }
 
 function tooltip(usage: LlmUsage, now: number, timeZone?: string): string {
@@ -302,6 +366,7 @@ export function parseAgyUsageScreen(text: string, now: number): LlmUsage | null 
     fetched_at_ms: now,
     plan: null,
     credits_usd: null,
+    cost: null,
   };
 }
 

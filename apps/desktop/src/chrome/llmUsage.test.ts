@@ -31,9 +31,69 @@ function usage(partial: Partial<LlmUsage>): LlmUsage {
     fetched_at_ms: null,
     plan: null,
     credits_usd: null,
+    cost: null,
     ...partial,
   };
 }
+
+test("bedrock claude shows session and today cost without a meter", () => {
+  const chips = usageChips(
+    usage({
+      cli: "claude",
+      cost: {
+        session: { known_usd: 1.23, estimated: false, models: [] },
+        today: { known_usd: 8.4, estimated: false, models: [] },
+      },
+    }),
+    NOW,
+  );
+  assert.equal(chips.length, 1);
+  assert.equal(chips[0].text, "Claude $1.23 session · $8.40 today");
+  assert.equal(chips[0].meter, false);
+  assert.equal(chips[0].tone, "cost");
+  assert.equal(chips[0].fill, 0);
+  assert.match(chips[0].title, /Bedrock API/);
+  assert.match(chips[0].title, /Recorded by Claude/);
+  assert.match(chips[0].title, /since local midnight/);
+});
+
+test("an unpriced bedrock session is labeled from token rates", () => {
+  const models = [
+    {
+      model: "claude-sonnet-4-5",
+      input_tokens: 1_000_000,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+    },
+  ];
+  const chips = usageChips(
+    usage({
+      cli: "claude",
+      cost: {
+        session: { known_usd: 0, estimated: true, models },
+        today: { known_usd: 1, estimated: true, models },
+      },
+    }),
+    NOW,
+  );
+  assert.equal(chips[0].text, "Claude est. $3.00 session · est. $4.00 today");
+  assert.match(chips[0].title, /Estimated from token rates/);
+});
+
+test("a tiny bedrock cost keeps four decimals", () => {
+  const chips = usageChips(
+    usage({
+      cli: "claude",
+      cost: {
+        session: { known_usd: 0.0042, estimated: false, models: [] },
+        today: { known_usd: 0.0042, estimated: false, models: [] },
+      },
+    }),
+    NOW,
+  );
+  assert.equal(chips[0].text, "Claude $0.0042 session · $0.0042 today");
+});
 
 test("a shell pane and a cli with no payload show nothing", () => {
   assert.deepEqual(usageChips(null, NOW), []);

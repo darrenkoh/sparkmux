@@ -376,8 +376,13 @@ export function appTelemetry(): Promise<AppTelemetry> {
   return invoke("app_telemetry");
 }
 
-export function llmUsage(command: string, title: string): Promise<LlmUsage> {
-  return invoke("llm_usage", { command, title });
+export function llmUsage(
+  command: string,
+  title: string,
+  cwd: string,
+  pid: number,
+): Promise<LlmUsage> {
+  return invoke("llm_usage", { command, title, cwd, pid });
 }
 
 export function enableCommandHelper(): Promise<HelperStatus> {

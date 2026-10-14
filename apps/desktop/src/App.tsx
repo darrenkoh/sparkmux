@@ -968,13 +968,19 @@ export default function App() {
   const outputPane = outputPaneForTab(visibleWin, focusedPane);
   const usageCommand = outputPane?.command ?? "";
   const usageTitle = outputPane?.title ?? "";
+  const usageCwd = outputPane?.path ?? "";
+  const usagePid = outputPane?.pid ?? 0;
   const usagePaneId = outputPane?.id ?? "";
   const usageCommandRef = useRef(usageCommand);
   const usageTitleRef = useRef(usageTitle);
+  const usageCwdRef = useRef(usageCwd);
+  const usagePidRef = useRef(usagePid);
   const usagePaneRef = useRef(usagePaneId);
   const agyScreenRef = useRef<LlmUsage | null>(null);
   usageCommandRef.current = usageCommand;
   usageTitleRef.current = usageTitle;
+  usageCwdRef.current = usageCwd;
+  usagePidRef.current = usagePid;
   usagePaneRef.current = usagePaneId;
   const allowanceKey = allowanceWatchKey(usageCommand, usageTitle);
 
@@ -985,7 +991,12 @@ export default function App() {
     }
     let cancel = false;
     const load = () => {
-      void llmUsage(usageCommandRef.current, usageTitleRef.current)
+      void llmUsage(
+        usageCommandRef.current,
+        usageTitleRef.current,
+        usageCwdRef.current,
+        usagePidRef.current,
+      )
         .then((next) => {
           if (cancel) return;
           if (next.cli === "antigravity" && next.bars.length === 0) {
@@ -1008,7 +1019,7 @@ export default function App() {
       window.clearTimeout(soon);
       window.clearInterval(id);
     };
-  }, [attachedSession, allowanceKey]);
+  }, [attachedSession, allowanceKey, usagePaneId]);
   const shellReady = shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
   const offerAsk = helperOn;
   const showTiles = !error && !empty && layout && attachedSession;
