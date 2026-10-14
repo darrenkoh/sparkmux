@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.37
+
+### Improvements
+
+- Redesigned Chronicle in the Gits screen as a pure 2D Sci-Fi Timeline & Diff Studio:
+  - Top horizontal scrubbable Cybernetic Revision Deck with revision counters, tool badges, file extension tags, and real-time churn metrics (+add / −del).
+  - Split studio workspace with an Intel Sidebar featuring file path, execution status, proportional churn ratio meter, and clickable Diff Hunk index to jump directly to code lines.
+  - Native DOM code viewer with dual line numbers (`old-ln` / `new-ln`), diff syntax highlighting, search/filter input, and one-click clipboard copy.
+
 ## 0.1.36
 
 ### Improvements
