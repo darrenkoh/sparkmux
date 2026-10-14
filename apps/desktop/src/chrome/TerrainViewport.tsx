@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
 import {
-  sessionSpan,
-  viewWindow,
+  activityAxis,
+  compressedToWall,
+  mapWindow,
+  wallToCompressed,
   windowStartFromFraction,
   windowTrack,
   type TimeWindow,
@@ -432,6 +434,8 @@ interface TerrainMeta {
   sessionStart: number;
   live: boolean;
   dataPointCount: number;
+  timeTicks: Array<{ fraction: number; label: string }>;
+  seamMarks: Array<{ fraction: number; label: string }>;
 }
 
 export default function TerrainViewport({
@@ -527,14 +531,16 @@ export default function TerrainViewport({
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
 
-  // The map shows at most 30 minutes. followLive keeps that slice on the latest
-  // events; dragging parks it so a 2-hour session can be inspected earlier.
+  // The map shows at most 30 minutes of compressed time. Long idle gaps are
+  // already folded, so dragging moves across activity instead of empty terrain.
   const [followLive, setFollowLive] = useState(true);
   const [windowStart, setWindowStart] = useState(0);
   const windowTrackRef = useRef<HTMLDivElement>(null);
-  const span = sessionSpan(timeline ?? [], stats);
-  const liveStart = windowStartFromFraction(span.start, span.end, 1);
-  const view = viewWindow(span.start, span.end, followLive ? liveStart : windowStart);
+  const axis = activityAxis(timeline ?? [], stats);
+  const axisRef = useRef(axis);
+  axisRef.current = axis;
+  const liveStart = windowStartFromFraction(0, axis.spanMs, 1);
+  const view = mapWindow(axis, followLive ? liveStart : windowStart);
   const viewRef = useRef<TimeWindow>(view);
   viewRef.current = view;
   const liveRef = useRef(followLive);
@@ -551,6 +557,8 @@ export default function TerrainViewport({
     sessionStart: 0,
     live: true,
     dataPointCount: 0,
+    timeTicks: [],
+    seamMarks: [],
   });
 
   // Cached base particles for active baseShape
@@ -616,13 +624,17 @@ export default function TerrainViewport({
     const currentTimeline = timelineRef.current;
     const currentStats = statsRef.current;
     const view = viewRef.current;
+    const axis = axisRef.current;
     const hasTimeline = !!currentTimeline && currentTimeline.length > 0;
     const winStart = hasTimeline ? view.start : 0;
     const winEnd = hasTimeline ? view.end : 0;
     const sessionStart = hasTimeline ? view.spanStart : 0;
+    const compStart = view.compStart ?? 0;
+    const compEnd = view.compEnd ?? 0;
+    const compSpan = compEnd - compStart;
 
-    // Columns are placed by their real timestamp inside the visible window.
-    // A quiet minute stays flat instead of becoming an idle node.
+    // Columns sit on the compressed axis. A quiet minute inside a burst stays
+    // flat. A gap longer than five minutes is a short seam, not a plain.
     const dataPoints: Array<{
       tNorm: number;
       user: number;
@@ -633,13 +645,19 @@ export default function TerrainViewport({
       topKind?: string;
       topLabel?: string;
     }> = [];
+    const seamBands: Array<{ x0: number; x1: number }> = [];
+    const timeTicks: Array<{ fraction: number; label: string }> = [];
+    const seamMarks: Array<{ fraction: number; label: string }> = [];
+    const xOfComp = (comp: number) => {
+      const tNorm = compSpan <= 0 ? 0 : ((comp - compStart) / compSpan) * 2 - 1;
+      return tNorm * (TIME_SPAN / 2 - 1.5);
+    };
     if (hasTimeline && currentTimeline) {
-      const visible = currentTimeline.filter(
-        (pt) => pt.timestamp >= winStart && pt.timestamp <= winEnd && (pt.user_count > 0 || pt.think_count > 0 || pt.reply_count > 0 || pt.tool_count > 0),
-      );
-      const spanMs = winEnd - winStart;
-      visible.forEach((pt) => {
-        const tNorm = spanMs <= 0 ? 0 : ((pt.timestamp - winStart) / spanMs) * 2 - 1;
+      for (const pt of currentTimeline) {
+        if (pt.user_count <= 0 && pt.think_count <= 0 && pt.reply_count <= 0 && pt.tool_count <= 0) continue;
+        const comp = wallToCompressed(axis, pt.timestamp);
+        if (comp < compStart || comp > compEnd) continue;
+        const tNorm = compSpan <= 0 ? 0 : ((comp - compStart) / compSpan) * 2 - 1;
         dataPoints.push({
           tNorm,
           user: pt.user_count,
@@ -650,7 +668,25 @@ export default function TerrainViewport({
           topKind: pt.top_event_kind,
           topLabel: pt.top_event_label,
         });
-      });
+      }
+      for (const seam of axis.seams) {
+        if (seam.compEnd <= compStart || seam.compStart >= compEnd) continue;
+        seamBands.push({ x0: xOfComp(seam.compStart), x1: xOfComp(seam.compEnd) });
+        const mid = (Math.max(seam.compStart, compStart) + Math.min(seam.compEnd, compEnd)) / 2;
+        seamMarks.push({
+          fraction: compSpan <= 0 ? 0.5 : (mid - compStart) / compSpan,
+          label: seam.label,
+        });
+      }
+      if (compSpan > 0 && sessionStart > 0) {
+        for (const fraction of [0.25, 0.5, 0.75]) {
+          const wall = compressedToWall(axis, compStart + fraction * compSpan);
+          timeTicks.push({
+            fraction,
+            label: `+${formatElapsed(wall - sessionStart)}`,
+          });
+        }
+      }
     } else {
       const count = 16;
       for (let i = 0; i < count; i++) {
@@ -712,14 +748,24 @@ export default function TerrainViewport({
       const zw2 = Math.exp(-((z - zLanes[2]) * (z - zLanes[2])) / 4.84);
       const zw3 = Math.exp(-((z - zLanes[3]) * (z - zLanes[3])) / 4.84);
 
+      let ridges = 0;
       for (let p = 0; p < prePeaks.length; p++) {
         const peak = prePeaks[p];
         const dx = x - peak.x;
         const dx2 = dx * dx;
         if (dx2 > 25.0) continue;
         const xw = Math.exp(-dx2 / 2.56);
-        val += xw * (peak.h0 * zw0 + peak.h1 * zw1 + peak.h2 * zw2 + peak.h3 * zw3);
+        ridges += xw * (peak.h0 * zw0 + peak.h1 * zw1 + peak.h2 * zw2 + peak.h3 * zw3);
       }
+      let seamDamp = 1;
+      for (let s = 0; s < seamBands.length; s++) {
+        const band = seamBands[s];
+        if (x < band.x0 || x > band.x1) continue;
+        const half = Math.max(0.001, (band.x1 - band.x0) / 2);
+        const along = Math.abs(x - (band.x0 + band.x1) / 2) / half;
+        seamDamp = Math.min(seamDamp, along * along);
+      }
+      val += ridges * seamDamp;
 
       const edgeFalloff = smoothstep(1.0, 0.82, distNorm);
       return Math.max(0, val * edgeFalloff);
@@ -1025,6 +1071,8 @@ export default function TerrainViewport({
       sessionStart,
       live: liveRef.current,
       dataPointCount: dataPoints.length,
+      timeTicks,
+      seamMarks,
     };
   };
 
@@ -1052,7 +1100,7 @@ export default function TerrainViewport({
   };
 
   // Rebuild when the visible window moves, not only when the column count changes.
-  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.thinking_blocks ?? 0}:${stats?.assistant_replies ?? 0}:${stats?.tool_calls ?? 0}:${stats?.timeline_end ?? 0}:${Math.round(view.start)}:${Math.round(view.end)}:${baseShape}`;
+  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.thinking_blocks ?? 0}:${stats?.assistant_replies ?? 0}:${stats?.tool_calls ?? 0}:${stats?.timeline_end ?? 0}:${Math.round(view.compStart ?? view.start)}:${Math.round(view.compEnd ?? view.end)}:${Math.round(axis.spanMs)}:${axis.seams.length}:${baseShape}`;
   useEffect(() => {
     scheduleGeometryUpdate();
   }, [dataSignature]);
@@ -1403,17 +1451,29 @@ export default function TerrainViewport({
         );
       }
 
-      // Show intermediate timeline ticks along the time axis
-      for (let f = 0.25; f <= 0.75; f += 0.25) {
-        const xTick = -tStartX + f * (tStartX * 2);
+      // Clock ticks follow the compressed axis, so a seam does not stretch them.
+      for (const tick of meta.timeTicks) {
+        const xTick = -tStartX + tick.fraction * (tStartX * 2);
         const ptTick = project([xTick, 0, tStartZ]);
-        if (ptTick && meta.endTime > meta.startTime && meta.sessionStart > 0) {
-          const tickMs = meta.startTime + f * (meta.endTime - meta.startTime);
-          const str = `+${formatElapsed(tickMs - meta.sessionStart)}`;
-          hud.fillStyle = "rgba(255, 255, 255, 0.4)";
-          hud.textAlign = "center";
-          hud.fillText(str, ptTick[0], ptTick[1]);
-        }
+        if (!ptTick) continue;
+        hud.fillStyle = "rgba(255, 255, 255, 0.4)";
+        hud.textAlign = "center";
+        hud.fillText(tick.label, ptTick[0], ptTick[1]);
+      }
+
+      for (const seam of meta.seamMarks) {
+        const xSeam = -tStartX + seam.fraction * (tStartX * 2);
+        const ptSeam = project([xSeam, 0, tStartZ]);
+        if (!ptSeam) continue;
+        hud.strokeStyle = "rgba(255, 196, 96, 0.9)";
+        hud.lineWidth = 1;
+        hud.beginPath();
+        hud.moveTo(ptSeam[0], ptSeam[1]);
+        hud.lineTo(ptSeam[0], ptSeam[1] - 10);
+        hud.stroke();
+        hud.fillStyle = "#ff9a3c";
+        hud.textAlign = "center";
+        hud.fillText(seam.label, ptSeam[0], ptSeam[1] - 14);
       }
 
       const chLabelX = -(extentX + 0.8);
@@ -1787,18 +1847,21 @@ export default function TerrainViewport({
               role="slider"
               aria-label="Area map time window"
               aria-valuemin={0}
-              aria-valuemax={Math.max(0, view.spanEnd - view.spanStart)}
-              aria-valuenow={Math.max(0, view.start - view.spanStart)}
-              aria-valuetext={`+${formatElapsed(view.start - view.spanStart)} to +${formatElapsed(view.end - view.spanStart)}`}
+              aria-valuemax={Math.max(0, (view.compSpanEnd ?? 0) - (view.compSpanStart ?? 0))}
+              aria-valuenow={Math.max(0, (view.compStart ?? 0) - (view.compSpanStart ?? 0))}
+              aria-valuetext={`+${formatElapsed(view.start - view.spanStart)} to +${formatElapsed(view.end - view.spanStart)}${(view.seams ?? []).length > 0 ? `, quiet ${(view.seams ?? []).map((seam) => seam.label).join(" ")}` : ""}`}
               tabIndex={0}
-              title="Drag the window across the session. A 2 hour session can show any 30 minutes. Arrow keys move one minute."
+              title="Drag across activity. Quiet stretches longer than 5 minutes shrink to a labeled seam. Arrow keys move one minute."
               onKeyDown={(event) => {
                 if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                 event.preventDefault();
                 const step = (event.shiftKey ? 5 : 1) * 60_000;
                 const delta = event.key === "ArrowLeft" ? -step : step;
-                const next = view.start + delta;
-                const maxStart = view.spanStart + Math.max(0, view.spanEnd - view.spanStart - (view.end - view.start));
+                const origin = view.compStart ?? 0;
+                const width = (view.compEnd ?? 0) - origin;
+                const spanEnd = view.compSpanEnd ?? 0;
+                const next = origin + delta;
+                const maxStart = Math.max(0, spanEnd - width);
                 setFollowLive(next >= maxStart - 1500);
                 setWindowStart(next);
               }}
@@ -1806,15 +1869,26 @@ export default function TerrainViewport({
                 if (event.target !== event.currentTarget) return;
                 const rect = event.currentTarget.getBoundingClientRect();
                 const fraction = (event.clientX - rect.left) / Math.max(1, rect.width);
-                const spanMs = view.spanEnd - view.spanStart;
-                const width = view.end - view.start;
-                const center = view.spanStart + fraction * spanMs;
-                const next = center - width / 2;
-                const maxStart = view.spanStart + Math.max(0, spanMs - width);
+                const spanMs = (view.compSpanEnd ?? 0) - (view.compSpanStart ?? 0);
+                const width = (view.compEnd ?? 0) - (view.compStart ?? 0);
+                const next = fraction * spanMs - width / 2;
+                const maxStart = Math.max(0, spanMs - width);
                 setFollowLive(next >= maxStart - 1500);
                 setWindowStart(next);
               }}
             >
+              {axis.seams.map((seam) => {
+                const spanMs = Math.max(1, axis.spanMs);
+                const at = ((seam.compStart + seam.compEnd) / 2 / spanMs) * 100;
+                return (
+                  <span
+                    key={`${seam.wallStart}-${seam.wallEnd}`}
+                    className="scifi-window-seam"
+                    style={{ left: `${at}%` }}
+                    title={`Quiet ${seam.label}`}
+                  />
+                );
+              })}
               <div
                 className="scifi-window-thumb"
                 style={{ left: `${windowTrack(view).leftPct}%`, width: `${windowTrack(view).widthPct}%` }}
@@ -1825,9 +1899,9 @@ export default function TerrainViewport({
                   if (!track) return;
                   const rect = track.getBoundingClientRect();
                   const originX = event.clientX;
-                  const originStart = view.start;
-                  const spanMs = Math.max(1, view.spanEnd - view.spanStart);
-                  const maxStart = view.spanStart + Math.max(0, spanMs - (view.end - view.start));
+                  const originStart = view.compStart ?? 0;
+                  const spanMs = Math.max(1, (view.compSpanEnd ?? 0) - (view.compSpanStart ?? 0));
+                  const maxStart = Math.max(0, spanMs - ((view.compEnd ?? 0) - originStart));
                   let pending = originStart;
                   let raf = 0;
                   setWindowStart(originStart);
@@ -1861,7 +1935,7 @@ export default function TerrainViewport({
                 setFollowLive(true);
                 setWindowStart(liveStart);
               }}
-              title={followLive ? "Window is following the latest 30 minutes" : "Jump the window back to the latest 30 minutes"}
+              title={followLive ? "Window is following the latest activity" : "Jump the window back to the latest activity"}
             >
               {followLive ? "LIVE" : "JUMP LIVE"}
             </button>
