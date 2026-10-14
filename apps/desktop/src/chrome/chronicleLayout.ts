@@ -17,6 +17,7 @@ export interface StationLayoutInput {
   outcome: "unknown" | "ok" | "error";
   path?: string;
   preview?: string;
+  tool?: string;
 }
 
 export type ChronicleScene = "transit" | "rivers" | "helix" | "ridge";

@@ -1,6 +1,7 @@
 import {
   ACESFilmicToneMapping,
   BufferGeometry,
+  CanvasTexture,
   Color,
   CylinderGeometry,
   DoubleSide,
@@ -10,7 +11,6 @@ import {
   Group,
   Mesh,
   MeshBasicMaterial,
-  OctahedronGeometry,
   PerspectiveCamera,
   PlaneGeometry,
   Points,
@@ -116,6 +116,200 @@ function ridgeCameraOffset(stations: StationLayoutInput[]): Vec3 {
   return { x: 0, y: Math.max(5, dist * 0.55), z: Math.max(6, dist * 0.75) };
 }
 
+// ---------------------------------------------------------------------------
+// 3D Transparent Station Card Canvas Renderer
+// ---------------------------------------------------------------------------
+function redrawStationCard(
+  canvas: HTMLCanvasElement,
+  station: StationLayoutInput,
+  isActive: boolean,
+  isHovered: boolean,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // 1. Semi-transparent Cybernetic Glass Panel Background
+  const r = 12;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(w - r, 0);
+  ctx.quadraticCurveTo(w, 0, w, r);
+  ctx.lineTo(w, h - r);
+  ctx.quadraticCurveTo(w, h, w - r, h);
+  ctx.lineTo(r, h);
+  ctx.quadraticCurveTo(0, h, 0, h - r);
+  ctx.lineTo(0, r);
+  ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  if (isActive) {
+    grad.addColorStop(0, "rgba(22, 30, 42, 0.94)");
+    grad.addColorStop(1, "rgba(10, 16, 24, 0.96)");
+  } else if (isHovered) {
+    grad.addColorStop(0, "rgba(16, 24, 34, 0.92)");
+    grad.addColorStop(1, "rgba(8, 14, 22, 0.94)");
+  } else {
+    grad.addColorStop(0, "rgba(8, 16, 24, 0.86)");
+    grad.addColorStop(1, "rgba(5, 10, 16, 0.88)");
+  }
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Card Border
+  ctx.lineWidth = isActive ? 3 : isHovered ? 2.5 : 1.5;
+  ctx.strokeStyle = isActive
+    ? "rgba(255, 154, 60, 0.95)"
+    : isHovered
+    ? "rgba(45, 212, 191, 0.9)"
+    : "rgba(45, 212, 191, 0.45)";
+  ctx.stroke();
+
+  // Corner Accents (Sci-fi brackets)
+  const cSize = 10;
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = isActive ? "#ff9a3c" : "#2dd4bf";
+  ctx.beginPath();
+  ctx.moveTo(2, cSize);
+  ctx.lineTo(2, 2);
+  ctx.lineTo(cSize, 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(w - 2 - cSize, 2);
+  ctx.lineTo(w - 2, 2);
+  ctx.lineTo(w - 2, cSize);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(2, h - 2 - cSize);
+  ctx.lineTo(2, h - 2);
+  ctx.lineTo(cSize, h - 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(w - 2 - cSize, h - 2);
+  ctx.lineTo(w - 2, h - 2);
+  ctx.lineTo(w - 2, h - 2 - cSize);
+  ctx.stroke();
+
+  // 2. Header Bar
+  ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
+  ctx.fillRect(4, 4, w - 8, 44);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(4, 48);
+  ctx.lineTo(w - 4, 48);
+  ctx.stroke();
+
+  // Revision Chip
+  const isNow = station.kind === "now";
+  const revLabel = isNow ? "LIVE NOW" : `#${station.ordinal}`;
+  ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = isActive ? "#ff9a3c" : "#2dd4bf";
+  ctx.fillText(revLabel, 16, 31);
+
+  // Tool / Kind Tag
+  const toolName = (station.tool || station.kind || "edit").toUpperCase();
+  ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+  const toolW = ctx.measureText(toolName).width + 12;
+  const toolX = isNow ? 96 : 60;
+  ctx.fillStyle = "rgba(91, 141, 239, 0.22)";
+  ctx.fillRect(toolX, 18, toolW, 20);
+  ctx.strokeStyle = "rgba(91, 141, 239, 0.45)";
+  ctx.strokeRect(toolX, 18, toolW, 20);
+  ctx.fillStyle = "#93c5fd";
+  ctx.fillText(toolName, toolX + 6, 32);
+
+  // File Extension Badge
+  const fullPath = station.path || station.id;
+  const parts = fullPath.split(".");
+  const ext = parts.length > 1 ? `.${parts.pop()!.toUpperCase()}` : ".FILE";
+  const extW = ctx.measureText(ext).width + 12;
+  const extX = w - 16 - extW;
+  ctx.fillStyle = "rgba(45, 212, 191, 0.15)";
+  ctx.fillRect(extX, 18, extW, 20);
+  ctx.strokeStyle = "rgba(45, 212, 191, 0.4)";
+  ctx.strokeRect(extX, 18, extW, 20);
+  ctx.fillStyle = "#2dd4bf";
+  ctx.fillText(ext, extX + 6, 32);
+
+  // 3. Filename & Churn Metrics
+  const baseName = fullPath.split(/[/\\]/).pop() || fullPath;
+  ctx.font = "bold 17px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(baseName, 16, 76);
+
+  ctx.font = "bold 13px ui-monospace, SFMono-Regular, Menlo, monospace";
+  const plusText = `+${station.added}`;
+  const minusText = `−${station.removed}`;
+  ctx.fillStyle = "#2dd4bf";
+  ctx.fillText(plusText, 16, 98);
+  const plusW = ctx.measureText(plusText).width;
+  ctx.fillStyle = "#f87171";
+  ctx.fillText(minusText, 16 + plusW + 10, 98);
+
+  // 4. Actual Content of the Changes (Code preview)
+  const previewBoxX = 14;
+  const previewBoxY = 112;
+  const previewBoxW = w - 28;
+  const previewBoxH = h - 124;
+
+  ctx.fillStyle = "rgba(3, 7, 12, 0.78)";
+  ctx.fillRect(previewBoxX, previewBoxY, previewBoxW, previewBoxH);
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.strokeRect(previewBoxX, previewBoxY, previewBoxW, previewBoxH);
+
+  const rawPreview = station.preview || (isNow ? "Current worktree state" : "No preview available");
+  const lines = rawPreview.split("\n").slice(0, 9);
+  const lineH = 21;
+  ctx.font = "11.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+
+  lines.forEach((line, idx) => {
+    const yLine = previewBoxY + 16 + idx * lineH;
+    if (yLine > previewBoxY + previewBoxH - 6) return;
+
+    const isAdd = line.startsWith("+") && !line.startsWith("+++");
+    const isDel = line.startsWith("-") && !line.startsWith("---");
+    const isHunk = line.startsWith("@@");
+
+    if (isAdd) {
+      ctx.fillStyle = "rgba(45, 212, 191, 0.14)";
+      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 2, lineH);
+      ctx.fillStyle = "#2dd4bf";
+    } else if (isDel) {
+      ctx.fillStyle = "rgba(248, 113, 113, 0.14)";
+      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 2, lineH);
+      ctx.fillStyle = "#f87171";
+    } else if (isHunk) {
+      ctx.fillStyle = "rgba(56, 189, 248, 0.12)";
+      ctx.fillRect(previewBoxX + 1, yLine - 13, previewBoxW - 2, lineH);
+      ctx.fillStyle = "#38bdf8";
+    } else {
+      ctx.fillStyle = "rgba(226, 232, 240, 0.75)";
+    }
+
+    const displayLine = line.length > 56 ? line.slice(0, 53) + "…" : line;
+    ctx.fillText(displayLine, previewBoxX + 8, yLine);
+  });
+
+  ctx.restore();
+}
+
+function drawStationCardCanvas(
+  station: StationLayoutInput,
+  isActive: boolean,
+  isHovered: boolean,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 340;
+  redrawStationCard(canvas, station, isActive, isHovered);
+  return canvas;
+}
+
 export interface ChronicleHooks {
   onActiveId: (id: string) => void;
 }
@@ -131,6 +325,13 @@ export interface ChronicleHandle {
   setAutoRotate(enabled: boolean): void;
   resetCamera(): void;
   dispose(): void;
+}
+
+interface Station3DCard {
+  mesh: Mesh;
+  texture: CanvasTexture;
+  canvas: HTMLCanvasElement;
+  station: StationLayoutInput;
 }
 
 function disposeMaterial(material: Material) {
@@ -338,20 +539,23 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   let terrainDepth = 6;
   let maxTerrainChurn = 10;
 
-  // Station diamond nodes
-  const nodeDiamonds: { mesh: Mesh; station: StationLayoutInput }[] = [];
+  // 3D Transparent Station Cards
+  const stationCards: Station3DCard[] = [];
   let ridgePaint: { attr: Float32BufferAttribute; lanes: number[]; heights: number[] } | null = null;
 
   const projectToScreen = (p: { x: number; y: number; z: number }): [number, number] | null => {
     projVec.set(p.x, p.y, p.z).project(camera);
-    if (projVec.z > 1.0) return null; // behind camera
+    if (projVec.z > 1.0) return null;
     const sx = (projVec.x * 0.5 + 0.5) * hostWidth;
     const sy = (-projVec.y * 0.5 + 0.5) * hostHeight;
     return [sx, sy];
   };
 
   const clearRoot = () => {
-    nodeDiamonds.length = 0;
+    for (const card of stationCards) {
+      card.texture.dispose();
+    }
+    stationCards.length = 0;
     ridgePaint = null;
     nodeMeshById.clear();
     pick.length = 0;
@@ -501,48 +705,53 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
         side: FrontSide,
       });
       const wireframeMesh = new Mesh(terrainGeo, wireframeMat);
-      wireframeMesh.position.y = 0.005; // avoid z-fighting
+      wireframeMesh.position.y = 0.005;
       root.add(wireframeMesh);
 
       ridgePaint = { attr: colorAttr, lanes, heights };
     }
 
-    // 3. Station Waypoint Diamond Nodes
-    const octGeo = new OctahedronGeometry(0.18, 0);
+    // 3. 3D Transparent Station Cards (showing file name, metrics, and actual code changes)
+    const cardGeo = new PlaneGeometry(2.3, 1.55);
     for (const station of real) {
       const pt = stationWorld("ridge", station, real.length);
-      const mat = new MeshBasicMaterial({
-        color: station.id === currentActive ? GOLD : TEAL,
-        wireframe: false,
+      const isAct = station.id === currentActive;
+      const canvas = drawStationCardCanvas(station, isAct, false);
+      const texture = new CanvasTexture(canvas);
+      const cardMat = new MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.92,
+        side: DoubleSide,
+        depthWrite: false,
       });
-      const nodeMesh = new Mesh(octGeo, mat);
-      nodeMesh.position.set(pt.x, pt.y + 0.24, pt.z);
-      nodeMesh.userData.stationId = station.id;
-      root.add(nodeMesh);
-      pick.push(nodeMesh);
-      nodeMeshById.set(nodeMesh, station.id);
-      nodeDiamonds.push({ mesh: nodeMesh, station });
+      const cardMesh = new Mesh(cardGeo, cardMat);
+      cardMesh.position.set(pt.x, pt.y + 1.25, pt.z);
+      cardMesh.userData.stationId = station.id;
+      root.add(cardMesh);
+      pick.push(cardMesh);
+      nodeMeshById.set(cardMesh, station.id);
+      stationCards.push({ mesh: cardMesh, texture, canvas, station });
 
-      // Ground stem / leader ray to terrain peak
+      // Ground anchor stem
       const stemMat = new MeshBasicMaterial({
         color: TEAL,
         transparent: true,
         opacity: 0.45,
       });
-      const stem = new Mesh(new CylinderGeometry(0.015, 0.015, 0.24, 6), stemMat);
-      stem.position.set(pt.x, pt.y + 0.12, pt.z);
+      const stem = new Mesh(new CylinderGeometry(0.015, 0.015, 0.5, 6), stemMat);
+      stem.position.set(pt.x, pt.y + 0.25, pt.z);
       root.add(stem);
     }
   };
 
   const paintActiveNodes = (activeId: string) => {
     const activeLane = laidOut.find((s) => s.id === activeId)?.lane ?? -1;
-    for (const entry of nodeDiamonds) {
+    for (const entry of stationCards) {
       const isAct = entry.station.id === activeId;
-      const mat = entry.mesh.material as MeshBasicMaterial;
-      if (mat) {
-        mat.color.set(isAct ? GOLD : TEAL);
-      }
+      const isHov = entry.station.id === hoveredId;
+      redrawStationCard(entry.canvas, entry.station, isAct, isHov);
+      entry.texture.needsUpdate = true;
     }
     if (!ridgePaint) return;
     for (let index = 0; index < ridgePaint.lanes.length; index += 1) {
@@ -597,14 +806,21 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     raycaster.setFromCamera(pointer, camera);
     const hit = raycaster.intersectObjects(pick, false)[0];
     if (!hit) {
-      hoveredId = null;
+      if (hoveredId != null) {
+        hoveredId = null;
+        paintActiveNodes(currentActive);
+      }
       if (!isDown) renderer.domElement.style.cursor = "grab";
       return;
     }
     let id: string | null = null;
     if (typeof hit.object.userData.stationId === "string") id = hit.object.userData.stationId;
     else if (hit.object.userData.surface === true) id = nearestStation(hit.point);
-    hoveredId = id;
+
+    if (id !== hoveredId) {
+      hoveredId = id;
+      paintActiveNodes(currentActive);
+    }
     if (!isDown) {
       renderer.domElement.style.cursor = hoveredId ? "pointer" : "grab";
     }
@@ -612,7 +828,10 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
 
   const onPointerLeave = () => {
     isDown = false;
-    hoveredId = null;
+    if (hoveredId != null) {
+      hoveredId = null;
+      paintActiveNodes(currentActive);
+    }
     renderer.domElement.style.cursor = "grab";
   };
 
@@ -663,7 +882,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     hud.arc(rcX, rcY, rcRad * 0.55, 0, Math.PI * 2);
     hud.stroke();
 
-    // Crosshairs
     hud.strokeStyle = "rgba(45, 212, 191, 0.25)";
     hud.beginPath();
     hud.moveTo(rcX - rcRad - 4, rcY);
@@ -672,7 +890,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     hud.lineTo(rcX, rcY + rcRad + 4);
     hud.stroke();
 
-    // Cardinal ticks & labels
     hud.font = "7.5px ui-monospace, SFMono-Regular, Menlo, monospace";
     hud.fillStyle = "rgba(45, 212, 191, 0.75)";
     hud.textAlign = "center";
@@ -683,7 +900,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     hud.textAlign = "right";
     hud.fillText("W", rcX - rcRad + 8, rcY + 3);
 
-    // Rotating Radar Sweep Beam
     const sweepAngle = (now * 0.002) % (Math.PI * 2);
     hud.strokeStyle = "#ff9a3c";
     hud.lineWidth = 1.5;
@@ -692,7 +908,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     hud.lineTo(rcX + Math.cos(sweepAngle) * rcRad, rcY + Math.sin(sweepAngle) * rcRad);
     hud.stroke();
 
-    // Radar Tag
     hud.textAlign = "left";
     hud.fillStyle = "rgba(226, 232, 240, 0.5)";
     hud.fillText("RADAR // 360° SWEEP", rcX + rcRad + 12, rcY - 4);
@@ -731,7 +946,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       hud.fillText(`+${val}`, 30, y + 3);
     }
 
-    // Active Altitude Pointer
     const act = resolveActive();
     const actChurn = act ? act.added + act.removed : 0;
     const actFrac = maxTerrainChurn > 0 ? Math.min(1, actChurn / maxTerrainChurn) : 0;
@@ -772,78 +986,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     }
     hud.restore();
 
-    // 4. Target Reticle on Active Station
-    if (act) {
-      const pt = stationWorld("ridge", act, realCount);
-      const sp = projectToScreen({ x: pt.x, y: pt.y + 0.24, z: pt.z });
-      if (sp && sp[0] > 0 && sp[0] < hostWidth && sp[1] > 0 && sp[1] < hostHeight) {
-        hud.save();
-        const retSize = 15;
-
-        // Target Bracket Corners [ ]
-        hud.strokeStyle = "#ff9a3c";
-        hud.lineWidth = 1.5;
-        hud.beginPath();
-        // Top-left
-        hud.moveTo(sp[0] - retSize, sp[1] - retSize + 5);
-        hud.lineTo(sp[0] - retSize, sp[1] - retSize);
-        hud.lineTo(sp[0] - retSize + 5, sp[1] - retSize);
-        // Top-right
-        hud.moveTo(sp[0] + retSize - 5, sp[1] - retSize);
-        hud.lineTo(sp[0] + retSize, sp[1] - retSize);
-        hud.lineTo(sp[0] + retSize, sp[1] - retSize + 5);
-        // Bottom-left
-        hud.moveTo(sp[0] - retSize, sp[1] + retSize - 5);
-        hud.lineTo(sp[0] - retSize, sp[1] + retSize);
-        hud.lineTo(sp[0] - retSize + 5, sp[1] + retSize);
-        // Bottom-right
-        hud.moveTo(sp[0] + retSize - 5, sp[1] + retSize);
-        hud.lineTo(sp[0] + retSize, sp[1] + retSize);
-        hud.lineTo(sp[0] + retSize, sp[1] + retSize - 5);
-        hud.stroke();
-
-        // Target Center Dot
-        hud.fillStyle = "#ff9a3c";
-        hud.beginPath();
-        hud.arc(sp[0], sp[1], 2, 0, Math.PI * 2);
-        hud.fill();
-
-        // Diagonal Leader Line to Tactical Badge
-        const badgeW = 200;
-        const badgeH = 46;
-        const badgeX = sp[0] + 28 + badgeW > hostWidth - 16 ? sp[0] - badgeW - 28 : sp[0] + 28;
-        const badgeY = sp[1] - 40 < 40 ? sp[1] + 20 : sp[1] - 40;
-
-        hud.strokeStyle = "rgba(255, 154, 60, 0.7)";
-        hud.lineWidth = 1;
-        hud.beginPath();
-        hud.moveTo(sp[0] + (badgeX > sp[0] ? retSize : -retSize), sp[1]);
-        hud.lineTo(badgeX > sp[0] ? badgeX : badgeX + badgeW, badgeY + badgeH / 2);
-        hud.stroke();
-
-        // Tactical HUD Badge Card
-        hud.fillStyle = "rgba(6, 10, 16, 0.92)";
-        hud.fillRect(badgeX, badgeY, badgeW, badgeH);
-        hud.strokeStyle = "rgba(255, 154, 60, 0.65)";
-        hud.lineWidth = 1;
-        hud.strokeRect(badgeX, badgeY, badgeW, badgeH);
-
-        hud.font = "8.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-        hud.fillStyle = "#ff9a3c";
-        hud.textAlign = "left";
-        const fname = act.path ? act.path.split(/[/\\]/).pop() || act.path : act.id;
-        hud.fillText(`[REV #${act.ordinal}] ${fname}`, badgeX + 8, badgeY + 13);
-
-        hud.fillStyle = "rgba(45, 212, 191, 0.95)";
-        hud.fillText(`CHURN: +${act.added} −${act.removed} · ${act.outcome.toUpperCase()}`, badgeX + 8, badgeY + 26);
-
-        hud.fillStyle = "rgba(226, 232, 240, 0.6)";
-        hud.fillText(`ALTITUDE: ${pt.y.toFixed(2)}m   LANE: ${act.lane}`, badgeX + 8, badgeY + 39);
-        hud.restore();
-      }
-    }
-
-    // 5. Bottom Right Telemetry Stream
+    // 4. Bottom Right Telemetry Stream
     if (hostWidth >= 520) {
       hud.save();
       hud.font = "8px ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -870,9 +1013,13 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     scanPlane.position.z = terrainDepth / 2;
     scanMat.opacity = 0.16 + 0.12 * Math.sin(now * 0.004);
 
-    // 2. Animate Diamond Nodes (Spinning in air)
-    for (const entry of nodeDiamonds) {
-      entry.mesh.rotation.y = now * 0.0015 + entry.station.ordinal * 0.2;
+    // 2. Animate and Billboard 3D Cards
+    for (const card of stationCards) {
+      card.mesh.quaternion.copy(camera.quaternion);
+      const isAct = card.station.id === currentActive;
+      const isHov = card.station.id === hoveredId;
+      const targetScale = isAct ? 1.10 : isHov ? 1.05 : 1.0;
+      card.mesh.scale.set(targetScale, targetScale, targetScale);
     }
 
     // 3. Telemetry Landmark Beacon tracking and sonar animation
@@ -983,6 +1130,9 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       renderPass.dispose();
       bloomPass.dispose();
       outputPass.dispose();
+      for (const card of stationCards) {
+        card.texture.dispose();
+      }
       scene.traverse(disposeObject);
       renderer.dispose();
       renderer.forceContextLoss();

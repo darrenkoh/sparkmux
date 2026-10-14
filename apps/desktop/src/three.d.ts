@@ -24,6 +24,7 @@ declare module "three" {
 
   export class Quaternion {
     setFromUnitVectors(from: Vector3, to: Vector3): this;
+    copy(q: Quaternion): this;
   }
 
   export class Euler {
@@ -92,6 +93,15 @@ declare module "three" {
     material?: Material;
   }
 
+  export class Texture {
+    needsUpdate: boolean;
+    dispose(): void;
+  }
+
+  export class CanvasTexture extends Texture {
+    constructor(canvas: HTMLCanvasElement);
+  }
+
   export class Material {
     transparent: boolean;
     opacity: number;
@@ -101,6 +111,7 @@ declare module "three" {
   export class MeshBasicMaterial extends Material {
     constructor(parameters?: {
       color?: number;
+      map?: Texture | null;
       side?: number;
       transparent?: boolean;
       opacity?: number;
@@ -109,7 +120,7 @@ declare module "three" {
       wireframe?: boolean;
     });
     color: Color;
-    map: { dispose(): void } | null;
+    map: Texture | null;
     side: number;
     depthWrite: boolean;
   }

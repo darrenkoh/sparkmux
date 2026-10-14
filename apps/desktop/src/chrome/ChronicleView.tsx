@@ -281,6 +281,7 @@ export default function ChronicleView(props: {
       outcome: asOutcome(station.outcome),
       path: station.path,
       preview: station.preview,
+      tool: station.tool,
     }));
     if (activePath && session.now.some((entry) => entry.path === activePath && entry.available)) {
       const file = session.files.find((entry) => entry.path === activePath);
