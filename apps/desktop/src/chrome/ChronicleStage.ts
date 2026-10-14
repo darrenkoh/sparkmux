@@ -475,7 +475,8 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       return;
     }
     if (rebuilt) {
-      placeTarget(center.x, center.y, center.z);
+      // A poll must not drop the station the hologram is showing.
+      placeTarget(point.x, center.y, center.z);
       return;
     }
     slideCamera(point.x);
