@@ -124,7 +124,20 @@ struct UsagePaths {
 #[tauri::command]
 pub async fn llm_usage(command: String, title: String, cwd: String, pid: u32) -> LlmUsage {
     let now = now_ms();
-    let mut usage = usage_for(&command, &title, &default_paths(), now);
+    let family = crate::artifacts::pane_family(pid);
+    let detected_kind = crate::artifacts::detect_cli(&command, &title, &family);
+    let mut usage = match detected_kind {
+        Some(crate::artifacts::CliKind::Grok) => usage_for(&command, &title, &default_paths(), now),
+        Some(crate::artifacts::CliKind::Claude) => LlmUsage::recognized("claude"),
+        Some(crate::artifacts::CliKind::Antigravity) => {
+            let mut u = usage_for(&command, &title, &default_paths(), now);
+            if u.cli.is_none() {
+                u = LlmUsage::recognized("antigravity");
+            }
+            u
+        }
+        None => usage_for(&command, &title, &default_paths(), now),
+    };
     if usage.cli.as_deref() == Some("antigravity") {
         if agy_refresh_minutes() == 0 {
             return LlmUsage::empty();
@@ -133,10 +146,16 @@ pub async fn llm_usage(command: String, title: String, cwd: String, pid: u32) ->
             return agy_print_cached(now);
         }
     }
-    if usage.cli.as_deref() == Some("claude") {
+    let is_claude = usage.cli.as_deref() == Some("claude")
+        || detected_kind == Some(crate::artifacts::CliKind::Claude);
+    if is_claude {
         if let Some(cost) = crate::bedrock_cost::cost_for(&command, &cwd, &title, pid, now) {
+            usage.cli = Some("claude".to_string());
             usage.cost = Some(cost);
         }
+    } else if let Some(cost) = crate::bedrock_cost::cost_for(&command, &cwd, &title, pid, now) {
+        usage.cli = Some("claude".to_string());
+        usage.cost = Some(cost);
     }
     usage
 }

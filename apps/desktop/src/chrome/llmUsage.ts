@@ -37,17 +37,53 @@ const MONTHS = [
 export function allowanceWatchKey(command: string, title: string): string {
   const base = (command.split(/[/\\]/).pop() ?? command).trim().toLowerCase();
   const last = title.toLowerCase().split(" - ").pop()?.trim() ?? "";
-  const versioned = /^(grok|claude|agy)-\d/.test(base);
-  const named = base === "grok" || base === "claude" || base === "agy" || versioned;
+  const cleanLast = last.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  const first = title.toLowerCase().split(" - ")[0]?.trim() ?? "";
+  const cleanFirst = first.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+  const lowerTitle = title.toLowerCase();
+  const versioned = /^(grok|claude|claude-code|agy)-\d/.test(base);
+  const named =
+    base === "grok" ||
+    base === "claude" ||
+    base === "claude-code" ||
+    base.startsWith("claude-code") ||
+    base === "agy" ||
+    versioned;
   const titled =
-    last === "grok" ||
-    last === "claude" ||
-    last === "claude code" ||
-    last === "agy" ||
-    last === "antigravity" ||
-    title.toLowerCase().includes("antigravity");
+    cleanLast === "grok" ||
+    cleanLast === "claude" ||
+    cleanLast === "claude code" ||
+    cleanLast === "agy" ||
+    cleanLast === "antigravity" ||
+    cleanFirst === "grok" ||
+    cleanFirst === "claude" ||
+    cleanFirst === "claude code" ||
+    cleanFirst === "agy" ||
+    cleanFirst === "antigravity" ||
+    lowerTitle.includes("antigravity") ||
+    lowerTitle.includes("claude code") ||
+    lowerTitle.includes("claude-code") ||
+    (lowerTitle.includes("claude") && (lowerTitle.includes("bedrock") || lowerTitle.includes("amazon")));
   if (!named && !titled) return "shell";
-  return `agent:${named ? base : "shell"}:${titled ? last : ""}`;
+  const label =
+    cleanLast === "grok" ||
+    cleanLast === "claude" ||
+    cleanLast === "claude code" ||
+    cleanLast === "agy" ||
+    cleanLast === "antigravity"
+      ? cleanLast
+      : cleanFirst === "grok" ||
+          cleanFirst === "claude" ||
+          cleanFirst === "claude code" ||
+          cleanFirst === "agy" ||
+          cleanFirst === "antigravity"
+        ? cleanFirst
+        : lowerTitle.includes("claude code") || lowerTitle.includes("claude-code")
+          ? "claude code"
+          : lowerTitle.includes("claude")
+            ? "claude"
+            : last;
+  return `agent:${named ? base : "shell"}:${titled ? label : ""}`;
 }
 
 /** Chips for the status bar. A shell pane and a CLI with no local payload yield none. */

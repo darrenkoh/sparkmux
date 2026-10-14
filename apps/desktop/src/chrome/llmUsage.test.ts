@@ -287,6 +287,9 @@ test("the poll key ignores a changing agent title", () => {
     allowanceWatchKey("/usr/local/bin/grok-1.0.50", "editing - grok"),
   );
   assert.equal(allowanceWatchKey("zsh", "Claude Code"), "agent:shell:claude code");
+  assert.equal(allowanceWatchKey("zsh", "✳ Claude Code"), "agent:shell:claude code");
+  assert.equal(allowanceWatchKey("claude-code", "zsh"), "agent:claude-code:");
+  assert.equal(allowanceWatchKey("claude", "Claude Code (Bedrock)"), "agent:claude:claude code");
   assert.equal(allowanceWatchKey("agy", "agy"), allowanceWatchKey("agy", "running - agy"));
   assert.equal(allowanceWatchKey("zsh", "zsh"), "shell");
   assert.notEqual(allowanceWatchKey("zsh", "zsh"), allowanceWatchKey("claude", "Claude Code"));

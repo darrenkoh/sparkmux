@@ -19,7 +19,6 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-#[cfg(target_os = "linux")]
 use std::io::Read;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -120,12 +119,20 @@ pub(crate) fn cost_for(
     pid: u32,
     now_ms: i64,
 ) -> Option<BedrockCost> {
-    if !family_uses_bedrock(pid, command) {
-        return None;
-    }
     let roots = default_roots();
     let family = pane_family(pid);
     let focused = select_transcript(CliKind::Claude, cwd, title, &family, &roots);
+    let is_bedrock = family_uses_bedrock(pid, command, &family)
+        || settings_use_bedrock(cwd)
+        || focused
+            .as_deref()
+            .map(is_bedrock_transcript)
+            .unwrap_or(false);
+
+    if !is_bedrock {
+        return None;
+    }
+
     Some(rollup_dir(
         &roots.claude_projects,
         focused.as_deref(),
@@ -133,20 +140,138 @@ pub(crate) fn cost_for(
     ))
 }
 
-fn family_uses_bedrock(pid: u32, command: &str) -> bool {
+fn is_bedrock_transcript(path: &Path) -> bool {
+    let summary = summarize(path);
+    summary.bedrock_model
+}
+
+fn family_uses_bedrock(pid: u32, command: &str, family: &[(u32, u8)]) -> bool {
+    if let Ok(val) = std::env::var(ENV_KEY) {
+        if truthy_str(&val) {
+            return true;
+        }
+    }
     if pid == 0 {
         return false;
     }
-    // The pane pid is often the shell. An exported variable on the shell must
-    // not mark a child that was started without Bedrock. The foreground
-    // process still counts when it is Claude itself.
-    let skip_root = is_shell_command(command);
-    pane_family(pid).into_iter().any(|(proc_pid, depth)| {
-        if skip_root && depth == 0 {
+    let skip_root = is_shell_command(command) && family.len() > 1;
+    family.iter().any(|(proc_pid, depth)| {
+        if skip_root && *depth == 0 {
             return false;
         }
-        process_bedrock_flag(proc_pid)
+        process_bedrock_flag(*proc_pid)
     })
+}
+
+pub(crate) fn settings_use_bedrock(cwd: &str) -> bool {
+    if let Some(home) = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf()) {
+        let claude_dir = home.join(".claude");
+        if file_enables_bedrock(&claude_dir.join("settings.json"))
+            || file_enables_bedrock(&claude_dir.join("settings.local.json"))
+            || file_enables_bedrock(&home.join(".claude.json"))
+        {
+            return true;
+        }
+    }
+    if !cwd.is_empty() {
+        let mut cur = Path::new(cwd);
+        for _ in 0..6 {
+            let dot_claude = cur.join(".claude");
+            if file_enables_bedrock(&dot_claude.join("settings.json"))
+                || file_enables_bedrock(&dot_claude.join("settings.local.json"))
+                || file_enables_bedrock(&cur.join(".claude.json"))
+            {
+                return true;
+            }
+            let Some(parent) = cur.parent() else {
+                break;
+            };
+            cur = parent;
+        }
+    }
+    false
+}
+
+fn file_enables_bedrock(path: &Path) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_reader::<_, Value>(file.take(256 * 1024)) else {
+        return false;
+    };
+    json_enables_bedrock(&value)
+}
+
+fn json_enables_bedrock(value: &Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    if let Some(env) = obj.get("env").and_then(Value::as_object) {
+        if check_bedrock_val(env.get(ENV_KEY)) {
+            return true;
+        }
+        if env
+            .get("AWS_BEARER_TOKEN_BEDROCK")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            return true;
+        }
+        if env
+            .get("ANTHROPIC_BEDROCK_BASE_URL")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            return true;
+        }
+        for model_key in [
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        ] {
+            if let Some(m) = env.get(model_key).and_then(Value::as_str) {
+                if bedrock_model_id(m) {
+                    return true;
+                }
+            }
+        }
+    }
+    if check_bedrock_val(obj.get(ENV_KEY)) {
+        return true;
+    }
+    if obj.get("bedrock").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    if let Some(m) = obj.get("model").and_then(Value::as_str) {
+        if bedrock_model_id(m) {
+            return true;
+        }
+    }
+    false
+}
+
+fn check_bedrock_val(val: Option<&Value>) -> bool {
+    let Some(v) = val else {
+        return false;
+    };
+    if let Some(b) = v.as_bool() {
+        return b;
+    }
+    if let Some(n) = v.as_u64() {
+        return n == 1;
+    }
+    if let Some(s) = v.as_str() {
+        return truthy_str(s);
+    }
+    false
+}
+
+fn truthy_str(text: &str) -> bool {
+    matches!(
+        text.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes"
+    )
 }
 
 fn is_shell_command(command: &str) -> bool {
@@ -162,9 +287,33 @@ fn process_bedrock_flag(pid: u32) -> bool {
     let Some(buf) = process_args(pid) else {
         return false;
     };
-    let enabled = flag_enabled(&buf, ENV_KEY);
+    let enabled = flag_enabled(&buf, ENV_KEY)
+        || env_var_non_empty(&buf, "AWS_BEARER_TOKEN_BEDROCK")
+        || env_var_non_empty(&buf, "ANTHROPIC_BEDROCK_BASE_URL");
     drop(buf);
     enabled
+}
+
+fn env_var_non_empty(buf: &[u8], key: &str) -> bool {
+    let needle = format!("{key}=");
+    let needle = needle.as_bytes();
+    let mut at = 0;
+    while at < buf.len() {
+        if buf[at..].starts_with(needle) {
+            let start = at + needle.len();
+            let end = buf[start..]
+                .iter()
+                .position(|byte| *byte == 0)
+                .map(|pos| start + pos)
+                .unwrap_or(buf.len());
+            return !buf[start..end].iter().all(|b| b.is_ascii_whitespace());
+        }
+        let Some(pos) = buf[at..].iter().position(|byte| *byte == 0) else {
+            break;
+        };
+        at += pos + 1;
+    }
+    false
 }
 
 /// `CLAUDE_CODE_USE_BEDROCK=1|true|yes`, matched only at the start of an
@@ -195,10 +344,7 @@ fn truthy(value: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(value) else {
         return false;
     };
-    matches!(
-        text.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes"
-    )
+    truthy_str(text)
 }
 
 #[cfg(target_os = "macos")]
@@ -415,7 +561,10 @@ fn summarize(path: &Path) -> Summary {
         if line.is_empty() {
             continue;
         }
-        if !line.contains("\"cost-state\"") && !line.contains("\"assistant\"") {
+        if !line.contains("\"cost-state\"")
+            && !line.contains("\"assistant\"")
+            && !line.contains("\"attachment\"")
+        {
             continue;
         }
         let Ok(value) = serde_json::from_str::<Value>(&line) else {
@@ -427,6 +576,7 @@ fn summarize(path: &Path) -> Summary {
         match obj.get("type").and_then(Value::as_str) {
             Some("cost-state") => take_cost(&mut summary, obj),
             Some("assistant") => take_assistant(&mut summary, obj),
+            Some("attachment") => take_attachment(&mut summary, obj),
             _ => {}
         }
     }
@@ -575,6 +725,19 @@ fn take_assistant(summary: &mut Summary, obj: &Map<String, Value>) {
     );
 }
 
+fn take_attachment(summary: &mut Summary, obj: &Map<String, Value>) {
+    let Some(attachment) = obj.get("attachment").and_then(Value::as_object) else {
+        return;
+    };
+    if attachment.get("type").and_then(Value::as_str) == Some("model") {
+        if let Some(identity) = attachment.get("identity").and_then(Value::as_object) {
+            if let Some(model_id) = identity.get("modelId").and_then(Value::as_str) {
+                note_model(summary, model_id);
+            }
+        }
+    }
+}
+
 fn note_start(summary: &mut Summary, ts: i64) {
     summary.start_ms = Some(summary.start_ms.map(|cur| cur.min(ts)).unwrap_or(ts));
 }
@@ -585,12 +748,16 @@ fn note_model(summary: &mut Summary, model: &str) {
     }
 }
 
-fn bedrock_model_id(model: &str) -> bool {
+pub(crate) fn bedrock_model_id(model: &str) -> bool {
     let model = model.to_ascii_lowercase();
     if model.is_empty() || model.starts_with('<') {
         return false;
     }
-    model.contains("anthropic.") || model.contains("amazon.") || model.contains("bedrock")
+    model.contains("anthropic.")
+        || model.contains("amazon.")
+        || model.contains("bedrock")
+        || model.starts_with("arn:aws:")
+        || model.contains(":inference-profile/")
 }
 
 fn fold_models(
@@ -902,6 +1069,95 @@ mod tests {
         let midnight = local_midnight_ms(now);
         assert!(midnight <= now);
         assert!(now - midnight < 86_400_000);
+    }
+
+    #[test]
+    fn json_settings_detects_bedrock_configurations() {
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "1" }
+        })));
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "env": { "CLAUDE_CODE_USE_BEDROCK": true }
+        })));
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "env": { "AWS_BEARER_TOKEN_BEDROCK": "token-123" }
+        })));
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "env": { "ANTHROPIC_BEDROCK_BASE_URL": "https://bedrock-runtime.us-east-1.amazonaws.com" }
+        })));
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "env": { "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-5-20250929-v1:0" }
+        })));
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "bedrock": true
+        })));
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "CLAUDE_CODE_USE_BEDROCK": "1"
+        })));
+        assert!(json_enables_bedrock(&serde_json::json!({
+            "model": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        })));
+
+        assert!(!json_enables_bedrock(&serde_json::json!({
+            "env": { "CLAUDE_CODE_USE_BEDROCK": "0" }
+        })));
+        assert!(!json_enables_bedrock(&serde_json::json!({
+            "env": { "ANTHROPIC_MODEL": "claude-sonnet-4-5" }
+        })));
+        assert!(!json_enables_bedrock(&serde_json::json!({
+            "model": "claude-3-5-sonnet-20241022"
+        })));
+    }
+
+    #[test]
+    fn settings_use_bedrock_walks_parent_cwd() {
+        let dir = scratch("cwd-settings");
+        let project_dir = dir.join("nested").join("subproject");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let dot_claude = dir.join(".claude");
+        std::fs::create_dir_all(&dot_claude).unwrap();
+        std::fs::write(
+            dot_claude.join("settings.json"),
+            r#"{"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}}"#,
+        )
+        .unwrap();
+
+        assert!(settings_use_bedrock(project_dir.to_str().unwrap()));
+        assert!(!settings_use_bedrock(
+            "/nonexistent/path/that/does/not/exist"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_bedrock_transcript_identifies_bedrock_models() {
+        let dir = scratch("transcript-bedrock");
+        let bedrock_path = write_jsonl(
+            &dir,
+            "bedrock.jsonl",
+            &format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{TODAY}\",\"message\":{{\"id\":\"m1\",\"model\":\"us.anthropic.claude-sonnet-4-5-20250929-v1:0\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":2}}}}}}\n"
+            ),
+        );
+        let non_bedrock_path = write_jsonl(
+            &dir,
+            "non_bedrock.jsonl",
+            &format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{TODAY}\",\"message\":{{\"id\":\"m1\",\"model\":\"claude-sonnet-4-5\",\"usage\":{{\"input_tokens\":10,\"output_tokens\":2}}}}}}\n"
+            ),
+        );
+        let attachment_bedrock_path = write_jsonl(
+            &dir,
+            "attachment.jsonl",
+            &format!(
+                "{{\"type\":\"attachment\",\"attachment\":{{\"type\":\"model\",\"identity\":{{\"modelId\":\"arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0\"}}}}}}\n"
+            ),
+        );
+
+        assert!(is_bedrock_transcript(&bedrock_path));
+        assert!(is_bedrock_transcript(&attachment_bedrock_path));
+        assert!(!is_bedrock_transcript(&non_bedrock_path));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn scratch(name: &str) -> PathBuf {

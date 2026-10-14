@@ -178,6 +178,8 @@ pub(crate) fn cli_kind(value: &str) -> Option<CliKind> {
     if lower_val.contains("/claude/")
         || lower_val.contains("/.claude/")
         || lower_val.contains("\\claude\\")
+        || lower_val.contains("\\.claude\\")
+        || lower_val.contains("claude-code")
     {
         return Some(CliKind::Claude);
     }
@@ -1079,6 +1081,17 @@ pub(crate) fn family_kind(family: &[(u32, u8)]) -> Option<CliKind> {
             let path_str = path.to_string_lossy();
             if let Some(kind) = cli_kind(&path_str) {
                 return Some(kind);
+            }
+            let is_node = path_str.ends_with("/node")
+                || path_str.ends_with("/node.exe")
+                || path_str == "node";
+            if is_node {
+                for open_path in open_paths(*pid) {
+                    let open_str = open_path.to_string_lossy();
+                    if let Some(kind) = cli_kind(&open_str) {
+                        return Some(kind);
+                    }
+                }
             }
         }
     }
