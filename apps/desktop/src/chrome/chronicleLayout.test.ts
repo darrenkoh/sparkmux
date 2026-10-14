@@ -122,10 +122,19 @@ test("ridge height stays in range and the cell winding faces +y", () => {
   assert.deepEqual(v10, { x: RIDGE_STEP_X, y: 0, z: 0 });
   assert.deepEqual(v01, { x: 0, y: 0, z: RIDGE_LANE_Z });
   assert.deepEqual(v11, { x: RIDGE_STEP_X, y: 0, z: RIDGE_LANE_Z });
+  // (v00, v01, v11) then (v00, v11, v10). The y term is edge.z * edge.x, not a simplified stand-in.
   const first = cross(sub(v01, v00), sub(v11, v00));
   const second = cross(sub(v11, v00), sub(v10, v00));
   assert.ok(first.y > 0);
   assert.ok(second.y > 0);
+  assert.ok(Math.abs(first.y - RIDGE_STEP_X * RIDGE_LANE_Z) < 1e-9);
+  assert.ok(Math.abs(second.y - RIDGE_STEP_X * RIDGE_LANE_Z) < 1e-9);
+
+  const sloped = ridgeCellCorners(0, 0, (ordinal, lane) => ordinal + lane);
+  const slopeNormal = cross(sub(sloped.v01, sloped.v00), sub(sloped.v11, sloped.v00));
+  const slopeSecond = cross(sub(sloped.v11, sloped.v00), sub(sloped.v10, sloped.v00));
+  assert.ok(slopeNormal.y > 0);
+  assert.ok(slopeSecond.y > 0);
 
   const now = stationWorld("ridge", station({ id: "now:a", ordinal: 3, lane: 1, kind: "now" }), 3);
   assert.equal(now.x, 3 * RIDGE_STEP_X);

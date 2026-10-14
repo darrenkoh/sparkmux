@@ -23,16 +23,15 @@ import {
 import {
   applyChronicleKeyEvent,
   chronicleKeyAction,
+  ENABLED_CHRONICLE_SCENES,
   type ChronicleKeyAction,
   type ChronicleKeyState,
 } from "./chronicleKeys";
-import type { ChronicleScene } from "./chronicleLayout";
 import VerticalZoomDial from "./VerticalZoomDial";
 
 const ChronicleView = lazy(() => import("./ChronicleView"));
 
 const GITS_VIEW_KEY = "sparkmux.gitsView";
-const CHRONICLE_SCENES: readonly ChronicleScene[] = ["transit"];
 
 function readGitsView(): "canvas" | "chronicle" {
   try {
@@ -202,6 +201,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   const hasInitialFitRef = useRef(false);
   const [view, setView] = useState<"canvas" | "chronicle">(readGitsView);
   const chronicleApplyRef = useRef<(action: ChronicleKeyAction) => void>(() => {});
+  const sceneSlotRef = useRef<HTMLDivElement>(null);
   const [chronicleKeys, setChronicleKeys] = useState<ChronicleKeyState>({
     onNewest: true,
     scene: "transit",
@@ -328,7 +328,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
         ctrl: event.ctrlKey,
         inHologram: event.target instanceof Element && event.target.closest(".chronicle-hologram") != null,
         onNewest: state.onNewest,
-        enabledScenes: CHRONICLE_SCENES,
+        enabledScenes: ENABLED_CHRONICLE_SCENES,
         scene: state.scene,
         files: state.files,
         stations: state.stations,
@@ -1138,11 +1138,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               </button>
             </div>
             ) : (
-            <div className="graph-mode-group" role="group" aria-label="Chronicle scene">
-              <button type="button" className="graph-mode-btn on" aria-pressed={true}>
-                Transit
-              </button>
-            </div>
+            <div ref={sceneSlotRef} className="graph-mode-group" role="group" aria-label="Chronicle scene" />
             )}
 
             {view === "canvas" && (
@@ -1287,6 +1283,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                 pid={pid}
                 onKeyContext={onChronicleKeyContext}
                 applyRef={chronicleApplyRef}
+                sceneSlotRef={sceneSlotRef}
               />
             </Suspense>
           ) : (

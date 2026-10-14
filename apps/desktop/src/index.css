@@ -3420,6 +3420,14 @@ code {
   font-size: 12px;
 }
 
+.chronicle-scene-bar {
+  position: absolute;
+  z-index: 4;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .chronicle-live {
   position: absolute;
   top: 16px;

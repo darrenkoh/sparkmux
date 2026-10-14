@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   applyChronicleKeyEvent,
   chronicleKeyAction,
+  ENABLED_CHRONICLE_SCENES,
   isNewestScrubStop,
   laneTarget,
   scrubDomain,
@@ -165,6 +166,53 @@ test("newest scrub stop is Now when that read exists", () => {
   assert.equal(isNewestScrubStop("c6", stations, () => false), true);
   assert.equal(isNewestScrubStop("b", stations, () => false), false);
   assert.equal(isNewestScrubStop("missing", stations, () => false), false);
+});
+
+test("enabled scenes select rivers, helix, and ridge", () => {
+  assert.deepEqual([...ENABLED_CHRONICLE_SCENES], ["transit", "rivers", "helix", "ridge"]);
+  assert.deepEqual(chronicleKeyAction(input({ key: "2", enabledScenes: ENABLED_CHRONICLE_SCENES })), {
+    swallow: true,
+    action: "scene",
+    scene: "rivers",
+  });
+  assert.deepEqual(chronicleKeyAction(input({ key: "3", enabledScenes: ENABLED_CHRONICLE_SCENES })), {
+    swallow: true,
+    action: "scene",
+    scene: "helix",
+  });
+  assert.deepEqual(chronicleKeyAction(input({ key: "4", enabledScenes: ENABLED_CHRONICLE_SCENES })), {
+    swallow: true,
+    action: "scene",
+    scene: "ridge",
+  });
+});
+
+test("rivers and ridge arrows select a station and helix arrows scrub", () => {
+  const enabled = { enabledScenes: ENABLED_CHRONICLE_SCENES, files, stations, activeId: "b" };
+  assert.deepEqual(chronicleKeyAction(input({ ...enabled, key: "ArrowDown", scene: "rivers" })), {
+    swallow: true,
+    action: "lane",
+    stationId: "c6",
+  });
+  assert.deepEqual(chronicleKeyAction(input({ ...enabled, key: "ArrowUp", scene: "ridge" })), {
+    swallow: true,
+    action: "lane",
+    stationId: "a",
+  });
+  assert.deepEqual(chronicleKeyAction(input({ key: "ArrowUp", scene: "helix" })), {
+    swallow: true,
+    action: "step",
+    delta: -1,
+  });
+  assert.deepEqual(chronicleKeyAction(input({ key: "ArrowDown", scene: "helix", shift: true })), {
+    swallow: true,
+    action: "step",
+    delta: 4,
+  });
+  assert.deepEqual(chronicleKeyAction(input({ ...enabled, key: "ArrowDown", scene: "transit" })), {
+    swallow: true,
+    action: "none",
+  });
 });
 
 test("a second wheel step does not keep the previous path's Now", () => {

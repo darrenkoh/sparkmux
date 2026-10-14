@@ -1,6 +1,7 @@
 declare module "three" {
   export const ACESFilmicToneMapping: number;
   export const DoubleSide: number;
+  export const FrontSide: number;
 
   export class Vector2 {
     constructor(x?: number, y?: number);
@@ -21,6 +22,10 @@ declare module "three" {
     project(camera: Camera): this;
   }
 
+  export class Quaternion {
+    setFromUnitVectors(from: Vector3, to: Vector3): this;
+  }
+
   export class Euler {
     x: number;
     y: number;
@@ -32,11 +37,28 @@ declare module "three" {
 
   export class Color {
     constructor(color?: number);
+    readonly r: number;
+    readonly g: number;
+    readonly b: number;
     set(color: number): this;
+    copy(color: Color): this;
+    lerp(color: Color, alpha: number): this;
+  }
+
+  export class BufferAttribute {
+    needsUpdate: boolean;
+    constructor(array: ArrayLike<number>, itemSize: number);
+    setXYZ(index: number, x: number, y: number, z: number): this;
+  }
+
+  export class Float32BufferAttribute extends BufferAttribute {
+    constructor(array: ArrayLike<number>, itemSize: number);
   }
 
   export class BufferGeometry {
     dispose(): void;
+    setAttribute(name: string, attribute: BufferAttribute): this;
+    getAttribute(name: string): BufferAttribute;
   }
 
   export class BoxGeometry extends BufferGeometry {
@@ -45,6 +67,10 @@ declare module "three" {
 
   export class PlaneGeometry extends BufferGeometry {
     constructor(width?: number, height?: number);
+  }
+
+  export class CylinderGeometry extends BufferGeometry {
+    constructor(radiusTop?: number, radiusBottom?: number, height?: number, radialSegments?: number);
   }
 
   export class Material {
@@ -60,17 +86,22 @@ declare module "three" {
       transparent?: boolean;
       opacity?: number;
       depthWrite?: boolean;
+      vertexColors?: boolean;
     });
+    color: Color;
     map: { dispose(): void } | null;
     side: number;
     depthWrite: boolean;
+    vertexColors: boolean;
   }
 
   export class Object3D {
     position: Vector3;
     rotation: Euler;
+    quaternion: Quaternion;
     scale: Vector3;
     up: Vector3;
+    visible: boolean;
     matrix: Matrix4;
     children: Object3D[];
     userData: Record<string, unknown>;
@@ -118,7 +149,7 @@ declare module "three" {
     intersectObjects(
       objects: Object3D[],
       recursive?: boolean,
-    ): Array<{ instanceId?: number; object: Object3D }>;
+    ): Array<{ instanceId?: number; object: Object3D; point: Vector3 }>;
   }
 
   export class WebGLRenderer {
@@ -144,6 +175,10 @@ declare module "three/addons/controls/OrbitControls.js" {
     dampingFactor: number;
     minPolarAngle: number;
     maxPolarAngle: number;
+    minDistance: number;
+    maxDistance: number;
+    minAzimuthAngle: number;
+    maxAzimuthAngle: number;
     update(): void;
     dispose(): void;
   }
