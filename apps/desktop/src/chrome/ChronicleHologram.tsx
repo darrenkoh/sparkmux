@@ -63,11 +63,11 @@ export default function ChronicleHologram(props: {
           type="button"
           className="chronicle-hologram-min-pill"
           onClick={() => setMinimized(false)}
-          title="Expand hologram inspector"
+          title="Expand right diff dock"
         >
-          <span className="tag">HOLO</span>
+          <span className="tag">DIFF DOCK</span>
           <span className="min-title">{props.title || "Inspect Step"}</span>
-          <span className="min-action">EXPAND ▢</span>
+          <span className="min-action">◀ EXPAND</span>
         </button>
       </aside>
     );
@@ -76,7 +76,7 @@ export default function ChronicleHologram(props: {
   return (
     <aside className="chronicle-hologram scifi-panel" aria-live="polite">
       <header>
-        <span className="tag">HOLO</span>
+        <span className="tag">DIFF DOCK</span>
         <span className="chronicle-hologram-title" title={props.title}>
           {props.title}
         </span>
@@ -93,10 +93,10 @@ export default function ChronicleHologram(props: {
             type="button"
             className="chronicle-btn-icon"
             onClick={() => setMinimized(true)}
-            title="Minimize hologram panel"
-            aria-label="Minimize hologram panel"
+            title="Collapse dock to right"
+            aria-label="Collapse dock to right"
           >
-            −
+            COLLAPSE ▶
           </button>
         </div>
       </header>

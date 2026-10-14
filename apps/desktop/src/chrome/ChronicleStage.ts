@@ -42,12 +42,12 @@ const FLOOR = 0x050e18;
 const VOID = 0x020408;
 
 // 3D Card Architecture Constants
-const CARD_WIDTH = 2.8;
-const CARD_HEIGHT = 1.84;
-const CARD_SPACING_X = 2.2;
-const CARD_BASE_Y = 1.02;
-// Stood vertically at ~50° angle (resting rolodex gallery tilt)
-const RESTING_ROTATION_Y = -0.8726; // -50 degrees in radians
+const CARD_WIDTH = 2.6;
+const CARD_HEIGHT = 1.76;
+const CARD_SPACING_X = 0.92;
+const CARD_BASE_Y = 0.98;
+// Stood vertically at ~53° angle (tight rolodex gallery tilt)
+const RESTING_ROTATION_Y = -0.92; // -52.7 degrees in radians
 
 function realStations(stations: StationLayoutInput[]): StationLayoutInput[] {
   return stations.filter((station) => station.kind !== "now");
@@ -65,17 +65,17 @@ function cardCentroid(stations: StationLayoutInput[], _count?: number): Vec3 {
   return {
     x: (maxOrdinal * CARD_SPACING_X) / 2,
     y: CARD_BASE_Y,
-    z: (maxLane * 1.1) / 2,
+    z: (maxLane * 1.0) / 2,
   };
 }
 
 function cardCameraOffset(stations: StationLayoutInput[]): Vec3 {
   const count = stations.length;
-  const spanX = Math.max(3, count * CARD_SPACING_X);
+  const spanX = Math.max(2.5, count * CARD_SPACING_X);
   return {
     x: 0,
-    y: 2.1,
-    z: Math.max(5.6, Math.min(16, spanX * 0.52)),
+    y: 1.8,
+    z: Math.max(4.6, Math.min(12, spanX * 0.48 + 3.2)),
   };
 }
 
@@ -88,6 +88,7 @@ function redrawStationCard(
   isActive: boolean,
   isHovered: boolean,
   scrollLine = 0,
+  customLines?: string[],
 ) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -243,7 +244,7 @@ function redrawStationCard(
   ctx.stroke();
 
   const rawPreview = station.preview || (isNow ? "Current worktree state" : "No preview available");
-  const allLines = rawPreview.split("\n");
+  const allLines = customLines && customLines.length > 0 ? customLines : rawPreview.split("\n");
   const visibleLines = 12;
   const maxScroll = Math.max(0, allLines.length - visibleLines);
   const safeScroll = Math.max(0, Math.min(maxScroll, scrollLine));
@@ -360,6 +361,7 @@ export interface ChronicleHandle {
     activeId: string,
     nowPaths?: readonly string[],
   ): void;
+  setActiveContent(stationId: string, text: string): void;
   setSize(width: number, height: number): void;
   setAutoRotate(enabled: boolean): void;
   resetCamera(): void;
@@ -747,7 +749,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     for (const entry of stationCards) {
       const isAct = entry.station.id === activeId;
       const isHov = entry.station.id === hoveredId;
-      redrawStationCard(entry.canvas, entry.station, isAct, isHov, entry.scrollLine);
+      redrawStationCard(entry.canvas, entry.station, isAct, isHov, entry.scrollLine, entry.allLines);
       entry.texture.needsUpdate = true;
 
       // Update pedestal color
@@ -841,6 +843,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
           card.station.id === currentActive,
           true,
           card.scrollLine,
+          card.allLines,
         );
         card.texture.needsUpdate = true;
       }
@@ -1067,6 +1070,23 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       }
       paintActiveNodes(activeId);
       follow(false, rebuilt);
+    },
+    setActiveContent(stationId, text) {
+      if (disposed || !text) return;
+      const card = stationCards.find((c) => c.station.id === stationId);
+      if (!card) return;
+      card.allLines = text.split("\n");
+      card.maxScroll = Math.max(0, card.allLines.length - card.visibleLines);
+      card.scrollLine = Math.min(card.scrollLine, card.maxScroll);
+      redrawStationCard(
+        card.canvas,
+        card.station,
+        card.station.id === currentActive,
+        card.station.id === hoveredId,
+        card.scrollLine,
+        card.allLines,
+      );
+      card.texture.needsUpdate = true;
     },
     setSize(nextWidth, nextHeight) {
       if (disposed) return;

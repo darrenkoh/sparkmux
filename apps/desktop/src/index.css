@@ -3681,20 +3681,26 @@ code {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* Hologram Panel */
+/* Hologram Right Dock Panel */
 .chronicle-hologram.scifi-panel {
   position: absolute;
-  top: 48px;
-  right: 14px;
-  z-index: 8;
-  width: min(520px, 50%);
-  max-height: calc(100% - 110px);
+  top: 0;
+  right: 0;
+  bottom: 54px;
+  z-index: 9;
+  width: min(580px, 46%);
+  height: calc(100% - 54px);
+  max-height: calc(100% - 54px);
   display: flex;
   flex-direction: column;
-  background: rgba(7, 11, 16, 0.94);
-  backdrop-filter: blur(14px);
-  border: 1px solid rgba(45, 212, 191, 0.35);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.75);
+  background: rgba(5, 9, 15, 0.97);
+  backdrop-filter: blur(16px);
+  border-left: 1px solid rgba(45, 212, 191, 0.4);
+  border-right: none;
+  border-top: none;
+  border-bottom: none;
+  border-radius: 0;
+  box-shadow: -10px 0 35px rgba(0, 0, 0, 0.85);
   overflow: hidden;
 }
 
@@ -3747,22 +3753,25 @@ code {
 .chronicle-hologram-minimized {
   position: absolute;
   top: 48px;
-  right: 14px;
-  z-index: 8;
+  right: 0;
+  z-index: 9;
 }
 
 .chronicle-hologram-min-pill {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: rgba(7, 11, 16, 0.92);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(45, 212, 191, 0.4);
-  padding: 4px 10px;
-  border-radius: 2px;
+  background: rgba(7, 11, 16, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(45, 212, 191, 0.45);
+  border-right: none;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding: 5px 12px;
+  border-radius: 3px 0 0 3px;
   cursor: pointer;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  box-shadow: -4px 4px 16px rgba(0, 0, 0, 0.65);
   transition: all 0.12s ease;
 }
 
@@ -3848,8 +3857,8 @@ code {
 
 .chronicle-hologram-body {
   flex: 1 1 auto;
-  min-height: 140px;
-  max-height: 480px;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   user-select: text;
   background: rgba(3, 5, 8, 0.95);

@@ -368,6 +368,12 @@ export default function ChronicleView(props: {
   const preview = activeStation?.preview ?? "";
   const text = chroniclePanelText({ tab, loading, preview, hologram });
   const banners = chroniclePanelBanners(hologram);
+
+  useEffect(() => {
+    if (!activeId || !text) return;
+    handleRef.current?.setActiveContent(activeId, text);
+  }, [activeId, text]);
+
   const when = timeLabel(activeStation?.timestamp_ms);
   const panelTitle =
     activePath == null
