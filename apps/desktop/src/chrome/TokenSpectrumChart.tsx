@@ -6,6 +6,7 @@ import {
   type ChannelKey,
   type ChannelDef,
   type ProcessedBucket,
+  type SpectrumSeam,
   CHANNELS,
   processTimelineData,
   perspective,
@@ -60,9 +61,9 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
     lastY: 0,
   });
 
-  const processedData = useMemo(() => {
-    return processTimelineData(timeline, stats);
-  }, [timeline, stats]);
+  const processed = useMemo(() => processTimelineData(timeline, stats), [timeline, stats]);
+  const processedData = processed.buckets;
+  const seams = processed.seams;
 
   const clearHover = useCallback(() => {
     cam3dRef.current.isDragging = false;
@@ -113,13 +114,14 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
       if (mode === "gauge") {
         drawGaugeMode(ctx, w, h, stats, activeChannel);
       } else if (mode === "burst") {
-        drawBurstMode(ctx, w, h, processedData, activeChannel, hoverIndex);
+        drawBurstMode(ctx, w, h, processedData, seams, activeChannel, hoverIndex);
       } else {
         draw3DContourMode(
           ctx,
           w,
           h,
           processedData,
+          seams,
           activeChannel,
           hoverIndex,
           hoverChannel,
@@ -140,7 +142,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [mode, processedData, stats, activeChannel, hoverIndex, hoverChannel]);
+  }, [mode, processedData, seams, stats, activeChannel, hoverIndex, hoverChannel]);
 
   // Pointer event handlers for 3D contour orbit and crosshair inspection
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -196,8 +198,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
           maxAltitude = Math.max(50, Math.ceil(maxAltitude * 1.15));
 
           for (let i = 0; i < n; i++) {
-            const frac = n > 1 ? i / (n - 1) : 0.5;
-            const x = X_MIN + frac * X_SPAN;
+            const x = X_MIN + processedData[i].xFraction * X_SPAN;
             for (const ch of CHANNELS) {
               if (activeChannel && activeChannel !== ch.key) continue;
               const val = processedData[i][ch.key];
@@ -226,7 +227,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         }
       } else {
         const padLeft = 54;
-        const padRight = 20;
+        const padRight = 16;
         const plotW = Math.max(1, rect.width - padLeft - padRight);
         if (clientX < padLeft || clientX > rect.width - padRight) {
           setHoverIndex(null);
@@ -234,8 +235,16 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
           return;
         }
         const ratio = Math.max(0, Math.min(1, (clientX - padLeft) / plotW));
-        const idx = Math.round(ratio * (processedData.length - 1));
-        setHoverIndex(idx >= 0 && idx < processedData.length ? idx : null);
+        let best = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < processedData.length; i++) {
+          const dist = Math.abs(processedData[i].xFraction - ratio);
+          if (dist < bestDist) {
+            best = i;
+            bestDist = dist;
+          }
+        }
+        setHoverIndex(processedData.length > 0 ? best : null);
         setHoverChannel(null);
       }
     },
@@ -309,10 +318,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
           <div
             className="token-hud-tooltip"
             style={{
-              left: `${Math.min(
-                82,
-                Math.max(18, ((hoverIndex ?? 0) / Math.max(1, processedData.length - 1)) * 100),
-              )}%`,
+              left: `${Math.min(82, Math.max(18, hoveredBucket.xFraction * 100))}%`,
             }}
           >
             <div className="hud-tooltip-header">
@@ -401,6 +407,7 @@ function draw3DContourMode(
   w: number,
   h: number,
   data: ProcessedBucket[],
+  seams: SpectrumSeam[],
   activeChannel: ChannelKey | null,
   hoverIndex: number | null,
   hoverChannel: ChannelKey | null,
@@ -531,6 +538,15 @@ function draw3DContourMode(
     ctx.textAlign = "right";
     ctx.fillText("LATEST ►", tEnd[0], tEnd[1]);
   }
+  ctx.fillStyle = "#ff9a3c";
+  ctx.font = "9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textAlign = "center";
+  for (const seam of seams) {
+    const seamX = xMin + seam.fraction * xSpan;
+    const pt = project([seamX, 0, 6.6]);
+    if (!pt) continue;
+    ctx.fillText(seam.label, pt[0], pt[1] - 12);
+  }
   ctx.restore();
 
   const n = data.length;
@@ -542,8 +558,7 @@ function draw3DContourMode(
     ctx.strokeStyle = "rgba(120, 200, 255, 0.16)";
     const meshStep = Math.max(1, Math.floor(n / 14));
     for (let i = 0; i < n; i += meshStep) {
-      const frac = i / (n - 1);
-      const x = xMin + frac * xSpan;
+      const x = xMin + data[i].xFraction * xSpan;
       ctx.beginPath();
       let firstMesh = false;
       for (const ch of CHANNELS) {
@@ -583,8 +598,7 @@ function draw3DContourMode(
       const botPts: Array<[number, number, number] | null> = [];
 
       for (let i = 0; i < n; i++) {
-        const frac = i / (n - 1);
-        const x = xMin + frac * xSpan;
+        const x = xMin + data[i].xFraction * xSpan;
         const val = data[i][ch.key];
         const y = (val / maxAltitude) * maxVisualY;
 
@@ -645,8 +659,7 @@ function draw3DContourMode(
           const val = data[i][ch.key];
           const y = (val / maxAltitude) * maxVisualY * tier;
           if (y < 0.04) continue;
-          const frac = i / (n - 1);
-          const x = xMin + frac * xSpan;
+          const x = xMin + data[i].xFraction * xSpan;
           const pt = project([x, y, z]);
           if (!pt) continue;
           if (!startedContour) {
@@ -693,9 +706,17 @@ function draw3DContourMode(
 
       // 3F. Bioluminescent Energy Pulse Surging Along Ridge Crest (synchronized with 3D scan sweep line)
       const pulsePhase = sweepFrac;
-      const pIdx = Math.min(n - 1, Math.max(0, Math.floor(pulsePhase * (n - 1))));
+      let pIdx = 0;
+      for (let i = 0; i < n - 1; i++) {
+        if (data[i + 1].xFraction >= pulsePhase) {
+          pIdx = i;
+          break;
+        }
+        pIdx = i;
+      }
       const pNext = Math.min(n - 1, pIdx + 1);
-      const sub = pulsePhase * (n - 1) - pIdx;
+      const spanFrac = data[pNext].xFraction - data[pIdx].xFraction;
+      const sub = spanFrac <= 0 ? 0 : (pulsePhase - data[pIdx].xFraction) / spanFrac;
       const xPulse = sweepX;
       const valPulse = data[pIdx][ch.key] * (1 - sub) + data[pNext][ch.key] * sub;
       const yPulse = (valPulse / maxAltitude) * maxVisualY;
@@ -764,8 +785,7 @@ function draw3DContourMode(
 
   // 5. Direct Node Lock-on Tactical Reticle on the EXACT Hovered Node
   if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < n) {
-    const frac = n > 1 ? hoverIndex / (n - 1) : 0.5;
-    const hX = xMin + frac * xSpan;
+    const hX = xMin + data[hoverIndex].xFraction * xSpan;
     const d = data[hoverIndex];
 
     // Determine target channel: prefer hoverChannel if detected, else channel with highest value
@@ -898,6 +918,7 @@ function drawBurstMode(
   w: number,
   h: number,
   data: ProcessedBucket[],
+  seams: SpectrumSeam[],
   activeChannel: ChannelKey | null,
   hoverIndex: number | null,
 ) {
@@ -918,16 +939,17 @@ function drawBurstMode(
   }
   maxAltitude = Math.max(100, Math.ceil(maxAltitude * 1.15));
 
-  drawGridAndContours(ctx, padL, padT, plotW, plotH, maxAltitude, data);
+  drawGridAndContours(ctx, padL, padT, plotW, plotH, maxAltitude, data, seams);
 
   const n = data.length;
   if (n === 0) return;
-  const slotW = plotW / n;
-  const barGap = Math.max(1, slotW * 0.2);
-  const barW = Math.max(2, slotW - barGap);
 
   data.forEach((d, i) => {
-    const x = padL + i * slotW + barGap / 2;
+    const prev = i > 0 ? data[i - 1].xFraction : d.xFraction;
+    const next = i < n - 1 ? data[i + 1].xFraction : d.xFraction;
+    const slot = Math.max(d.xFraction - prev, next - d.xFraction, 1 / n) * plotW;
+    const barW = Math.max(2, Math.min(slot * 0.72, plotW / 8));
+    const x = Math.min(padL + plotW - barW, Math.max(padL, padL + d.xFraction * plotW - barW / 2));
     const isHovered = hoverIndex === i;
 
     if (activeChannel) {
@@ -1056,6 +1078,7 @@ function drawGridAndContours(
   plotH: number,
   maxAltitude: number,
   data: ProcessedBucket[],
+  seams: SpectrumSeam[],
 ) {
   ctx.save();
 
@@ -1085,20 +1108,37 @@ function drawGridAndContours(
   ctx.setLineDash([]);
   ctx.textAlign = "center";
   ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-  const numTimeTicks = Math.min(5, data.length);
-  for (let i = 0; i < numTimeTicks; i++) {
-    const dataIdx = Math.round((i / (numTimeTicks - 1)) * (data.length - 1));
-    const x = padL + (dataIdx / Math.max(1, data.length - 1)) * plotW;
-    const label = data[dataIdx]?.timeLabel ?? "";
+  if (data.length > 0) {
+    const tickCount = Math.min(5, data.length);
+    for (let i = 0; i < tickCount; i++) {
+      const fraction = tickCount === 1 ? data[0].xFraction : i / (tickCount - 1);
+      let dataIdx = 0;
+      let bestDist = Infinity;
+      for (let p = 0; p < data.length; p++) {
+        const dist = Math.abs(data[p].xFraction - fraction);
+        if (dist < bestDist) {
+          bestDist = dist;
+          dataIdx = p;
+        }
+      }
+      const x = padL + data[dataIdx].xFraction * plotW;
+      const label = data[dataIdx]?.timeLabel ?? "";
 
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
-    ctx.beginPath();
-    ctx.moveTo(x, padT + plotH);
-    ctx.lineTo(x, padT + plotH + 4);
-    ctx.stroke();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+      ctx.beginPath();
+      ctx.moveTo(x, padT + plotH);
+      ctx.lineTo(x, padT + plotH + 4);
+      ctx.stroke();
 
-    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-    ctx.fillText(label, x, padT + plotH + 15);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.fillText(label, x, padT + plotH + 15);
+    }
+  }
+
+  ctx.fillStyle = "#ff9a3c";
+  for (const seam of seams) {
+    const x = padL + seam.fraction * plotW;
+    ctx.fillText(seam.label, x, padT + plotH - 6);
   }
 
   ctx.restore();

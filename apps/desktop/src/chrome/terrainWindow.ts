@@ -108,14 +108,16 @@ export function formatGap(ms: number): string {
  * Fold quiet stretches longer than five minutes down to a two-minute seam.
  * Activity on either side keeps its real spacing.
  */
-export function activityAxis(
-  timeline: readonly ActivityStamp[],
+export function activityAxis<T extends { timestamp: number }>(
+  timeline: readonly T[],
   stats?: Pick<TabAnalyticsStats, "timeline_start" | "timeline_end"> | null,
+  isActive?: (point: T) => boolean,
 ): CompressedAxis {
+  const activeCheck = isActive ?? ((point: T) => isMapActivity(point as unknown as ActivityStamp));
   const span = sessionSpan(timeline, stats);
   const active: number[] = [];
   for (const point of timeline) {
-    if (typeof point.timestamp !== "number" || !isMapActivity(point)) continue;
+    if (typeof point.timestamp !== "number" || !activeCheck(point)) continue;
     active.push(point.timestamp);
   }
   active.sort((a, b) => a - b);

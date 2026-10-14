@@ -1,4 +1,5 @@
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
+import { activityAxis, wallToCompressed } from "./terrainWindow.ts";
 
 export type TokenChartMode = "contour" | "burst" | "gauge";
 export type ChannelKey = "cache" | "input" | "reasoning" | "output";
@@ -50,6 +51,8 @@ export const CHANNELS: ChannelDef[] = [
 export interface ProcessedBucket {
   timestamp: number;
   timeLabel: string;
+  /** Position on the compressed time axis. 0 is the session start, 1 is the latest bucket. */
+  xFraction: number;
   cache: number;
   input: number;
   reasoning: number;
@@ -60,6 +63,32 @@ export interface ProcessedBucket {
   stackReasoning: number;
   stackOutput: number;
   cacheHitRate: number;
+}
+
+export interface SpectrumSeam {
+  /** Center of the folded gap on the same 0–1 axis as `xFraction`. */
+  fraction: number;
+  /** Real duration, such as `+2h`. */
+  label: string;
+}
+
+export interface ProcessedTimeline {
+  buckets: ProcessedBucket[];
+  seams: SpectrumSeam[];
+}
+
+/** A spectrum column is active when it has tokens or a map event. */
+export function isSpectrumActivity(point: Partial<ActivityPoint>): boolean {
+  return (point.tokens ?? 0) > 0
+    || (point.input_tokens ?? 0) > 0
+    || (point.output_tokens ?? 0) > 0
+    || (point.cache_read_tokens ?? 0) > 0
+    || (point.cache_write_tokens ?? 0) > 0
+    || (point.reasoning_tokens ?? 0) > 0
+    || (point.user_count ?? 0) > 0
+    || (point.think_count ?? 0) > 0
+    || (point.reply_count ?? 0) > 0
+    || (point.tool_count ?? 0) > 0;
 }
 
 /** Format milliseconds offset into +MM:SS or HH:MM:SS */
@@ -90,18 +119,19 @@ export function computeLocalCacheHitRate(cache: number, input: number): number {
 export function processTimelineData(
   timeline: ActivityPoint[],
   stats?: TabAnalyticsStats | null,
-): ProcessedBucket[] {
+): ProcessedTimeline {
   const points = (timeline || []).filter((p) => p && typeof p.timestamp === "number");
 
   if (points.length === 0) {
     // Generate empty synthetic 16-point baseline
     const now = Date.now();
-    const result: ProcessedBucket[] = [];
+    const buckets: ProcessedBucket[] = [];
     const count = 16;
     for (let i = 0; i < count; i++) {
-      result.push({
+      buckets.push({
         timestamp: now - (count - 1 - i) * 60_000,
         timeLabel: `T-${(count - 1 - i) * 60}s`,
+        xFraction: count > 1 ? i / (count - 1) : 0.5,
         cache: 0,
         input: 0,
         reasoning: 0,
@@ -114,12 +144,20 @@ export function processTimelineData(
         cacheHitRate: 0,
       });
     }
-    return result;
+    return { buckets, seams: [] };
   }
 
   const startT = points[0].timestamp;
+  const axis = activityAxis(points, stats, isSpectrumActivity);
+  const span = axis.spanMs;
+  const seams: SpectrumSeam[] = span <= 0
+    ? []
+    : axis.seams.map((seam) => ({
+        fraction: ((seam.compStart + seam.compEnd) / 2) / span,
+        label: seam.label,
+      }));
 
-  return points.map((p, idx) => {
+  const buckets = points.map((p, idx) => {
     // Read bucket tokens, fallback to total tokens or stats proportion if unpopulated
     let cache = p.cache_read_tokens ?? 0;
     let input = p.input_tokens ?? 0;
@@ -155,6 +193,7 @@ export function processTimelineData(
     return {
       timestamp: p.timestamp,
       timeLabel,
+      xFraction: span <= 0 ? 0.5 : wallToCompressed(axis, p.timestamp) / span,
       cache,
       input,
       reasoning,
@@ -167,6 +206,8 @@ export function processTimelineData(
       cacheHitRate: computeLocalCacheHitRate(cache, input),
     };
   });
+
+  return { buckets, seams };
 }
 
 // ---------------------------------------------------------------------------

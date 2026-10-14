@@ -22,10 +22,13 @@ test("computeLocalCacheHitRate computes hit rate percentage", () => {
 });
 
 test("processTimelineData handles empty timeline with synthetic baseline", () => {
-  const buckets = processTimelineData([]);
+  const { buckets, seams } = processTimelineData([]);
   assert.equal(buckets.length, 16);
+  assert.equal(seams.length, 0);
   assert.equal(buckets[0].total, 0);
   assert.equal(buckets[0].cacheHitRate, 0);
+  assert.equal(buckets[0].xFraction, 0);
+  assert.equal(buckets[15].xFraction, 1);
 });
 
 test("processTimelineData processes real activity points and accumulates stacks", () => {
@@ -56,7 +59,8 @@ test("processTimelineData processes real activity points and accumulates stacks"
     },
   ];
 
-  const buckets = processTimelineData(timeline);
+  const { buckets, seams } = processTimelineData(timeline);
+  assert.equal(seams.length, 0);
   assert.equal(buckets.length, 2);
 
   // Bucket 0
@@ -71,11 +75,79 @@ test("processTimelineData processes real activity points and accumulates stacks"
   assert.equal(buckets[0].stackOutput, 850); // 750 + 100
   assert.ok(Math.abs(buckets[0].cacheHitRate - (200 / 700) * 100) < 0.01);
 
-  // Bucket 1 (offset: 60s)
+  // Bucket 1 (offset: 60s). A one-minute gap stays on the real axis.
+  assert.equal(buckets[0].xFraction, 0);
+  assert.equal(buckets[1].xFraction, 1);
   assert.equal(buckets[1].timeLabel, "+01:00");
   assert.equal(buckets[1].cache, 800);
   assert.equal(buckets[1].input, 200);
   assert.ok(Math.abs(buckets[1].cacheHitRate - 80) < 0.01);
+});
+
+function tokenPoint(timestamp: number, tokens: number): ActivityPoint {
+  return {
+    timestamp,
+    user_count: tokens > 0 ? 1 : 0,
+    think_count: 0,
+    reply_count: 0,
+    tool_count: 0,
+    tokens,
+    input_tokens: tokens,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    reasoning_tokens: 0,
+  };
+}
+
+test("a gap longer than 5 minutes shrinks on the token spectrum axis", () => {
+  const start = 1_000_000;
+  const minute = 60_000;
+  const burst = 10 * minute;
+  const gap = 2 * 60 * minute;
+  const timeline: ActivityPoint[] = [];
+  for (let t = 0; t <= burst; t += minute) timeline.push(tokenPoint(start + t, 20));
+  timeline.push(tokenPoint(start + burst + gap / 2, 0));
+  for (let t = 0; t <= burst; t += minute) timeline.push(tokenPoint(start + burst + gap + t, 20));
+
+  const { buckets, seams } = processTimelineData(timeline);
+  assert.equal(seams.length, 1);
+  assert.equal(seams[0].label, "+2h");
+  assert.ok(Math.abs(seams[0].fraction - 11 / 22) < 0.001);
+
+  const before = buckets.find((bucket) => bucket.timestamp === start + burst);
+  const idle = buckets.find((bucket) => bucket.timestamp === start + burst + gap / 2);
+  const after = buckets.find((bucket) => bucket.timestamp === start + burst + gap);
+  assert.ok(before && idle && after);
+  assert.ok(Math.abs(before.xFraction - 10 / 22) < 0.001);
+  assert.ok(idle.xFraction > before.xFraction && idle.xFraction < after.xFraction);
+  assert.ok(Math.abs(after.xFraction - 12 / 22) < 0.001);
+  assert.ok(after.xFraction - before.xFraction < (gap / (burst + gap + burst)) * 0.5);
+});
+
+test("a token spike with no map events stays an anchor on the spectrum axis", () => {
+  const start = 1_000_000;
+  const minute = 60_000;
+  const spikeAt = start + 6 * minute;
+  const end = spikeAt + 2 * 60 * minute;
+  const timeline: ActivityPoint[] = [
+    tokenPoint(start, 20),
+    {
+      timestamp: spikeAt,
+      user_count: 0,
+      think_count: 0,
+      reply_count: 0,
+      tool_count: 0,
+      tokens: 40,
+      input_tokens: 40,
+    },
+    tokenPoint(end, 20),
+  ];
+
+  const { buckets, seams } = processTimelineData(timeline);
+  const spike = buckets.find((bucket) => bucket.timestamp === spikeAt);
+  assert.ok(spike);
+  assert.equal(seams.length, 2);
+  assert.ok(Math.abs(spike.xFraction - 0.5) < 0.001);
 });
 
 test("CHANNELS definitions contain all 4 channels with colors", () => {
