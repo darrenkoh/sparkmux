@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.36
+
+### Improvements
+
+- The Area Map folds a quiet stretch longer than five minutes into a short seam labeled with the real duration, such as +2h. Activity on either side keeps its spacing. The time window and scrubber follow that compressed axis.
+- Chronicle in the Gits screen draws the session's edits as a 3D topographical relief. Click a peak to open that file. A timeline scrubber plays through the session, and the hologram panel shows the diff.
+
 ## 0.1.35
 
 ### Bug Fixes
