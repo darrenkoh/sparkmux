@@ -1034,7 +1034,7 @@ export default function App() {
   const isDockOpen = Boolean(showTiles) && (outputOpen || statsDocked);
 
   return (
-    <div className={`app${graphOpen ? " graph-open" : ""}`}>
+    <div className="app">
       <div className="body">
         <div
           className={`sidebar-slot ${sidebarCollapsed ? "collapsed" : ""}`}

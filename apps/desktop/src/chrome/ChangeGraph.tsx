@@ -880,18 +880,12 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div
-        className="scifi-hud-frame graph-frame"
+        className="scifi-hud-frame graph-frame fullscreen"
         style={{
-          width: "96vw",
-          maxWidth: "1520px",
-          height: "94vh",
-          maxHeight: "920px",
           display: "flex",
           flexDirection: "column",
           padding: 0,
           background: "#05070a",
-          border: "1px solid rgba(45, 212, 191, 0.35)",
-          boxShadow: "0 0 60px rgba(0,0,0,0.9), inset 0 0 20px rgba(45,212,191,0.05)",
           overflow: "hidden",
         }}
         onClick={(e) => e.stopPropagation()}

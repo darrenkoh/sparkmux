@@ -3042,19 +3042,14 @@ code {
   border-color: #2dd4bf !important;
 }
 
-.app.graph-open .status {
-  position: relative;
-  z-index: 160;
-}
-
 .graph-overlay {
-  bottom: 40px;
   z-index: 120;
 }
 
-.graph-frame {
-  max-width: 1280px;
-  box-shadow: 0 0 50px rgba(0, 0, 0, 0.8), inset 0 0 28px rgba(45, 212, 191, 0.05);
+.graph-frame.fullscreen {
+  padding: 0;
+  background: #05070a;
+  box-shadow: none;
 }
 
 .graph-frame::before,
