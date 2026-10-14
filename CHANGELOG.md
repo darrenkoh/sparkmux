@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.40
+
+### Bug Fixes
+
+- Restored Claude Code LLM usage and cost tracking for sessions running on AWS Bedrock. Enhanced multi-signal detection across Claude settings files, transcripts with AWS Bedrock model IDs, environment flags, and Unicode terminal title variations.
+
 ## 0.1.39
 
 ### Improvements
