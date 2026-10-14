@@ -26,6 +26,7 @@ import {
   decideWheel,
   inputFollowsPrompt,
   viewportAtBottom,
+  mouseModeWrite,
   wheelReport,
   type PaneInputMode,
   type WheelContext,
@@ -39,7 +40,13 @@ export function getTerm(paneId: string): Terminal | undefined {
   return terms.get(paneId);
 }
 
-const idleMode: PaneInputMode = { alternate: false, mouse: false, mouseSgr: false };
+const idleMode: PaneInputMode = {
+  alternate: false,
+  mouse: false,
+  mouseDrag: false,
+  mouseAny: false,
+  mouseSgr: false,
+};
 
 export default function XtermView({
   paneId,
@@ -62,14 +69,15 @@ export default function XtermView({
   const onFocusRef = useRef(onFocus);
   const onCellSizeRef = useRef(onCellSize);
   const fontSizeRef = useRef(fontSize);
-  const inputModeRef = useRef(inputMode ?? idleMode);
+  const inputModeRef = useRef(inputMode);
   const doFitRef = useRef<() => void>(() => {});
   const redrawCaretRef = useRef<() => void>(() => {});
   const syncTmuxCursorRef = useRef<() => void>(() => {});
+  const restoreMouseRef = useRef<() => void>(() => {});
   onFocusRef.current = onFocus;
   onCellSizeRef.current = onCellSize;
   fontSizeRef.current = fontSize;
-  inputModeRef.current = inputMode ?? idleMode;
+  inputModeRef.current = inputMode;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -183,6 +191,19 @@ export default function XtermView({
     syncTmuxCursorRef.current = syncTmuxCursor;
 
     let seeded = false;
+    // The text seed calls reset(), which drops mouse tracking. Restore only
+    // after that paint so a tab switch still delivers clicks to Grok.
+    let seedApplied = false;
+    const restoreMouse = () => {
+      if (!seedApplied || unmounted) return;
+      const live = termRef.current;
+      const mode = inputModeRef.current;
+      if (!live || !mode) return;
+      const seq = mouseModeWrite(live.modes?.mouseTrackingMode, mode);
+      if (seq) live.write(seq);
+    };
+    restoreMouseRef.current = restoreMouse;
+
     const channel = new Channel<ArrayBuffer | Uint8Array | number[]>();
     channel.onmessage = (msg) => {
       const bytes = toBytes(msg);
@@ -194,9 +215,11 @@ export default function XtermView({
           () => {
             applyingSeed = false;
             host.style.visibility = "";
+            seedApplied = true;
             if (unmounted) return;
             doFitRef.current();
             syncTmuxCursor();
+            restoreMouse();
           },
           () => {
             applyingSeed = true;
@@ -239,13 +262,18 @@ export default function XtermView({
     let pageLines = 0;
     let lastPageAt = 0;
     term.attachCustomWheelEventHandler((ev) => {
-      const decision = decideWheel(wheelContext(term, ev, inputModeRef.current));
+      const decision = decideWheel(wheelContext(term, ev, inputModeRef.current ?? idleMode));
       if (decision.kind === "passthrough") return true;
       if (decision.kind === "scroll") {
         term.scrollLines(decision.lines);
       } else if (decision.kind === "report") {
         const pos = cellFromWheel(term, ev);
-        const bytes = wheelReport(decision.up, pos.col, pos.row, inputModeRef.current.mouseSgr);
+        const bytes = wheelReport(
+          decision.up,
+          pos.col,
+          pos.row,
+          (inputModeRef.current ?? idleMode).mouseSgr,
+        );
         void paneWrite(paneId, bytes);
         // The seeded buffer is not Grok's transcript. Keep it pinned so a
         // wheel the webview will not cancel cannot park on a blank row.
@@ -367,6 +395,7 @@ export default function XtermView({
       doFitRef.current = () => {};
       redrawCaretRef.current = () => {};
       syncTmuxCursorRef.current = () => {};
+      restoreMouseRef.current = () => {};
       if (seedTimer) window.clearTimeout(seedTimer);
       if (cursorTimer) window.clearTimeout(cursorTimer);
       window.clearTimeout(later);
@@ -397,6 +426,10 @@ export default function XtermView({
       syncTmuxCursorRef.current();
     }
   }, [focused]);
+
+  useEffect(() => {
+    restoreMouseRef.current();
+  }, [inputMode?.mouse, inputMode?.mouseAny, inputMode?.mouseDrag, inputMode?.mouseSgr]);
 
   return <div ref={hostRef} className="xterm-host" />;
 }

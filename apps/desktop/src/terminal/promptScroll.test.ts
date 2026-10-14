@@ -5,10 +5,12 @@ import {
   altScreenArrows,
   decideWheel,
   inputFollowsPrompt,
+  mouseModeWrite,
   promptHasDraft,
   viewportAtBottom,
   wheelLineCount,
   wheelReport,
+  type PaneInputMode,
   type WheelContext,
 } from "./promptScroll.ts";
 
@@ -155,6 +157,49 @@ test("wheel reports are one SGR or X10 sequence", () => {
   );
   assert.deepEqual(wheelReport(true, 2, 5, false), [0x1b, 0x5b, 0x4d, 96, 34, 37]);
   assert.deepEqual(wheelReport(false, 0, 400, false), [0x1b, 0x5b, 0x4d, 97, 33, 255]);
+});
+
+function paneMode(over: Partial<PaneInputMode> = {}): PaneInputMode {
+  return {
+    alternate: true,
+    mouse: false,
+    mouseDrag: false,
+    mouseAny: false,
+    mouseSgr: false,
+    ...over,
+  };
+}
+
+test("a fresh xterm learns Grok's hover tracking and SGR encoding", () => {
+  const grok = paneMode({ mouse: true, mouseAny: true, mouseSgr: true });
+  assert.equal(mouseModeWrite("none", grok), "\x1b[?1003h\x1b[?1006h");
+  assert.equal(mouseModeWrite(undefined, grok), "\x1b[?1003h\x1b[?1006h");
+  assert.equal(mouseModeWrite("any", grok), null);
+});
+
+test("button tracking and drags restore the mode tmux recorded", () => {
+  assert.equal(
+    mouseModeWrite("none", paneMode({ mouse: true })),
+    "\x1b[?1000h",
+  );
+  assert.equal(
+    mouseModeWrite("none", paneMode({ mouse: true, mouseDrag: true, mouseSgr: true })),
+    "\x1b[?1002h\x1b[?1006h",
+  );
+  assert.equal(
+    mouseModeWrite("vt200", paneMode({ mouse: true, mouseAny: true, mouseSgr: true })),
+    "\x1b[?1003h\x1b[?1006h",
+  );
+});
+
+test("mouse mode turns off only after the program has dropped it", () => {
+  const shell = paneMode();
+  assert.equal(mouseModeWrite("none", shell), null);
+  assert.equal(mouseModeWrite(undefined, shell), null);
+  assert.equal(
+    mouseModeWrite("any", shell),
+    "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l",
+  );
 });
 
 test("alternate-screen arrows repeat and stay within a short burst", () => {

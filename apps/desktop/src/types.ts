@@ -24,9 +24,13 @@ export interface Pane {
   height: number;
   title: string;
   alternate: boolean;
-  /** Program asked for mouse-wheel reports. */
+  /** Program asked for mouse reports (button, drag, or hover). */
   mouse: boolean;
-  /** Wheel reports use SGR encoding. */
+  /** DECSET 1002. Drags are reported. */
+  mouse_drag: boolean;
+  /** DECSET 1003. Hovers are reported. Grok Build sets this. */
+  mouse_any: boolean;
+  /** Reports use SGR encoding. */
   mouse_sgr: boolean;
 }
 

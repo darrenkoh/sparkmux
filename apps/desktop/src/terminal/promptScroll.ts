@@ -50,7 +50,37 @@ export type WheelDecision =
 export interface PaneInputMode {
   alternate: boolean;
   mouse: boolean;
+  /** DECSET 1002. */
+  mouseDrag: boolean;
+  /** DECSET 1003, including hover. */
+  mouseAny: boolean;
   mouseSgr: boolean;
+}
+
+export type XtermMouseTracking = "none" | "x10" | "vt200" | "drag" | "any";
+
+/** Tracking level to put back on an xterm that was seeded without the mode bytes. */
+export function mouseProtocol(mode: PaneInputMode): Exclude<XtermMouseTracking, "x10"> {
+  if (!mode.mouse) return "none";
+  if (mode.mouseAny) return "any";
+  if (mode.mouseDrag) return "drag";
+  return "vt200";
+}
+
+/**
+ * Bytes to write into the local xterm so it matches tmux's mouse mode.
+ * Null when the emulator is already there. This is terminal output, not pane input.
+ */
+export function mouseModeWrite(have: string | undefined, mode: PaneInputMode): string | null {
+  const current = have && have !== "none" ? have : "none";
+  const want = mouseProtocol(mode);
+  if (want === "none") {
+    return current === "none" ? null : "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+  }
+  if (current === want) return null;
+  const dec = want === "any" ? 1003 : want === "drag" ? 1002 : 1000;
+  const on = `\x1b[?${dec}h`;
+  return mode.mouseSgr ? `${on}\x1b[?1006h` : on;
 }
 
 export function viewportAtBottom(viewportY: number, baseY: number): boolean {

@@ -10,6 +10,8 @@ export function paneInputModes(snap: Snapshot): Map<string, PaneInputMode> {
         modes.set(pane.id, {
           alternate: pane.alternate,
           mouse: pane.mouse,
+          mouseDrag: pane.mouse_drag,
+          mouseAny: pane.mouse_any,
           mouseSgr: pane.mouse_sgr,
         });
       }

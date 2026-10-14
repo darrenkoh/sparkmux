@@ -87,6 +87,8 @@ function pane(id: string, active: boolean): Pane {
     title: "grok",
     alternate: true,
     mouse: false,
+    mouse_drag: false,
+    mouse_any: false,
     mouse_sgr: false,
   };
 }
