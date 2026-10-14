@@ -6,6 +6,8 @@ import {
   chronicleKeyAction,
   isNewestScrubStop,
   laneTarget,
+  scrubDomain,
+  stepScrub,
   type ChronicleKeyAction,
   type ChronicleKeyInput,
 } from "./chronicleKeys.ts";
@@ -163,4 +165,19 @@ test("newest scrub stop is Now when that read exists", () => {
   assert.equal(isNewestScrubStop("c6", stations, () => false), true);
   assert.equal(isNewestScrubStop("b", stations, () => false), false);
   assert.equal(isNewestScrubStop("missing", stations, () => false), false);
+});
+
+test("a second wheel step does not keep the previous path's Now", () => {
+  const laidOut = [
+    { id: "a0", path: "A", kind: "replace" },
+    { id: "b1", path: "B", kind: "replace" },
+    { id: "now:A", path: "A", kind: "now" },
+  ];
+  const now = (path: string) => path === "A" || path === "B";
+  const first = stepScrub(laidOut, "a0", now, 1);
+  assert.equal(first, "b1");
+  assert.deepEqual(scrubDomain(laidOut, "b1", now), ["a0", "b1", "now:B"]);
+  assert.equal(stepScrub(laidOut, "b1", now, 1), "now:B");
+  assert.deepEqual(scrubDomain(laidOut, "b1", (path) => path === "A"), ["a0", "b1"]);
+  assert.equal(stepScrub(laidOut, "b1", (path) => path === "A", 1), null);
 });

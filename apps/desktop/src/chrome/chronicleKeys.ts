@@ -62,6 +62,42 @@ const HOLOGRAM_KEYS = new Set([
   "PageDown",
 ]);
 
+export interface ScrubStation {
+  id: string;
+  path?: string;
+  kind?: string;
+}
+
+// Real stations in list order, then now:{path} only for the active id's path.
+// A committed sentinel from another path is not part of this domain.
+export function scrubDomain(
+  stations: readonly ScrubStation[],
+  activeId: string,
+  nowAvailable: (path: string) => boolean,
+): string[] {
+  const real = stations.filter((station) => station.kind !== "now");
+  const ids = real.map((station) => station.id);
+  const path = activeId.startsWith("now:")
+    ? activeId.slice(4)
+    : real.find((station) => station.id === activeId)?.path;
+  if (path && nowAvailable(path)) ids.push(`now:${path}`);
+  return ids;
+}
+
+export function stepScrub(
+  stations: readonly ScrubStation[],
+  activeId: string,
+  nowAvailable: (path: string) => boolean,
+  delta: number,
+): string | null {
+  const ids = scrubDomain(stations, activeId, nowAvailable);
+  const index = ids.indexOf(activeId);
+  if (index < 0) return null;
+  const next = ids[Math.min(ids.length - 1, Math.max(0, index + delta))];
+  if (!next || next === activeId) return null;
+  return next;
+}
+
 export function isNewestScrubStop(
   activeId: string,
   stations: readonly { id: string; path: string }[],

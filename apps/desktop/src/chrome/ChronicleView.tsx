@@ -8,7 +8,7 @@ import {
 } from "../api";
 import ChronicleHologramPanel, { chroniclePanelBanners, chroniclePanelText } from "./ChronicleHologram";
 import { mountChronicle, type ChronicleHandle, type ChronicleHooks } from "./ChronicleStage";
-import { isNewestScrubStop, type ChronicleKeyAction, type ChronicleKeyState } from "./chronicleKeys";
+import { isNewestScrubStop, stepScrub, type ChronicleKeyAction, type ChronicleKeyState } from "./chronicleKeys";
 import {
   type ChronicleScene,
   type StationLayoutInput,
@@ -58,13 +58,16 @@ export default function ChronicleView(props: {
   const [stale, setStale] = useState(false);
   const [tab, setTab] = useState<"file" | "diff">("file");
   const [hologram, setHologram] = useState<HologramPayload | null>(null);
+  const [hologramError, setHologramError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [pollNonce, setPollNonce] = useState(0);
   const [scene, setScene] = useState<ChronicleScene>("transit");
   const activeRef = useRef<string | null>(null);
   const newestRef = useRef<string | null>(null);
   const genRef = useRef<ChronicleGeneration | null>(null);
   const pathRef = useRef<string | null>(null);
   const appliedRef = useRef<{ id: string; generation: ChronicleGeneration } | null>(null);
+  const failedHologramRef = useRef<{ id: string; generation: ChronicleGeneration } | null>(null);
   const hooksRef = useRef<ChronicleHooks>({ onActiveId: () => {} });
 
   const activeStation = session?.stations.find((station) => station.id === activeId) ?? null;
@@ -91,13 +94,8 @@ export default function ChronicleView(props: {
     }
     if (action.action === "step") {
       if (stale) return;
-      const ids = session.stations.map((station) => station.id);
-      if (activePath && nowAvailable(activePath)) ids.push(`now:${activePath}`);
-      const index = ids.indexOf(activeId ?? "");
-      if (index < 0) return;
-      const next = Math.min(ids.length - 1, Math.max(0, index + action.delta));
-      const id = ids[next];
-      if (id) select(id, false);
+      const nextId = stepScrub(session.stations, activeId ?? "", nowAvailable, action.delta);
+      if (nextId) select(nextId, false);
       return;
     }
     if (action.action === "lane") {
@@ -117,11 +115,13 @@ export default function ChronicleView(props: {
     newestRef.current = null;
     genRef.current = null;
     appliedRef.current = null;
+    failedHologramRef.current = null;
     pathRef.current = null;
     setSession(null);
     setActiveId(null);
     setStale(false);
     setHologram(null);
+    setHologramError(null);
     setError(null);
     setLoading(false);
     const load = () => {
@@ -130,7 +130,10 @@ export default function ChronicleView(props: {
         .then((next) => {
           if (cancel || my !== token) return;
           const generation = generationFromSession(next);
-          if (genRef.current && sameGeneration(genRef.current, generation)) return;
+          if (genRef.current && sameGeneration(genRef.current, generation)) {
+            if (failedHologramRef.current) setPollNonce((n) => n + 1);
+            return;
+          }
           const ordered = [...next.stations].sort((a, b) => a.ordinal - b.ordinal);
           const nowIds = next.now.filter((entry) => entry.available).map((entry) => `now:${entry.path}`);
           const resolved = resolveActiveAfterPoll(
@@ -233,8 +236,9 @@ export default function ChronicleView(props: {
   }, []);
 
   useEffect(() => {
-    handleRef.current?.setStations(layoutStations, scene, activeId ?? "");
-  }, [layoutStations, scene, activeId]);
+    const nowPaths = session?.now.filter((entry) => entry.available).map((entry) => entry.path) ?? [];
+    handleRef.current?.setStations(layoutStations, scene, activeId ?? "", nowPaths);
+  }, [layoutStations, scene, activeId, session]);
 
   useEffect(() => {
     if (!session || !activeId || stale) {
@@ -245,6 +249,8 @@ export default function ChronicleView(props: {
     const next = { id: activeId, generation };
     if (!shouldRefetchHologram(appliedRef.current, next)) return;
     let cancel = false;
+    failedHologramRef.current = null;
+    setHologramError(null);
     setLoading(true);
     setHologram(null);
     chronicleHologram(command, cwd, title, pid, activeId)
@@ -257,18 +263,22 @@ export default function ChronicleView(props: {
           return;
         }
         appliedRef.current = next;
+        failedHologramRef.current = null;
         setHologram(body);
+        setHologramError(null);
         setLoading(false);
       })
       .catch((err: unknown) => {
         if (cancel) return;
         console.error(err);
+        failedHologramRef.current = next;
+        setHologramError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       });
     return () => {
       cancel = true;
     };
-  }, [session, activeId, stale, command, cwd, title, pid]);
+  }, [session, activeId, stale, command, cwd, title, pid, pollNonce]);
 
   const newestReal = session?.stations[session.stations.length - 1]?.id ?? null;
   const showLive =
@@ -308,7 +318,15 @@ export default function ChronicleView(props: {
             </span>
           </div>
         )}
-        {session?.truncated_tail && <p>Showing the latest part of this session. Earlier edits are not loaded.</p>}
+        {(session?.truncated_tail || (session?.omitted ?? 0) > 0) && (
+          <p>Showing the latest part of this session. Earlier edits are not loaded.</p>
+        )}
+        {hologramError && (
+          <div>
+            <b>SCAN FAILED</b>
+            <span>{hologramError}</span>
+          </div>
+        )}
         {stale && <p>This edit is no longer in the loaded window.</p>}
       </div>
       {showLive && (

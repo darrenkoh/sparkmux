@@ -37,6 +37,7 @@ import {
   type ChronicleScene,
   type StationLayoutInput,
 } from "./chronicleLayout";
+import { stepScrub } from "./chronicleKeys";
 
 const TEAL = 0x2dd4bf;
 const GOLD = 0xe8a849;
@@ -50,7 +51,12 @@ export interface ChronicleHooks {
 }
 
 export interface ChronicleHandle {
-  setStations(stations: StationLayoutInput[], scene: ChronicleScene, activeId: string): void;
+  setStations(
+    stations: StationLayoutInput[],
+    scene: ChronicleScene,
+    activeId: string,
+    nowPaths?: readonly string[],
+  ): void;
   setSize(width: number, height: number): void;
   dispose(): void;
 }
@@ -166,13 +172,16 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   const pointer = new Vector2();
   const offset = new Vector3();
   const dummy = new Object3D();
+  const color = new Color();
   let hoverPoint: Vector3 | null = new Vector3();
   let laidOut: StationLayoutInput[] = [];
+  let nowReady = new Set<string>();
   let realCount = 0;
   let currentActive = "";
   let built = "";
   let gates: InstancedMesh | null = null;
   let shards: InstancedMesh | null = null;
+  let nowGate: Mesh | null = null;
   let gateIds: string[] = [];
   let shardIds: string[] = [];
   const pick: Object3DType[] = [];
@@ -191,6 +200,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   const clearRoot = () => {
     gates = null;
     shards = null;
+    nowGate = null;
     gateIds = [];
     shardIds = [];
     pick.length = 0;
@@ -222,7 +232,19 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   const focus = (stations: StationLayoutInput[], activeId: string) => {
     const real = stations.filter((entry) => entry.kind !== "now");
     const count = real.length;
-    const active = stations.find((entry) => entry.id === activeId);
+    const active =
+      stations.find((entry) => entry.id === activeId) ??
+      (activeId.startsWith("now:")
+        ? {
+            id: activeId,
+            ordinal: count,
+            lane: 0,
+            added: 0,
+            removed: 0,
+            kind: "now" as const,
+            outcome: "ok" as const,
+          }
+        : undefined);
     const z = active ? stationWorld("transit", active, count).z : count > 0 ? transitZ(count - 1, count) : 0;
     offset.subVectors(camera.position, controls.target);
     if (offset.lengthSq() < 1e-6) {
@@ -237,7 +259,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   const rebuild = (stations: StationLayoutInput[]) => {
     clearRoot();
     const real = stations.filter((entry) => entry.kind !== "now");
-    const now = stations.find((entry) => entry.kind === "now");
     realCount = real.length;
     if (real.length >= 2) {
       const span = (real.length - 1) * TRANSIT_GATE_GAP;
@@ -256,7 +277,6 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
         new MeshBasicMaterial({ color: 0xffffff }),
         real.length,
       );
-      const color = new Color();
       real.forEach((entry, index) => {
         const z = transitZ(entry.ordinal, real.length);
         dummy.position.set(0, TRANSIT_TARGET_Y, z);
@@ -287,29 +307,45 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       shardIds = real.map((entry) => entry.id);
       pick.push(gateMesh, shardMesh);
     }
-    if (now) {
-      const nowGate = new Mesh(new BoxGeometry(2.4, 1.6, 0.06), new MeshBasicMaterial({ color: GOLD }));
-      const world = stationWorld("transit", now, real.length);
-      nowGate.position.set(world.x, world.y, world.z);
-      nowGate.userData.stationId = now.id;
+  };
+
+  const paintActiveGate = (activeId: string) => {
+    if (!gates) return;
+    for (let index = 0; index < gateIds.length; index += 1) {
+      gates.setColorAt(index, color.set(gateIds[index] === activeId ? GOLD : TEAL));
+    }
+    if (gates.instanceColor) gates.instanceColor.needsUpdate = true;
+  };
+
+  const syncNow = (stations: StationLayoutInput[]) => {
+    const now = stations.find((entry) => entry.kind === "now");
+    if (!now) {
+      if (!nowGate) return;
+      root.remove(nowGate);
+      const index = pick.indexOf(nowGate);
+      if (index >= 0) pick.splice(index, 1);
+      disposeObject(nowGate);
+      nowGate = null;
+      return;
+    }
+    if (!nowGate) {
+      nowGate = new Mesh(new BoxGeometry(2.4, 1.6, 0.06), new MeshBasicMaterial({ color: GOLD }));
       root.add(nowGate);
       pick.push(nowGate);
     }
+    const world = stationWorld("transit", now, realCount);
+    nowGate.position.set(world.x, world.y, world.z);
+    nowGate.userData.stationId = now.id;
   };
 
   const onWheel = (event: WheelEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    const ids = laidOut.filter((entry) => entry.kind !== "now").map((entry) => entry.id);
-    const now = laidOut.find((entry) => entry.kind === "now");
-    if (now) ids.push(now.id);
-    const index = ids.indexOf(currentActive);
-    if (index < 0 || ids.length === 0) return;
-    const nextIndex = Math.min(ids.length - 1, Math.max(0, index + (event.deltaY > 0 ? -1 : 1)));
-    const nextId = ids[nextIndex];
-    if (!nextId || nextId === currentActive) return;
+    const nextId = stepScrub(laidOut, currentActive, (path) => nowReady.has(path), event.deltaY > 0 ? -1 : 1);
+    if (!nextId) return;
     currentActive = nextId;
     focus(laidOut, nextId);
+    paintActiveGate(nextId);
     hooks.onActiveId(nextId);
   };
 
@@ -374,9 +410,10 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   raf = requestAnimationFrame(frame);
 
   return {
-    setStations(stations, scene, activeId) {
+    setStations(stations, scene, activeId, nowPaths = []) {
       if (disposed) return;
       laidOut = stations;
+      nowReady = new Set(nowPaths);
       realCount = stations.filter((entry) => entry.kind !== "now").length;
       currentActive = activeId;
       if (scene !== "transit") {
@@ -384,15 +421,18 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
         built = "";
         return;
       }
-      const signature = `${activeId}\n${stations
+      const signature = stations
+        .filter((entry) => entry.kind !== "now")
         .map((entry) =>
           [entry.id, entry.ordinal, entry.lane, entry.added, entry.removed, entry.kind, entry.outcome].join(":"),
         )
-        .join("\n")}`;
+        .join("\n");
       if (signature !== built) {
         built = signature;
         rebuild(stations);
       }
+      paintActiveGate(activeId);
+      syncNow(stations);
       focus(stations, activeId);
     },
     setSize(nextWidth, nextHeight) {
