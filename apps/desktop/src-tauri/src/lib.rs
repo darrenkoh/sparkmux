@@ -61,6 +61,7 @@ pub fn run() {
             artifacts::pane_artifacts,
             change_graph::change_graph,
             change_graph::file_diff,
+            change_graph::search_changed_files,
             analytics::tab_analytics,
             analytics::set_analytics_enabled,
             analytics::clear_analytics_data,

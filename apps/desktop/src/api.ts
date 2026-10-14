@@ -198,6 +198,26 @@ export function fileDiff(
   return invoke("file_diff", { repoId, path, cwd });
 }
 
+export interface SearchFileTarget {
+  repo_id: string;
+  path: string;
+}
+
+export interface ChangedFileMatch {
+  repo_id: string;
+  path: string;
+  match_count: number;
+}
+
+export function searchChangedFiles(
+  targets: SearchFileTarget[],
+  query: string,
+  scope: "diff" | "full",
+  cwd: string,
+): Promise<ChangedFileMatch[]> {
+  return invoke("search_changed_files", { targets, query, scope, cwd });
+}
+
 export interface ActivityPoint {
   timestamp: number;
   user_count: number;

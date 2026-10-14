@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { changeGraph, fileDiff, type ChangeGraphResponse, type FileDiffResponse } from "../api";
+import {
+  changeGraph,
+  fileDiff,
+  searchChangedFiles,
+  type ChangeGraphResponse,
+  type FileDiffResponse,
+} from "../api";
 import {
   arrangeCards,
   computeFitCamera,
@@ -93,6 +99,46 @@ function extensionBadgeColor(ext: string): { bg: string; text: string; border: s
   }
 }
 
+function renderHighlightedText(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q || !text) return text;
+  const lowerText = text.toLowerCase();
+  const lowerQuery = q.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let lastIdx = 0;
+  let matchIdx = lowerText.indexOf(lowerQuery, lastIdx);
+
+  if (matchIdx === -1) return text;
+
+  while (matchIdx !== -1) {
+    if (matchIdx > lastIdx) {
+      parts.push(text.slice(lastIdx, matchIdx));
+    }
+    parts.push(
+      <mark
+        key={matchIdx}
+        style={{
+          background: "rgba(250, 204, 21, 0.4)",
+          color: "#fef08a",
+          borderRadius: "2px",
+          padding: "0 1px",
+          fontWeight: 700,
+        }}
+      >
+        {text.slice(matchIdx, matchIdx + q.length)}
+      </mark>
+    );
+    lastIdx = matchIdx + q.length;
+    matchIdx = lowerText.indexOf(lowerQuery, lastIdx);
+  }
+
+  if (lastIdx < text.length) {
+    parts.push(text.slice(lastIdx));
+  }
+
+  return <>{parts}</>;
+}
+
 export default function ChangeGraph({ command, cwd, title, pid, onClose }: ChangeGraphProps) {
   const [data, setData] = useState<ChangeGraphResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -100,6 +146,9 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
   const [filterRepo, setFilterRepo] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchScope, setSearchScope] = useState<"diff" | "full">("diff");
+  const [searchMatches, setSearchMatches] = useState<Record<string, number>>({});
+  const [isSearching, setIsSearching] = useState<boolean>(false);
   const [animatePulses, setAnimatePulses] = useState<boolean>(true);
   // Split pane & Git Diff state
   const [splitRatio, setSplitRatio] = useState<number>(0.5);
@@ -376,17 +425,61 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
     return { cards: cardList, links: linkList, repos: reposList };
   }, [data]);
 
-  // Filtered Cards
+  // Text search across changed files (diff changes or full content)
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q || cards.length === 0) {
+      setSearchMatches({});
+      setIsSearching(false);
+      return;
+    }
+
+    let cancel = false;
+    setIsSearching(true);
+
+    const timer = setTimeout(() => {
+      const targets = cards.map((c) => ({
+        repo_id: c.repoId,
+        path: c.path,
+      }));
+
+      searchChangedFiles(targets, q, searchScope, cwd)
+        .then((matches) => {
+          if (!cancel) {
+            const map: Record<string, number> = {};
+            for (const m of matches) {
+              const cardId = `${m.repo_id}::${m.path}`;
+              map[cardId] = m.match_count;
+            }
+            setSearchMatches(map);
+            setIsSearching(false);
+          }
+        })
+        .catch((err) => {
+          if (!cancel) {
+            console.error("searchChangedFiles error:", err);
+            setIsSearching(false);
+          }
+        });
+    }, 150);
+
+    return () => {
+      cancel = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, searchScope, cards, cwd]);
+
+  // Filtered Cards: unified matching (path, repoName, or text in diff/file)
   const visibleCards = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return cards.filter((c) => {
       if (filterRepo && c.repoId !== filterRepo) return false;
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase();
-        return c.path.toLowerCase().includes(query) || c.repoName.toLowerCase().includes(query);
-      }
-      return true;
+      if (!q) return true;
+      const pathMatch = c.path.toLowerCase().includes(q) || c.repoName.toLowerCase().includes(q);
+      const textMatch = (searchMatches[c.id] ?? 0) > 0;
+      return pathMatch || textMatch;
     });
-  }, [cards, filterRepo, searchQuery]);
+  }, [cards, filterRepo, searchQuery, searchMatches]);
 
   // Dynamic Card Organization Layout fitting current viewport real-estate
   const arrangement = useMemo(() => {
@@ -792,42 +885,105 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             })}
           </div>
 
-          {/* Search Box */}
-          <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter file path..."
-              style={{
-                background: "rgba(0, 0, 0, 0.45)",
-                border: "1px solid rgba(45, 212, 191, 0.25)",
-                borderRadius: "3px",
-                padding: "3px 8px",
-                fontSize: "10px",
-                color: "#fff",
-                outline: "none",
-                width: "160px",
-                fontFamily: "inherit",
-              }}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
+          {/* Search Box & Quick Scope Toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+            <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={
+                  searchScope === "diff"
+                    ? "Search path or diff..."
+                    : "Search path or full file..."
+                }
                 style={{
-                  position: "absolute",
-                  right: 4,
-                  background: "transparent",
-                  border: "none",
-                  color: "rgba(255,255,255,0.4)",
-                  cursor: "pointer",
+                  background: "rgba(0, 0, 0, 0.45)",
+                  border: isSearching
+                    ? "1px solid rgba(250, 204, 21, 0.6)"
+                    : searchQuery.trim()
+                    ? "1px solid rgba(45, 212, 191, 0.55)"
+                    : "1px solid rgba(45, 212, 191, 0.25)",
+                  borderRadius: "3px",
+                  padding: "3px 22px 3px 8px",
                   fontSize: "10px",
+                  color: "#fff",
+                  outline: "none",
+                  width: "185px",
+                  fontFamily: "inherit",
+                  transition: "border-color 0.15s ease",
                 }}
-              >
-                ✕
-              </button>
-            )}
+              />
+              {isSearching && (
+                <span
+                  title="Searching changed files..."
+                  style={{
+                    position: "absolute",
+                    right: searchQuery ? 18 : 6,
+                    fontSize: "9px",
+                    color: "#fde047",
+                    pointerEvents: "none",
+                  }}
+                >
+                  ⏳
+                </span>
+              )}
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  style={{
+                    position: "absolute",
+                    right: 4,
+                    background: "transparent",
+                    border: "none",
+                    color: "rgba(255,255,255,0.4)",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                    lineHeight: 1,
+                    padding: 0,
+                  }}
+                  title="Clear search"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Scope Quick Toggle */}
+            <button
+              type="button"
+              onClick={() => setSearchScope(searchScope === "diff" ? "full" : "diff")}
+              title={
+                searchScope === "diff"
+                  ? "Current Scope: Diff changes only. Click to toggle Full file content search."
+                  : "Current Scope: Full file contents. Click to toggle Diff changes only search."
+              }
+              style={{
+                background:
+                  searchScope === "diff"
+                    ? "rgba(45, 212, 191, 0.14)"
+                    : "rgba(168, 85, 247, 0.16)",
+                border:
+                  searchScope === "diff"
+                    ? "1px solid rgba(45, 212, 191, 0.4)"
+                    : "1px solid rgba(168, 85, 247, 0.45)",
+                color: searchScope === "diff" ? "#2dd4bf" : "#c084fc",
+                padding: "3px 7px",
+                borderRadius: "3px",
+                fontSize: "9px",
+                fontWeight: 700,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "3px",
+              }}
+            >
+              <span>{searchScope === "diff" ? "⚡ DIFF" : "📄 FULL"}</span>
+            </button>
           </div>
 
           {/* Card Organization Modes Toggle & Auto-Fit */}
@@ -1270,6 +1426,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               const extBadge = extensionBadgeColor(card.extension);
               const stColor = statusColor(card.status);
               const deltaSum = card.linesAdded + card.linesRemoved;
+              const matchCount = searchMatches[card.id] ?? 0;
 
               return (
                 <div
@@ -1307,6 +1464,8 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                       ? "#2dd4bf"
                       : isHovered
                       ? "rgba(45, 212, 191, 0.7)"
+                      : matchCount > 0
+                      ? "rgba(250, 204, 21, 0.65)"
                       : isConnected
                       ? "rgba(45, 212, 191, 0.45)"
                       : "rgba(255, 255, 255, 0.12)",
@@ -1314,6 +1473,8 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                       ? "0 0 25px rgba(45, 212, 191, 0.35), 0 8px 30px rgba(0,0,0,0.8)"
                       : isHovered
                       ? "0 0 16px rgba(45, 212, 191, 0.2), 0 6px 20px rgba(0,0,0,0.7)"
+                      : matchCount > 0
+                      ? "0 0 16px rgba(250, 204, 21, 0.25), 0 6px 20px rgba(0,0,0,0.7)"
                       : "0 4px 14px rgba(0, 0, 0, 0.6)",
                     opacity: isDimmed ? 0.3 : 1.0,
                     transform: isSelected || isHovered ? "scale(1.02)" : "scale(1.0)",
@@ -1371,20 +1532,45 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                       )}
                     </div>
 
-                    <span
-                      style={{
-                        fontSize: "8.5px",
-                        padding: "1px 5px",
-                        borderRadius: "3px",
-                        background: extBadge.bg,
-                        color: extBadge.text,
-                        border: `1px solid ${extBadge.border}`,
-                        fontWeight: 600,
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      .{card.extension || "file"}
-                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                      {matchCount > 0 && (
+                        <span
+                          title={`${matchCount} text match${matchCount > 1 ? "es" : ""} found in ${
+                            searchScope === "diff" ? "diff changes" : "file content"
+                          }`}
+                          style={{
+                            fontSize: "8.5px",
+                            padding: "1px 5px",
+                            borderRadius: "3px",
+                            background: "rgba(250, 204, 21, 0.2)",
+                            color: "#fde047",
+                            border: "1px solid rgba(250, 204, 21, 0.5)",
+                            fontWeight: 700,
+                            letterSpacing: "0.04em",
+                            whiteSpace: "nowrap",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "2px",
+                          }}
+                        >
+                          ⌕ {matchCount}
+                        </span>
+                      )}
+                      <span
+                        style={{
+                          fontSize: "8.5px",
+                          padding: "1px 5px",
+                          borderRadius: "3px",
+                          background: extBadge.bg,
+                          color: extBadge.text,
+                          border: `1px solid ${extBadge.border}`,
+                          fontWeight: 600,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        .{card.extension || "file"}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Card Body (Filename and Path) */}
@@ -1401,7 +1587,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                         lineHeight: 1.25,
                       }}
                     >
-                      {card.filename}
+                      {renderHighlightedText(card.filename, searchQuery)}
                     </div>
 
                     <div
@@ -1415,7 +1601,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                         marginTop: 2,
                       }}
                     >
-                      {card.dir}
+                      {renderHighlightedText(card.dir, searchQuery)}
                     </div>
 
                     {/* Delta line chart preview */}
@@ -1646,6 +1832,27 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+                  {searchQuery.trim() && (
+                    <span
+                      style={{
+                        fontSize: "9px",
+                        padding: "2px 6px",
+                        borderRadius: "3px",
+                        background: "rgba(250, 204, 21, 0.15)",
+                        color: "#fde047",
+                        border: "1px solid rgba(250, 204, 21, 0.35)",
+                        fontWeight: 600,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}
+                    >
+                      ⌕ &ldquo;{searchQuery.trim()}&rdquo;
+                      {selectedCardId && (searchMatches[selectedCardId] ?? 0) > 0
+                        ? ` (${searchMatches[selectedCardId]} in ${searchScope})`
+                        : ""}
+                    </span>
+                  )}
                   {!diffLoading && !diffError && diffData && !diffData.is_binary && (
                     <div style={{ display: "flex", gap: "6px", fontSize: "10px", fontWeight: "bold" }}>
                       <span style={{ color: "#2dd4bf" }}>+{diffStats.adds}</span>
@@ -1905,7 +2112,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                               wordBreak: "break-all",
                             }}
                           >
-                            {line || " "}
+                            {renderHighlightedText(line || " ", searchQuery)}
                           </pre>
                         </div>
                       );
@@ -2034,7 +2241,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                                 wordBreak: "break-all",
                               }}
                             >
-                              {row.oldText ?? " "}
+                              {renderHighlightedText(row.oldText ?? " ", searchQuery)}
                             </pre>
                           </div>
 
@@ -2068,7 +2275,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
                                 wordBreak: "break-all",
                               }}
                             >
-                              {row.newText ?? " "}
+                              {renderHighlightedText(row.newText ?? " ", searchQuery)}
                             </pre>
                           </div>
                         </div>

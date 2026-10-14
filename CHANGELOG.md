@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.32
+
+### Improvements
+
+- Added support for text search across changed files in the Gits screen, reusing the file search input field:
+  - **Unified search**: typing a query instantly filters for matching file paths, repository clusters, and text content within the files.
+  - **Quick Scope Toggle**: added a header button (`⚡ DIFF` / `📄 FULL`) to toggle between searching only changed diff lines (additions/deletions) and searching full working copy file contents.
+  - **Graph Card Badges**: cards with matching text display an amber match count badge (e.g. `⌕ 3`) and border glow.
+  - **Diff Highlighting**: matching occurrences are highlighted in yellow (`<mark>`) in both Unified Diff and Split Diff views, with an active match badge in the diff header.
+
 ## 0.1.31
 
 ### Improvements

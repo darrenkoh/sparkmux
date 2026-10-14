@@ -126,6 +126,177 @@ pub async fn file_diff(repo_id: String, path: String, cwd: String) -> Result<Fil
         .map_err(|err| err.to_string())?
 }
 
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
+pub struct SearchFileTarget {
+    pub repo_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ChangedFileMatch {
+    pub repo_id: String,
+    pub path: String,
+    pub match_count: usize,
+}
+
+#[tauri::command]
+pub async fn search_changed_files(
+    targets: Vec<SearchFileTarget>,
+    query: String,
+    scope: String,
+    cwd: String,
+) -> Result<Vec<ChangedFileMatch>, String> {
+    tokio::task::spawn_blocking(move || {
+        execute_search_changed_files(&targets, &query, &scope, &cwd)
+    })
+    .await
+    .map_err(|err| err.to_string())
+}
+
+fn execute_search_changed_files(
+    targets: &[SearchFileTarget],
+    query: &str,
+    scope: &str,
+    cwd: &str,
+) -> Vec<ChangedFileMatch> {
+    let clean_query = query.trim().to_lowercase();
+    if clean_query.is_empty() || targets.is_empty() {
+        return Vec::new();
+    }
+
+    let num_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8)
+        .min(targets.len());
+
+    if num_workers <= 1 {
+        let mut results = Vec::new();
+        for target in targets {
+            if let Some(m) = search_single_target(target, &clean_query, scope, cwd) {
+                results.push(m);
+            }
+        }
+        return results;
+    }
+
+    let chunk_size = targets.len().div_ceil(num_workers);
+    let chunks: Vec<&[SearchFileTarget]> = targets.chunks(chunk_size).collect();
+
+    std::thread::scope(|s| {
+        let mut handles = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            let q = &clean_query;
+            handles.push(s.spawn(move || {
+                let mut chunk_results = Vec::new();
+                for target in chunk {
+                    if let Some(m) = search_single_target(target, q, scope, cwd) {
+                        chunk_results.push(m);
+                    }
+                }
+                chunk_results
+            }));
+        }
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    })
+}
+
+fn search_single_target(
+    target: &SearchFileTarget,
+    query_lower: &str,
+    scope: &str,
+    cwd: &str,
+) -> Option<ChangedFileMatch> {
+    let count = if scope == "full" {
+        search_full_file(target, query_lower, cwd)
+    } else {
+        search_diff_file(target, query_lower, cwd)
+    };
+
+    if count > 0 {
+        Some(ChangedFileMatch {
+            repo_id: target.repo_id.clone(),
+            path: target.path.clone(),
+            match_count: count,
+        })
+    } else {
+        None
+    }
+}
+
+fn search_diff_file(target: &SearchFileTarget, query_lower: &str, cwd: &str) -> usize {
+    let diff_res = fetch_file_diff(&target.repo_id, &target.path, cwd);
+    let Ok(file_diff) = diff_res else {
+        return 0;
+    };
+    if file_diff.is_binary {
+        return 0;
+    }
+    let mut count = 0;
+    for line in file_diff.diff.lines() {
+        let is_add = line.starts_with('+') && !line.starts_with("+++");
+        let is_rem = line.starts_with('-') && !line.starts_with("---");
+        if is_add || is_rem {
+            let content = &line[1..];
+            if content.to_lowercase().contains(query_lower) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+fn search_full_file(target: &SearchFileTarget, query_lower: &str, cwd: &str) -> usize {
+    let clean_path = target
+        .path
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .replace('\\', "/");
+    if clean_path.is_empty() || clean_path.contains('\0') {
+        return 0;
+    }
+    let repo_id_clean = target.repo_id.trim().trim_matches(['"', '\'', '`']);
+    let repo_dir = if !repo_id_clean.is_empty() && Path::new(repo_id_clean).is_dir() {
+        PathBuf::from(repo_id_clean)
+    } else if !cwd.is_empty() && Path::new(cwd).is_dir() {
+        match git_toplevel(Path::new(cwd)) {
+            GitTop::Root(root) => root,
+            _ => PathBuf::from(cwd),
+        }
+    } else {
+        return 0;
+    };
+
+    let target_path = repo_dir.join(&clean_path);
+    if let Ok(meta) = target_path.metadata() {
+        if meta.len() > 2 * 1024 * 1024 {
+            return 0;
+        }
+    }
+
+    if target_path.is_file() {
+        if let Ok(bytes) = std::fs::read(&target_path) {
+            if bytes.contains(&0) {
+                return 0;
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            let mut count = 0;
+            for line in text.lines() {
+                if line.to_lowercase().contains(query_lower) {
+                    count += 1;
+                }
+            }
+            return count;
+        }
+    }
+
+    // Fallback if file was deleted on disk: check diff removed lines
+    search_diff_file(target, query_lower, cwd)
+}
+
 fn fetch_file_diff(repo_id: &str, path: &str, cwd: &str) -> Result<FileDiff, String> {
     let clean_path = path
         .trim()
@@ -2460,6 +2631,51 @@ mod tests {
         assert!(panel.contains("aria-label=\"Open changed files graph\""));
         assert!(app.contains("ChangeGraph"));
         assert!(app.contains("graphOpen"));
+    }
+
+    #[test]
+    fn search_changed_files_diff_and_full_scopes() {
+        let root = scratch("search");
+        fs::write(root.join("hello.txt"), "common unchanged line\nbase code\n").unwrap();
+        git_init(&root);
+        fs::write(
+            root.join("hello.txt"),
+            "common unchanged line\nbase code\nadded special_sparkmux_keyword line\n",
+        )
+        .unwrap();
+        let id = root_id(&root.canonicalize().unwrap());
+        let targets = vec![SearchFileTarget {
+            repo_id: id.clone(),
+            path: "hello.txt".into(),
+        }];
+
+        // Diff scope matches the added line
+        let diff_matches =
+            execute_search_changed_files(&targets, "special_sparkmux_keyword", "diff", "");
+        assert_eq!(diff_matches.len(), 1);
+        assert_eq!(diff_matches[0].match_count, 1);
+
+        // Diff scope does not match unchanged lines
+        let diff_no_match =
+            execute_search_changed_files(&targets, "common unchanged line", "diff", "");
+        assert!(diff_no_match.is_empty());
+
+        // Full scope matches both unchanged lines and changed lines
+        let full_matches =
+            execute_search_changed_files(&targets, "common unchanged line", "full", "");
+        assert_eq!(full_matches.len(), 1);
+        assert_eq!(full_matches[0].match_count, 1);
+
+        // Empty query returns nothing
+        let empty_res = execute_search_changed_files(&targets, "   ", "diff", "");
+        assert!(empty_res.is_empty());
+
+        // Case insensitivity
+        let case_matches =
+            execute_search_changed_files(&targets, "SPECIAL_SPARKMUX_KEYWORD", "diff", "");
+        assert_eq!(case_matches.len(), 1);
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn scratch(name: &str) -> PathBuf {
