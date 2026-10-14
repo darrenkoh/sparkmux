@@ -247,7 +247,7 @@ fn process_args(pid: u32) -> Option<Vec<u8>> {
     if pid == 0 {
         return None;
     }
-    let mut file = File::open(format!("/proc/{pid}/environ")).ok()?;
+    let file = File::open(format!("/proc/{pid}/environ")).ok()?;
     let mut buf = Vec::new();
     file.take(1024 * 1024).read_to_end(&mut buf).ok()?;
     Some(buf)
