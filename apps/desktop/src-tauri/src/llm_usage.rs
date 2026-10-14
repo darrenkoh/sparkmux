@@ -14,7 +14,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Condvar, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -45,28 +45,21 @@ struct AgyPrintState {
     inflight: bool,
 }
 
-static AGY_PRINT: LazyLock<(Mutex<AgyPrintState>, Condvar)> = LazyLock::new(|| {
-    (
-        Mutex::new(AgyPrintState {
-            usage: None,
-            attempted_at_ms: 0,
-            inflight: false,
-        }),
-        Condvar::new(),
-    )
+static AGY_PRINT: LazyLock<Mutex<AgyPrintState>> = LazyLock::new(|| {
+    Mutex::new(AgyPrintState {
+        usage: None,
+        attempted_at_ms: 0,
+        inflight: false,
+    })
 });
 
-/// Clears the in-flight flag if a print is cancelled or panics.
-struct AgyPrintFinish<'a> {
-    lock: &'a Mutex<AgyPrintState>,
-    cv: &'a Condvar,
-}
+/// Clears the in-flight flag if a print finishes, is cancelled, or panics.
+struct AgyPrintFinish;
 
-impl Drop for AgyPrintFinish<'_> {
+impl Drop for AgyPrintFinish {
     fn drop(&mut self) {
-        let mut guard = self.lock.lock().unwrap_or_else(|err| err.into_inner());
+        let mut guard = AGY_PRINT.lock().unwrap_or_else(|err| err.into_inner());
         guard.inflight = false;
-        self.cv.notify_all();
     }
 }
 
@@ -129,7 +122,7 @@ struct UsagePaths {
 }
 
 #[tauri::command]
-pub fn llm_usage(command: String, title: String, cwd: String, pid: u32) -> LlmUsage {
+pub async fn llm_usage(command: String, title: String, cwd: String, pid: u32) -> LlmUsage {
     let now = now_ms();
     let mut usage = usage_for(&command, &title, &default_paths(), now);
     if usage.cli.as_deref() == Some("antigravity") {
@@ -289,34 +282,35 @@ fn read_agy(path: Option<&Path>, now: i64) -> LlmUsage {
     usage
 }
 
-/// Last successful `agy --print /usage` table, refreshed on the menu interval.
+/// Last successful `agy --print /usage` table, refreshed on the menu interval in a background thread.
 fn agy_print_cached(now: i64) -> LlmUsage {
-    let (lock, cv) = &*AGY_PRINT;
-    {
-        let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
-        while guard.inflight {
-            guard = cv.wait(guard).unwrap_or_else(|err| err.into_inner());
-        }
-        let Some(refresh_ms) = agy_refresh_interval_ms() else {
-            return LlmUsage::recognized("antigravity");
-        };
-        if now.saturating_sub(guard.attempted_at_ms) < refresh_ms {
-            return guard
-                .usage
-                .clone()
-                .unwrap_or_else(|| LlmUsage::recognized("antigravity"));
-        }
+    let mut guard = AGY_PRINT.lock().unwrap_or_else(|err| err.into_inner());
+    let Some(refresh_ms) = agy_refresh_interval_ms() else {
+        return guard
+            .usage
+            .clone()
+            .unwrap_or_else(|| LlmUsage::recognized("antigravity"));
+    };
+    if !guard.inflight && now.saturating_sub(guard.attempted_at_ms) >= refresh_ms {
         guard.inflight = true;
         guard.attempted_at_ms = now;
+        thread::Builder::new()
+            .name("sparkmux-agy-usage".to_string())
+            .spawn(move || {
+                let _finish = AgyPrintFinish;
+                if let Some(fetched) = run_agy_print(now) {
+                    let mut guard = AGY_PRINT.lock().unwrap_or_else(|err| err.into_inner());
+                    if !fetched.bars.is_empty() {
+                        guard.usage = Some(fetched);
+                    }
+                }
+            })
+            .ok();
     }
-    let _finish = AgyPrintFinish { lock, cv };
-    let fetched = run_agy_print(now).unwrap_or_else(|| LlmUsage::recognized("antigravity"));
-    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
-    if !fetched.bars.is_empty() {
-        guard.usage = Some(fetched.clone());
-        return fetched;
-    }
-    guard.usage.clone().unwrap_or(fetched)
+    guard
+        .usage
+        .clone()
+        .unwrap_or_else(|| LlmUsage::recognized("antigravity"))
 }
 
 fn run_agy_print(now: i64) -> Option<LlmUsage> {

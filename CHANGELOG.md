@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.34
+
+### Bug Fixes
+
+- Fixed UI freezing when switching to a tab running Antigravity. Antigravity usage quota is now fetched asynchronously in a background thread and cached without blocking the main UI thread or tab switching.
+
 ## 0.1.33
 
 ### Improvements

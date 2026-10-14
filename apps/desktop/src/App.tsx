@@ -990,6 +990,7 @@ export default function App() {
       return;
     }
     let cancel = false;
+    let retryTimer: number | undefined;
     const load = () => {
       void llmUsage(
         usageCommandRef.current,
@@ -1003,6 +1004,12 @@ export default function App() {
             const seen = agyUsageFromTerminal(usagePaneRef.current, Date.now());
             if (seen) agyScreenRef.current = seen;
             setAllowance(seen ?? agyScreenRef.current ?? next);
+            if (!retryTimer) {
+              retryTimer = window.setTimeout(() => {
+                retryTimer = undefined;
+                if (!cancel) load();
+              }, 3_000);
+            }
             return;
           }
           setAllowance(next);
@@ -1016,6 +1023,7 @@ export default function App() {
     const id = window.setInterval(load, 15_000);
     return () => {
       cancel = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
       window.clearTimeout(soon);
       window.clearInterval(id);
     };
