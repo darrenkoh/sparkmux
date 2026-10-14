@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.38
+
+### Improvements
+
+- Token Spectrum contour and burst fold a quiet stretch longer than five minutes into a short seam labeled with the real duration, such as +2h. A column stays in place when it has tokens or an event. Clock labels stay on wall-clock time.
+
 ## 0.1.37
 
 ### Improvements
