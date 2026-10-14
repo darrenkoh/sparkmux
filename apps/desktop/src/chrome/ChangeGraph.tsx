@@ -33,6 +33,14 @@ const ChronicleView = lazy(() => import("./ChronicleView"));
 
 const GITS_VIEW_KEY = "sparkmux.gitsView";
 
+const ORG_MODES: { id: CardOrganizationMode; label: string; title: string }[] = [
+  { id: "grid", label: "⊞ GRID", title: "Auto-Fit Grid: Balanced responsive matrix fitting screen" },
+  { id: "pipeline", label: "▥ PIPELINE", title: "Pipeline: Lifecycle kanban (Agent, Modified, Added, Other)" },
+  { id: "modules", label: "🗂 MODULES", title: "Modules: Grouped by directory / subsystem hierarchy" },
+  { id: "impact", label: "🔥 IMPACT", title: "Impact: Priority waterfall ranked by change churn" },
+  { id: "radial", label: "◎ RADIAL", title: "Radial: Orbit constellation radiating from primary hub" },
+];
+
 function readGitsView(): "canvas" | "chronicle" {
   try {
     return sessionStorage.getItem(GITS_VIEW_KEY) === "chronicle" ? "chronicle" : "canvas";
@@ -1074,48 +1082,22 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               </button>
             </div>
             {view === "canvas" ? (
-            <div className="graph-mode-group" role="group" aria-label="Card Organization Modes">
-              <button
-                type="button"
-                className={`graph-mode-btn ${orgMode === "grid" ? "on" : ""}`}
-                onClick={() => handleToggleOrgMode("grid")}
-                title="Auto-Fit Grid: Balanced responsive matrix fitting screen"
-              >
-                ⊞ GRID
-              </button>
-              <button
-                type="button"
-                className={`graph-mode-btn ${orgMode === "pipeline" ? "on" : ""}`}
-                onClick={() => handleToggleOrgMode("pipeline")}
-                title="Pipeline: Lifecycle kanban (Agent, Modified, Added, Other)"
-              >
-                ▥ PIPELINE
-              </button>
-              <button
-                type="button"
-                className={`graph-mode-btn ${orgMode === "modules" ? "on" : ""}`}
-                onClick={() => handleToggleOrgMode("modules")}
-                title="Modules: Grouped by directory / subsystem hierarchy"
-              >
-                🗂 MODULES
-              </button>
-              <button
-                type="button"
-                className={`graph-mode-btn ${orgMode === "impact" ? "on" : ""}`}
-                onClick={() => handleToggleOrgMode("impact")}
-                title="Impact: Priority waterfall ranked by change churn"
-              >
-                🔥 IMPACT
-              </button>
-              <button
-                type="button"
-                className={`graph-mode-btn ${orgMode === "radial" ? "on" : ""}`}
-                onClick={() => handleToggleOrgMode("radial")}
-                title="Radial: Orbit constellation radiating from primary hub"
-              >
-                ◎ RADIAL
-              </button>
-            </div>
+            <select
+              className="gits-mode-select"
+              value={orgMode}
+              aria-label="Card organization mode"
+              title={ORG_MODES.find((mode) => mode.id === orgMode)?.title}
+              onChange={(event) => {
+                const next = ORG_MODES.find((mode) => mode.id === event.target.value);
+                if (next) handleToggleOrgMode(next.id);
+              }}
+            >
+              {ORG_MODES.map((mode) => (
+                <option key={mode.id} value={mode.id} title={mode.title}>
+                  {mode.label}
+                </option>
+              ))}
+            </select>
             ) : (
             <div ref={sceneSlotRef} className="graph-mode-group" role="group" aria-label="Chronicle scene" />
             )}

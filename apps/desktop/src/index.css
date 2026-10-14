@@ -3128,6 +3128,33 @@ code {
   box-sizing: border-box;
 }
 
+.gits-mode-select {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #2dd4bf;
+  background: rgba(6, 12, 18, 0.85);
+  border: 1px solid rgba(45, 212, 191, 0.4);
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+  outline: none;
+  max-width: 100%;
+}
+
+.gits-mode-select:hover,
+.gits-mode-select:focus {
+  border-color: #2dd4bf;
+  background: rgba(45, 212, 191, 0.16);
+  color: #fff;
+}
+
+.gits-mode-select option {
+  background: #0d1016;
+  color: #e9e9e9;
+}
+
 .graph-frame::before,
 .graph-frame::after {
   border-color: #2dd4bf;
