@@ -15,7 +15,10 @@ import {
   Object3D,
   PerspectiveCamera,
   PlaneGeometry,
+  Points,
+  PointsMaterial,
   Raycaster,
+  RingGeometry,
   Scene,
   Vector2,
   Vector3,
@@ -173,6 +176,8 @@ export interface ChronicleHandle {
     nowPaths?: readonly string[],
   ): void;
   setSize(width: number, height: number): void;
+  setAutoRotate(enabled: boolean): void;
+  resetCamera(): void;
   dispose(): void;
 }
 
@@ -275,6 +280,77 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   scan.position.set(0, TRANSIT_TARGET_Y, 0);
   scene.add(scan);
 
+  // Ambient cybernetic dust / particle field for spatial depth
+  const particleCount = 450;
+  const particlePositions = new Float32Array(particleCount * 3);
+  const particleColors = new Float32Array(particleCount * 3);
+  let pSeed = 42;
+  const pRng = () => {
+    pSeed = (pSeed * 16807 + 11) % 2147483647;
+    return (pSeed - 1) / 2147483646;
+  };
+  for (let i = 0; i < particleCount; i++) {
+    particlePositions[i * 3] = (pRng() - 0.5) * 120;
+    particlePositions[i * 3 + 1] = pRng() * 32 - 2;
+    particlePositions[i * 3 + 2] = (pRng() - 0.5) * 120;
+    const isTeal = pRng() > 0.35;
+    particleColors[i * 3] = isTeal ? 0.17 : 0.91;
+    particleColors[i * 3 + 1] = isTeal ? 0.83 : 0.66;
+    particleColors[i * 3 + 2] = isTeal ? 0.75 : 0.29;
+  }
+  const particleGeo = new BufferGeometry();
+  particleGeo.setAttribute("position", new Float32BufferAttribute(particlePositions, 3));
+  particleGeo.setAttribute("color", new Float32BufferAttribute(particleColors, 3));
+  const particleMat = new PointsMaterial({
+    size: 0.22,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.45,
+    depthWrite: false,
+  });
+  const particles = new Points(particleGeo, particleMat);
+  scene.add(particles);
+
+  // Active Station Landmark Telemetry Beacon
+  const beaconGroup = new Group();
+  beaconGroup.visible = false;
+  scene.add(beaconGroup);
+
+  const pillarMat = new MeshBasicMaterial({
+    color: GOLD,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  });
+  const pillar = new Mesh(new CylinderGeometry(0.04, 0.04, 4.2, 16), pillarMat);
+  pillar.position.y = 2.1;
+  beaconGroup.add(pillar);
+
+  const ringGeo = new RingGeometry(0.25, 0.38, 32);
+  const ringMat1 = new MeshBasicMaterial({
+    color: GOLD,
+    side: DoubleSide,
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false,
+  });
+  const ring1 = new Mesh(ringGeo, ringMat1);
+  ring1.rotation.x = -Math.PI / 2;
+  ring1.position.y = 0.05;
+  beaconGroup.add(ring1);
+
+  const ringMat2 = new MeshBasicMaterial({
+    color: TEAL,
+    side: DoubleSide,
+    transparent: true,
+    opacity: 0.5,
+    depthWrite: false,
+  });
+  const ring2 = new Mesh(ringGeo, ringMat2);
+  ring2.rotation.x = -Math.PI / 2;
+  ring2.position.y = 0.05;
+  beaconGroup.add(ring2);
+
   const root = new Group();
   scene.add(root);
 
@@ -313,6 +389,8 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
   let directFrames = 0;
   let raf = 0;
   let disposed = false;
+  let downPos = { x: 0, y: 0 };
+  let isDown = false;
 
   const hideLabel = () => {
     hoveredId = null;
@@ -792,6 +870,42 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     return best;
   };
 
+  const onPointerDown = (event: PointerEvent) => {
+    downPos = { x: event.clientX, y: event.clientY };
+    isDown = true;
+    renderer.domElement.style.cursor = "grabbing";
+  };
+
+  const onPointerUp = (event: PointerEvent) => {
+    if (!isDown) return;
+    isDown = false;
+    renderer.domElement.style.cursor = hoveredId ? "pointer" : "grab";
+    const dx = event.clientX - downPos.x;
+    const dy = event.clientY - downPos.y;
+    // If movement > 6px, treat as drag/orbit, not a station click
+    if (dx * dx + dy * dy > 36) return;
+
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return;
+    pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const hit = raycaster.intersectObjects(pick, false)[0];
+    if (!hit) return;
+
+    let id: string | null = null;
+    if (typeof hit.object.userData.stationId === "string") id = hit.object.userData.stationId;
+    else if (hit.instanceId != null) id = idsByMesh.get(hit.object)?.[hit.instanceId] ?? null;
+    else if (hit.object.userData.surface === true) id = nearestStation(hit.point);
+
+    if (id && id !== currentActive) {
+      currentActive = id;
+      follow(false, false);
+      paintActive(id);
+      hooks.onActiveId(id);
+    }
+  };
+
   const onPointerMove = (event: PointerEvent) => {
     const rect = renderer.domElement.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) return;
@@ -801,6 +915,7 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     const hit = raycaster.intersectObjects(pick, false)[0];
     if (!hit) {
       hideLabel();
+      if (!isDown) renderer.domElement.style.cursor = "grab";
       return;
     }
     let id: string | null = null;
@@ -808,13 +923,24 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     else if (hit.instanceId != null) id = idsByMesh.get(hit.object)?.[hit.instanceId] ?? null;
     else if (hit.object.userData.surface === true) id = nearestStation(hit.point);
     hoveredId = id;
-    if (!hoveredId) hideLabel();
+    if (!hoveredId) {
+      hideLabel();
+      if (!isDown) renderer.domElement.style.cursor = "grab";
+    } else {
+      if (!isDown) renderer.domElement.style.cursor = "pointer";
+    }
   };
 
-  const onPointerLeave = () => hideLabel();
+  const onPointerLeave = () => {
+    isDown = false;
+    hideLabel();
+    renderer.domElement.style.cursor = "grab";
+  };
 
   renderer.domElement.addEventListener("wheel", onWheel, { passive: false, capture: true });
   renderer.domElement.addEventListener("wheel", stopWheel, { passive: false });
+  renderer.domElement.addEventListener("pointerdown", onPointerDown);
+  renderer.domElement.addEventListener("pointerup", onPointerUp);
   renderer.domElement.addEventListener("pointermove", onPointerMove);
   renderer.domElement.addEventListener("pointerleave", onPointerLeave);
   motionQuery.addEventListener("change", syncMotion);
@@ -828,7 +954,34 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
     } else {
       scanMaterial.opacity = 0.16;
     }
-    if (controls.enableDamping) controls.update();
+
+    // Telemetry Landmark Beacon tracking and sonar animation
+    const activeStationObj = resolveActive();
+    if (activeStationObj) {
+      const worldPos = stationWorld(currentScene, activeStationObj, realCount);
+      beaconGroup.position.set(worldPos.x, worldPos.y, worldPos.z);
+      beaconGroup.visible = true;
+
+      // Sonar radar rings
+      const phase1 = (now % 1800) / 1800;
+      const phase2 = ((now + 900) % 1800) / 1800;
+      const s1 = 0.8 + phase1 * 2.4;
+      const s2 = 0.8 + phase2 * 2.4;
+      ring1.scale.set(s1, s1, 1);
+      ringMat1.opacity = Math.max(0, 0.85 * (1 - phase1));
+      ring2.scale.set(s2, s2, 1);
+      ringMat2.opacity = Math.max(0, 0.6 * (1 - phase2));
+
+      // Pillar shimmer
+      pillarMat.opacity = 0.45 + 0.25 * Math.sin(now * 0.005);
+    } else {
+      beaconGroup.visible = false;
+    }
+
+    // Cosmic dust slow drift
+    particles.rotation.y = now * 0.00003;
+
+    if (controls.autoRotate || controls.enableDamping) controls.update();
     placeLabel();
     const started = performance.now();
     if (motionQuery.matches || directFrames > 0) {
@@ -886,6 +1039,13 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     },
+    setAutoRotate(enabled) {
+      controls.autoRotate = enabled;
+      controls.autoRotateSpeed = 1.0;
+    },
+    resetCamera() {
+      follow(true, true);
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -894,6 +1054,8 @@ export function mountChronicle(host: HTMLElement, hooks: ChronicleHooks): Chroni
       motionQuery.removeEventListener("change", syncMotion);
       renderer.domElement.removeEventListener("wheel", onWheel, { capture: true });
       renderer.domElement.removeEventListener("wheel", stopWheel);
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
       controls.dispose();

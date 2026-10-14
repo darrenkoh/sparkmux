@@ -11,6 +11,7 @@ import ChronicleHologramPanel, { chroniclePanelBanners, chroniclePanelText } fro
 import { mountChronicle, type ChronicleHandle, type ChronicleHooks } from "./ChronicleStage";
 import {
   isNewestScrubStop,
+  scrubDomain,
   stepScrub,
   type ChronicleKeyAction,
   type ChronicleKeyState,
@@ -56,6 +57,7 @@ export default function ChronicleView(props: {
   const { command, cwd, title, pid, onKeyContext, applyRef, sceneSlotRef } = props;
   const [sceneSlot, setSceneSlot] = useState<HTMLDivElement | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<ChronicleHandle | null>(null);
   const [session, setSession] = useState<ChronicleSession | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +69,8 @@ export default function ChronicleView(props: {
   const [loading, setLoading] = useState(false);
   const [pollNonce, setPollNonce] = useState(0);
   const [scene, setScene] = useState<ChronicleScene>("transit");
+  const [autoRotate, setAutoRotate] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
   const activeRef = useRef<string | null>(null);
   const newestRef = useRef<string | null>(null);
   const genRef = useRef<ChronicleGeneration | null>(null);
@@ -86,6 +90,75 @@ export default function ChronicleView(props: {
     activeRef.current = id;
     setActiveId(id);
     setStale(nextStale);
+  };
+
+  const domain = useMemo(() => {
+    if (!session) return [];
+    return scrubDomain(session.stations, activeId ?? "", nowAvailable);
+  }, [session, activeId]);
+
+  const activeIndex = domain.indexOf(activeId ?? "");
+  const activeFraction = domain.length > 1 && activeIndex >= 0 ? activeIndex / (domain.length - 1) : 1;
+  const isFirst = activeIndex <= 0;
+  const isLast = activeIndex >= domain.length - 1;
+  const activeOrdinal = activeStation ? activeStation.ordinal : (activeId?.startsWith("now:") ? session?.stations.length ?? 0 : -1);
+
+  // Auto-play timeline revisions
+  useEffect(() => {
+    if (!isPlaying || !session || session.stations.length === 0) return;
+    const interval = setInterval(() => {
+      const nextId = stepScrub(session.stations, activeRef.current ?? "", nowAvailable, 1);
+      if (nextId) {
+        select(nextId, false);
+      } else {
+        setIsPlaying(false);
+      }
+    }, 1200);
+    return () => clearInterval(interval);
+  }, [isPlaying, session]);
+
+  const toggleAutoRotate = () => {
+    const next = !autoRotate;
+    setAutoRotate(next);
+    handleRef.current?.setAutoRotate(next);
+  };
+
+  const handleResetCamera = () => {
+    handleRef.current?.resetCamera();
+  };
+
+  const handlePrev = () => {
+    if (!session) return;
+    const nextId = stepScrub(session.stations, activeId ?? "", nowAvailable, -1);
+    if (nextId) select(nextId, false);
+  };
+
+  const handleNext = () => {
+    if (!session) return;
+    const nextId = stepScrub(session.stations, activeId ?? "", nowAvailable, 1);
+    if (nextId) select(nextId, false);
+  };
+
+  const handleTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const track = trackRef.current;
+    if (!track || !session || session.stations.length === 0) return;
+    const rect = track.getBoundingClientRect();
+    const updateFromPointer = (clientX: number) => {
+      const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const dom = scrubDomain(session.stations, activeRef.current ?? "", nowAvailable);
+      if (dom.length === 0) return;
+      const index = Math.min(dom.length - 1, Math.round(fraction * (dom.length - 1)));
+      const targetId = dom[index];
+      if (targetId) select(targetId, false);
+    };
+    updateFromPointer(e.clientX);
+    const onMove = (ev: PointerEvent) => updateFromPointer(ev.clientX);
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   };
 
   applyRef.current = (action) => {
@@ -197,7 +270,6 @@ export default function ChronicleView(props: {
       activeId: activeId ?? "",
       nowAvailable,
     });
-    // `nowAvailable` closes over `session`. Listing the function would retrigger this effect every render.
   }, [onKeyContext, activeId, session, scene]);
 
   const layoutStations = useMemo(() => {
@@ -315,7 +387,7 @@ export default function ChronicleView(props: {
         title="Transit (1)"
         onClick={() => setScene("transit")}
       >
-        Transit
+        Transit (1)
       </button>
       <button
         type="button"
@@ -324,7 +396,7 @@ export default function ChronicleView(props: {
         title="Rivers (2)"
         onClick={() => setScene("rivers")}
       >
-        Rivers
+        Rivers (2)
       </button>
       <button
         type="button"
@@ -333,7 +405,7 @@ export default function ChronicleView(props: {
         title="Helix (3)"
         onClick={() => setScene("helix")}
       >
-        Helix
+        Helix (3)
       </button>
       <button
         type="button"
@@ -342,7 +414,24 @@ export default function ChronicleView(props: {
         title="Ridge (4)"
         onClick={() => setScene("ridge")}
       >
-        Ridge
+        Ridge (4)
+      </button>
+      <button
+        type="button"
+        className={`graph-mode-btn ${autoRotate ? "on" : ""}`}
+        aria-pressed={autoRotate}
+        title="Toggle auto-rotation"
+        onClick={toggleAutoRotate}
+      >
+        {autoRotate ? "Auto: ON" : "Auto: OFF"}
+      </button>
+      <button
+        type="button"
+        className="graph-mode-btn"
+        title="Reset camera view"
+        onClick={handleResetCamera}
+      >
+        Reset Cam
       </button>
     </>
   );
@@ -356,22 +445,42 @@ export default function ChronicleView(props: {
           {sceneButtons}
         </div>
       )}
+
+      {/* 3D Canvas Host */}
       <div ref={hostRef} className="chronicle-canvas-host" />
+
+      {/* Top HUD Overlay Header & Viewport Hint */}
+      <div className="chronicle-hud-overlay">
+        <div className="chronicle-hud-badge">
+          <span className="tag">CH</span>
+          <span className="hud-title">CHRONICLE // REVISION MESH</span>
+          {session && (
+            <span className="hud-metric">
+              {session.stations.length} EDITS · {session.files.length} FILES
+            </span>
+          )}
+        </div>
+        <div className="chronicle-viewport-hint">
+          DRAG · ORBIT &nbsp;&nbsp; CLICK · SELECT &nbsp;&nbsp; WHEEL/ARROWS · SCRUB &nbsp;&nbsp; 1–4 · SCENE
+        </div>
+      </div>
+
+      {/* Status Notifications */}
       <div className="chronicle-status">
         {error && (
-          <div>
+          <div className="scifi-status-card error">
             <b>SCAN FAILED</b>
             <span>{error}</span>
           </div>
         )}
         {!session && !error && (
-          <div>
+          <div className="scifi-status-card">
             <b>READING SESSION…</b>
             <span>Gathering the focused pane's agent edits.</span>
           </div>
         )}
         {session?.empty_reason && (
-          <div>
+          <div className="scifi-status-card">
             <b>{session.empty_reason}</b>
             <span>
               Chronicle follows the focused pane's Grok, Claude, or Antigravity session and does not read git history.
@@ -379,27 +488,114 @@ export default function ChronicleView(props: {
           </div>
         )}
         {(session?.truncated_tail || (session?.omitted ?? 0) > 0) && (
-          <p>Showing the latest part of this session. Earlier edits are not loaded.</p>
+          <p className="scifi-status-notice">Showing latest part of this session. Earlier edits are not loaded.</p>
         )}
         {hologramError && (
-          <div>
+          <div className="scifi-status-card error">
             <b>SCAN FAILED</b>
             <span>{hologramError}</span>
           </div>
         )}
-        {stale && <p>This edit is no longer in the loaded window.</p>}
+        {stale && <p className="scifi-status-notice">This edit is no longer in the loaded window.</p>}
       </div>
-      {showLive && (
-        <button
-          type="button"
-          className="chronicle-live"
-          onClick={() => {
-            if (newestReal) select(newestReal, false);
-          }}
+
+      {/* Interactive Bottom Timeline Scrubber */}
+      <div className="chronicle-bottombar">
+        <div className="chronicle-playback-controls">
+          <button
+            type="button"
+            className="chronicle-scrub-btn"
+            onClick={handlePrev}
+            disabled={isFirst}
+            title="Previous revision (Arrow Left)"
+          >
+            ◀
+          </button>
+          <button
+            type="button"
+            className={`chronicle-scrub-btn play-btn ${isPlaying ? "on" : ""}`}
+            onClick={() => setIsPlaying(!isPlaying)}
+            title={isPlaying ? "Pause timeline playback" : "Auto-play revision timeline"}
+          >
+            {isPlaying ? "❚❚ PAUSE" : "▶ PLAY"}
+          </button>
+          <button
+            type="button"
+            className="chronicle-scrub-btn"
+            onClick={handleNext}
+            disabled={isLast}
+            title="Next revision (Arrow Right)"
+          >
+            ▶
+          </button>
+          <span className="chronicle-step-counter">
+            REV {activeOrdinal >= 0 ? activeOrdinal + 1 : domain.length} / {Math.max(1, domain.length)}
+          </span>
+        </div>
+
+        <div
+          ref={trackRef}
+          className="chronicle-track-container"
+          onPointerDown={handleTrackPointerDown}
+          role="slider"
+          aria-label="Chronicle Revision Timeline"
+          aria-valuemin={1}
+          aria-valuemax={Math.max(1, domain.length)}
+          aria-valuenow={activeOrdinal >= 0 ? activeOrdinal + 1 : domain.length}
+          tabIndex={0}
+          title="Click or drag across the timeline track to scrub revisions"
         >
-          LIVE
-        </button>
-      )}
+          <div className="chronicle-track-line" />
+          {domain.map((id, index) => {
+            const station = session?.stations.find((s) => s.id === id);
+            const isNow = id.startsWith("now:");
+            const frac = domain.length > 1 ? index / (domain.length - 1) : 0.5;
+            const tickKind = isNow ? "now" : (station?.kind ?? "patch");
+            const isCurrent = id === activeId;
+            return (
+              <div
+                key={id}
+                className={`chronicle-tick ${tickKind} ${isCurrent ? "active" : ""}`}
+                style={{ left: `${frac * 100}%` }}
+                title={isNow ? "Live Now" : `#${station?.ordinal} ${station?.path} (+${station?.added}/-${station?.removed})`}
+              />
+            );
+          })}
+          <div
+            className="chronicle-track-thumb"
+            style={{ left: `${activeFraction * 100}%` }}
+          />
+        </div>
+
+        <div className="chronicle-meta-chips">
+          {activeStation && (
+            <>
+              {activeStation.tool && (
+                <span className="chronicle-chip tool" title={`Tool: ${activeStation.tool}`}>
+                  {activeStation.tool}
+                </span>
+              )}
+              <span className="chronicle-chip diff">
+                +{activeStation.added} −{activeStation.removed}
+              </span>
+            </>
+          )}
+          {showLive && (
+            <button
+              type="button"
+              className="chronicle-chip live-btn"
+              onClick={() => {
+                if (newestReal) select(newestReal, false);
+              }}
+              title="Jump to newest revision"
+            >
+              ● LIVE
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Hologram Inspector Panel */}
       {activeId && activePath && (
         <ChronicleHologramPanel title={panelTitle} banners={banners} tab={tab} onTab={setTab} text={text} />
       )}

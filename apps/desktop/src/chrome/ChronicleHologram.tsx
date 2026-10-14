@@ -1,3 +1,4 @@
+import { useState, useMemo } from "react";
 import type { ChronicleHologram as HologramPayload } from "../api";
 
 export function chroniclePanelText(input: {
@@ -39,25 +40,141 @@ export default function ChronicleHologram(props: {
   onTab: (tab: "file" | "diff") => void;
   text: string;
 }) {
+  const [minimized, setMinimized] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    if (!props.text) return;
+    navigator.clipboard.writeText(props.text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    }).catch(() => {});
+  };
+
+  const lines = useMemo(() => {
+    if (!props.text) return [];
+    return props.text.split("\n");
+  }, [props.text]);
+
+  if (minimized) {
+    return (
+      <aside className="chronicle-hologram-minimized" aria-live="polite">
+        <button
+          type="button"
+          className="chronicle-hologram-min-pill"
+          onClick={() => setMinimized(false)}
+          title="Expand hologram inspector"
+        >
+          <span className="tag">HOLO</span>
+          <span className="min-title">{props.title || "Inspect Step"}</span>
+          <span className="min-action">EXPAND ▢</span>
+        </button>
+      </aside>
+    );
+  }
+
   return (
-    <aside className="chronicle-hologram" aria-live="polite">
-      <header>{props.title}</header>
+    <aside className="chronicle-hologram scifi-panel" aria-live="polite">
+      <header>
+        <span className="tag">HOLO</span>
+        <span className="chronicle-hologram-title" title={props.title}>
+          {props.title}
+        </span>
+        <div className="chronicle-hologram-actions">
+          <button
+            type="button"
+            className="chronicle-btn-icon"
+            onClick={handleCopy}
+            title={copied ? "Copied to clipboard" : "Copy text"}
+          >
+            {copied ? "COPIED" : "COPY"}
+          </button>
+          <button
+            type="button"
+            className="chronicle-btn-icon"
+            onClick={() => setMinimized(true)}
+            title="Minimize hologram panel"
+            aria-label="Minimize hologram panel"
+          >
+            −
+          </button>
+        </div>
+      </header>
+
       {props.banners.map((banner, index) => (
-        <p key={`${index}:${banner}`} className="chronicle-note">
-          {banner}
-        </p>
+        <div key={`${index}:${banner}`} className="chronicle-note">
+          <span className="note-icon">⚠</span>
+          <span>{banner}</span>
+        </div>
       ))}
-      <div className="chronicle-tabs" role="tablist">
-        <button type="button" role="tab" aria-selected={props.tab === "file"} onClick={() => props.onTab("file")}>
-          File
-        </button>
-        <button type="button" role="tab" aria-selected={props.tab === "diff"} onClick={() => props.onTab("diff")}>
-          Session diff
-        </button>
+
+      <div className="chronicle-tabs-bar">
+        <div className="chronicle-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={props.tab === "file"}
+            className={props.tab === "file" ? "on" : ""}
+            onClick={() => props.onTab("file")}
+          >
+            FILE SNAPSHOT
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={props.tab === "diff"}
+            className={props.tab === "diff" ? "on" : ""}
+            onClick={() => props.onTab("diff")}
+          >
+            SESSION DIFF
+          </button>
+        </div>
+        <span className="chronicle-line-count">
+          {lines.length} {lines.length === 1 ? "LINE" : "LINES"}
+        </span>
       </div>
-      <pre className="chronicle-hologram-text" tabIndex={0}>
-        {props.text}
-      </pre>
+
+      <div className="chronicle-hologram-body" tabIndex={0}>
+        {props.tab === "diff" ? (
+          <div className="chronicle-diff-viewer">
+            {lines.map((line, idx) => {
+              const isHunk = line.startsWith("@@");
+              const isAdd = line.startsWith("+") && !line.startsWith("+++");
+              const isDel = line.startsWith("-") && !line.startsWith("---");
+              const isMeta =
+                line.startsWith("diff ") ||
+                line.startsWith("index ") ||
+                line.startsWith("--- ") ||
+                line.startsWith("+++ ");
+
+              let lineClass = "diff-line";
+              if (isHunk) lineClass += " hunk";
+              else if (isAdd) lineClass += " added";
+              else if (isDel) lineClass += " removed";
+              else if (isMeta) lineClass += " meta";
+
+              return (
+                <div key={idx} className={lineClass}>
+                  <span className="line-num">{idx + 1}</span>
+                  <span className="line-prefix">
+                    {isAdd ? "+" : isDel ? "−" : isHunk ? " " : " "}
+                  </span>
+                  <span className="line-content">{line || " "}</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="chronicle-file-viewer">
+            {lines.map((line, idx) => (
+              <div key={idx} className="file-line">
+                <span className="line-num">{idx + 1}</span>
+                <span className="line-content">{line || " "}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </aside>
   );
 }

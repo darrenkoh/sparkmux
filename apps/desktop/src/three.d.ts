@@ -142,6 +142,29 @@ declare module "three" {
     material: Material | Material[];
   }
 
+  export class RingGeometry extends BufferGeometry {
+    constructor(innerRadius?: number, outerRadius?: number, thetaSegments?: number);
+  }
+
+  export class PointsMaterial extends Material {
+    constructor(parameters?: {
+      size?: number;
+      vertexColors?: boolean;
+      transparent?: boolean;
+      opacity?: number;
+      depthWrite?: boolean;
+      color?: number;
+    });
+    color: Color;
+    size: number;
+  }
+
+  export class Points extends Object3D {
+    constructor(geometry?: BufferGeometry, material?: Material);
+    geometry?: BufferGeometry;
+    material?: Material;
+  }
+
   export class Raycaster {
     setFromCamera(pointer: Vector2, camera: Camera): void;
     intersectObjects(
@@ -177,6 +200,8 @@ declare module "three/addons/controls/OrbitControls.js" {
     maxDistance: number;
     minAzimuthAngle: number;
     maxAzimuthAngle: number;
+    autoRotate: boolean;
+    autoRotateSpeed: number;
     update(): void;
     dispose(): void;
   }
