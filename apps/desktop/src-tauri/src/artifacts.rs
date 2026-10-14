@@ -1348,7 +1348,7 @@ fn load_full_steps(transcript: &Path) -> HashMap<i64, Value> {
     out
 }
 
-fn jailed_sibling(transcript: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn jailed_sibling(transcript: &Path, name: &str) -> Option<PathBuf> {
     let parent = transcript.parent()?;
     let parent = parent.canonicalize().ok()?;
     let file = parent.join(name).canonicalize().ok()?;

@@ -2,6 +2,7 @@ mod analytics;
 mod artifacts;
 mod bedrock_cost;
 mod change_graph;
+mod chronicle;
 mod commands;
 mod control;
 mod error;
@@ -63,6 +64,9 @@ pub fn run() {
             change_graph::change_graph,
             change_graph::file_diff,
             change_graph::search_changed_files,
+            chronicle::chronicle_session,
+            chronicle::chronicle_hologram,
+            chronicle::clear_chronicle_cache,
             analytics::tab_analytics,
             analytics::set_analytics_enabled,
             analytics::clear_analytics_data,

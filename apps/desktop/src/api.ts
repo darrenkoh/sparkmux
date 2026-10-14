@@ -218,6 +218,90 @@ export function searchChangedFiles(
   return invoke("search_changed_files", { targets, query, scope, cwd });
 }
 
+export interface ChronicleFile {
+  lane: number;
+  path: string;
+  outside: boolean;
+  edits: number;
+  added: number;
+  removed: number;
+  binary: boolean;
+}
+
+export interface ChronicleStation {
+  id: string;
+  ordinal: number;
+  lane: number;
+  path: string;
+  tool: string;
+  kind: string;
+  added: number;
+  removed: number;
+  preview: string;
+  timestamp_ms: number | null;
+  time_source: string;
+  outcome: string;
+}
+
+export interface ChronicleNow {
+  path: string;
+  available: boolean;
+  reason: string | null;
+  worktree_mtime_ms: number | null;
+}
+
+export interface ChronicleSession {
+  cli: string | null;
+  stations: ChronicleStation[];
+  files: ChronicleFile[];
+  now: ChronicleNow[];
+  omitted: number;
+  truncated_tail: boolean;
+  empty_reason: string | null;
+  transcript_len: number;
+  transcript_mtime_ms: number;
+  events_mtime_ms: number | null;
+}
+
+export interface ChronicleHologram {
+  station_id: string;
+  path: string;
+  fidelity: string;
+  reason: string | null;
+  file_text: string | null;
+  file_truncated: boolean;
+  window_start_line: number;
+  total_lines: number;
+  diff_text: string;
+  diff_kind: string;
+  diff_truncated: boolean;
+  added: number;
+  removed: number;
+}
+
+export function chronicleSession(
+  command: string,
+  cwd: string,
+  title: string,
+  pid: number,
+): Promise<ChronicleSession> {
+  return invoke("chronicle_session", { command, cwd, title, pid });
+}
+
+export function chronicleHologram(
+  command: string,
+  cwd: string,
+  title: string,
+  pid: number,
+  stationId: string,
+): Promise<ChronicleHologram> {
+  return invoke("chronicle_hologram", { command, cwd, title, pid, stationId });
+}
+
+export function clearChronicleCache(): Promise<void> {
+  return invoke("clear_chronicle_cache");
+}
+
 export interface ActivityPoint {
   timestamp: number;
   user_count: number;

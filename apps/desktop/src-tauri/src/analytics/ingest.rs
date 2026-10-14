@@ -1252,7 +1252,7 @@ fn explicit_num(obj: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
     None
 }
 
-fn agy_failed(obj: &Map<String, Value>) -> bool {
+pub(crate) fn agy_failed(obj: &Map<String, Value>) -> bool {
     let status = str_of(obj, "status");
     if status.eq_ignore_ascii_case("ERROR") || status.eq_ignore_ascii_case("INVALID") {
         return true;
