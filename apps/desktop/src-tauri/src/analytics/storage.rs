@@ -4,9 +4,13 @@
 //! - `events.jsonl` - Appended JSONL events.
 //! - `meta.json` - Active cursor, last update, totals.
 //!
-//! Also manages user settings: enabled/disabled flag in config.toml,
+//! Also manages user settings: enabled/disabled flag in analytics.json,
 //! disk space calculation, and wiping all persisted analytics data.
+//! A wipe keeps each transcript's read cursor in `analytics-cursors.json`
+//! (next to the config, outside the wiped directory) so the same bytes
+//! are not imported again.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -65,6 +69,13 @@ fn config_path() -> Option<PathBuf> {
 
 fn analytics_root() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "sparkmux").map(|dirs| dirs.data_dir().join("analytics"))
+}
+
+/// Read cursors that survive a wipe. This file lives beside the config,
+/// not inside the analytics directory that purge deletes.
+fn resume_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "sparkmux")
+        .map(|dirs| dirs.config_dir().join("analytics-cursors.json"))
 }
 
 fn load_persisted_config() -> Result<bool, String> {
@@ -253,12 +264,123 @@ pub fn tab_storage_bytes(session_name: &str, tab_id: &str) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn clear_all_analytics() -> Result<(), String> {
-    let root = analytics_root().ok_or_else(|| "no analytics root".to_string())?;
-    if root.exists() {
-        fs::remove_dir_all(&root).map_err(|e| e.to_string())?;
-        fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+/// How far a cursor has read, then how many lines it has counted.
+/// A later purge must not replace a further cursor with an older one.
+/// At the same file position, the cursor that counted more lines wins so
+/// the baseline is not stuck on a stale total.
+fn cursor_rank(cursor: &Cursor) -> (u64, u64) {
+    let read = cursor
+        .offset
+        .saturating_add(cursor.ev_offset)
+        .saturating_add(cursor.updates_offset)
+        .saturating_add(cursor.usage_turns as u64)
+        .saturating_add(cursor.tools_ev)
+        .saturating_add(cursor.tools_chat)
+        .saturating_add(cursor.turns_ev)
+        .saturating_add(cursor.turns_chat);
+    let lines = cursor
+        .lines_base_added
+        .saturating_add(cursor.lines_added)
+        .saturating_add(cursor.lines_base_removed)
+        .saturating_add(cursor.lines_removed);
+    (read, lines)
+}
+
+pub fn merge_resume(map: &mut HashMap<String, Cursor>, path: &str, cursor: Cursor) {
+    if path.is_empty() {
+        return;
     }
+    match map.get(path) {
+        Some(prev) if cursor_rank(prev) >= cursor_rank(&cursor) => {}
+        _ => {
+            map.insert(path.to_string(), cursor);
+        }
+    }
+}
+
+fn read_resume_at(path: &Path) -> HashMap<String, Cursor> {
+    let Ok(file) = File::open(path) else {
+        return HashMap::new();
+    };
+    serde_json::from_reader(file).unwrap_or_default()
+}
+
+fn write_resume_at(path: &Path, map: &HashMap<String, Cursor>) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let file = File::create(path).map_err(|e| e.to_string())?;
+    serde_json::to_writer_pretty(file, map).map_err(|e| e.to_string())
+}
+
+fn cursors_in(root: &Path) -> HashMap<String, Cursor> {
+    let mut out = HashMap::new();
+    let Ok(sessions) = fs::read_dir(root) else {
+        return out;
+    };
+    for session in sessions.flatten() {
+        if !session.path().is_dir() {
+            continue;
+        }
+        let Ok(tabs) = fs::read_dir(session.path()) else {
+            continue;
+        };
+        for tab in tabs.flatten() {
+            if !tab.path().is_dir() {
+                continue;
+            }
+            let Ok(file) = File::open(tab.path().join("meta.json")) else {
+                continue;
+            };
+            let Ok(meta) = serde_json::from_reader::<_, TabMeta>(file) else {
+                continue;
+            };
+            let Some(path) = meta.transcript_path.filter(|p| !p.is_empty()) else {
+                continue;
+            };
+            merge_resume(&mut out, &path, meta.cursor);
+        }
+    }
+    out
+}
+
+/// Cursor to resume from after a purge, keyed by transcript path.
+pub fn resume_cursor(transcript_path: &str) -> Option<Cursor> {
+    if transcript_path.is_empty() {
+        return None;
+    }
+    let path = resume_path()?;
+    read_resume_at(&path).get(transcript_path).cloned()
+}
+
+/// Delete saved events. `live` is the in-memory cursor for each open
+/// transcript. Those positions are kept so the next poll does not read
+/// the transcript from byte 0 and refill the HUD.
+pub fn clear_all_analytics(live: HashMap<String, Cursor>) -> Result<(), String> {
+    let root = analytics_root().ok_or_else(|| "no analytics root".to_string())?;
+    let resume = resume_path().ok_or_else(|| "no analytics root".to_string())?;
+    clear_analytics_at(&root, &resume, live)
+}
+
+fn clear_analytics_at(
+    root: &Path,
+    resume_file: &Path,
+    live: HashMap<String, Cursor>,
+) -> Result<(), String> {
+    let mut resumed = read_resume_at(resume_file);
+    for (path, mut cursor) in cursors_in(root) {
+        cursor.mark_purged();
+        merge_resume(&mut resumed, &path, cursor);
+    }
+    for (path, mut cursor) in live {
+        cursor.mark_purged();
+        merge_resume(&mut resumed, &path, cursor);
+    }
+    write_resume_at(resume_file, &resumed)?;
+    if root.exists() {
+        fs::remove_dir_all(root).map_err(|e| e.to_string())?;
+    }
+    let _ = fs::create_dir_all(root);
     Ok(())
 }
 
@@ -293,6 +415,81 @@ mod tests {
         let mut f = File::create(file_path).unwrap();
         writeln!(f, "{}", serde_json::to_string(&ev1).unwrap()).unwrap();
         writeln!(f, "{}", serde_json::to_string(&ev2).unwrap()).unwrap();
+
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn purge_keeps_the_transcript_cursor_and_deletes_events() {
+        let temp = std::env::temp_dir().join(format!("sparkmux_test_purge_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        let root = temp.join("analytics");
+        let tab = root.join("sess").join("tab");
+        fs::create_dir_all(&tab).unwrap();
+        fs::write(tab.join("events.jsonl"), "{\"k\":\"user\"}\n").unwrap();
+
+        let mut cursor = Cursor::default();
+        cursor.offset = 120;
+        cursor.ev_offset = 30;
+        cursor.lines_added = 4;
+        cursor.lines_removed = 1;
+        let meta = TabMeta {
+            session_name: "sess".into(),
+            tab_id: "tab".into(),
+            created_at: 1,
+            updated_at: 2,
+            cursor,
+            total_events: 3,
+            transcript_path: Some("/tmp/chat.jsonl".into()),
+            source_id: Some("abcd".into()),
+        };
+        serde_json::to_writer_pretty(File::create(tab.join("meta.json")).unwrap(), &meta).unwrap();
+
+        let resume = temp.join("analytics-cursors.json");
+        clear_analytics_at(&root, &resume, HashMap::new()).unwrap();
+
+        assert!(!tab.join("events.jsonl").exists());
+        assert!(!tab.join("meta.json").exists());
+        let saved = read_resume_at(&resume);
+        let kept = saved.get("/tmp/chat.jsonl").unwrap();
+        assert_eq!(kept.offset, 120);
+        assert_eq!(kept.ev_offset, 30);
+        assert_eq!(kept.lines_added, 0);
+        assert_eq!(kept.lines_removed, 0);
+        assert_eq!(kept.lines_base_added, 4);
+        assert_eq!(kept.lines_base_removed, 1);
+        assert!(kept.lines_tracked);
+
+        let mut later = Cursor::default();
+        later.offset = 200;
+        later.ev_offset = 30;
+        later.lines_base_added = 4;
+        later.lines_added = 2;
+        let mut live = HashMap::new();
+        live.insert("/tmp/chat.jsonl".into(), later);
+        live.insert(String::new(), Cursor::default());
+        clear_analytics_at(&root, &resume, live).unwrap();
+        let saved = read_resume_at(&resume);
+        let kept = saved.get("/tmp/chat.jsonl").unwrap();
+        assert_eq!(kept.offset, 200);
+        assert_eq!(kept.lines_added, 0);
+        assert_eq!(kept.lines_base_added, 6);
+        assert!(!saved.contains_key(""));
+
+        // Same file position, but a newer line total, must advance the baseline.
+        let mut same = Cursor::default();
+        same.offset = 200;
+        same.ev_offset = 30;
+        same.lines_base_added = 6;
+        same.lines_added = 5;
+        let mut live = HashMap::new();
+        live.insert("/tmp/chat.jsonl".into(), same);
+        clear_analytics_at(&root, &resume, live).unwrap();
+        let saved = read_resume_at(&resume);
+        let kept = saved.get("/tmp/chat.jsonl").unwrap();
+        assert_eq!(kept.offset, 200);
+        assert_eq!(kept.lines_added, 0);
+        assert_eq!(kept.lines_base_added, 11);
 
         let _ = fs::remove_dir_all(&temp);
     }

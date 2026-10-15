@@ -5,6 +5,7 @@ import {
   clearAnalyticsData,
   type AnalyticsEvent,
   type TabAnalyticsResponse,
+  type TabAnalyticsStats,
 } from "../api";
 import { cliLabel, previewLine } from "./artifactModel";
 import {
@@ -288,6 +289,38 @@ function eventDetail(ev: AnalyticsEvent): string {
 
 function eventKey(ev: AnalyticsEvent): string {
   return [ev.t, ev.k, ev.n ?? "", ev.ms ?? 0, ev.a ?? "", (ev.b ?? "").slice(0, 48)].join("|");
+}
+
+function clearedStats(prev: TabAnalyticsStats): TabAnalyticsStats {
+  return {
+    ...prev,
+    total_events: 0,
+    user_prompts: 0,
+    thinking_blocks: 0,
+    assistant_replies: 0,
+    tool_calls: 0,
+    tool_results: 0,
+    tool_errors: 0,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_cache_read_tokens: 0,
+    total_cache_write_tokens: 0,
+    total_reasoning_tokens: 0,
+    avg_turn_duration_ms: 0,
+    max_turn_duration_ms: 0,
+    total_turn_duration_ms: 0,
+    turn_count: 0,
+    context_tokens_used: 0,
+    ttft_ms: 0,
+    lines_added: 0,
+    lines_removed: 0,
+    tools: [],
+    models: [],
+    timeline: [],
+    timeline_start: 0,
+    timeline_end: 0,
+    recent_events: [],
+  };
 }
 
 export default function AnalyticsHud({
@@ -693,10 +726,35 @@ export default function AnalyticsHud({
 
   const handleClear = async () => {
     setClearing(true);
-    await clearAnalyticsData();
-    setClearing(false);
-    setConfirmClear(false);
-    fetchData();
+    // Drop a poll that started before the wipe, and any poll that overlapped
+    // it. Those replies still hold the old totals.
+    fetchGen.current += 1;
+    prevEventCountRef.current = 0;
+    try {
+      await clearAnalyticsData();
+      fetchGen.current += 1;
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              stats: clearedStats(prev.stats),
+              lifetime_stats: clearedStats(prev.lifetime_stats ?? prev.stats),
+              storage: {
+                ...prev.storage,
+                total_bytes: 0,
+                session_count: 0,
+                tab_count: 0,
+              },
+            }
+          : prev,
+      );
+      fetchData();
+    } catch (err) {
+      console.error("clear analytics:", err);
+    } finally {
+      setClearing(false);
+      setConfirmClear(false);
+    }
   };
 
   const [viewMode, setViewMode] = useState<"current" | "lifetime">(getInitialViewMode);

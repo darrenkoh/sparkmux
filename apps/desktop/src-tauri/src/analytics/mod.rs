@@ -7,7 +7,7 @@ pub mod stats;
 pub mod storage;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use tauri::command;
 
 use self::event::now_ms;
@@ -15,23 +15,20 @@ use self::ingest::{ingest, source_id, Cursor};
 use self::stats::{compute_stats, TabAnalyticsStats};
 use self::storage::{
     append_events, clear_all_analytics, get_storage_stats, is_enabled, load_meta, read_tab_events,
-    save_meta, set_enabled, AnalyticsConfig, TabMeta,
+    resume_cursor, save_meta, set_enabled, AnalyticsConfig, TabMeta,
 };
 use crate::artifacts::{default_roots, detect_cli, pane_family, select_transcript};
 
-static ACTIVE_CURSORS: Mutex<Option<HashMap<String, Cursor>>> = Mutex::new(None);
-
-fn get_active_cursor(key: &str) -> Option<Cursor> {
-    let mut lock = ACTIVE_CURSORS.lock().ok()?;
-    let map = lock.get_or_insert_with(HashMap::new);
-    map.get(key).cloned()
+#[derive(Default)]
+struct LiveAnalytics {
+    by_key: HashMap<String, Cursor>,
+    by_path: HashMap<String, Cursor>,
 }
 
-fn set_active_cursor(key: &str, cursor: Cursor) {
-    if let Ok(mut lock) = ACTIVE_CURSORS.lock() {
-        let map = lock.get_or_insert_with(HashMap::new);
-        map.insert(key.to_string(), cursor);
-    }
+static LIVE: Mutex<Option<LiveAnalytics>> = Mutex::new(None);
+
+fn live_lock() -> MutexGuard<'static, Option<LiveAnalytics>> {
+    LIVE.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -82,7 +79,15 @@ pub async fn tab_analytics(
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned());
 
-        let mut cursor = get_active_cursor(&key)
+        // Hold the lock across the read and the write. A purge that runs
+        // in between would delete the files and then lose the race to this
+        // append, which would put the wiped events straight back.
+        let mut guard = live_lock();
+        let live = guard.get_or_insert_with(LiveAnalytics::default);
+        let mut cursor = live
+            .by_key
+            .get(&key)
+            .cloned()
             .or_else(|| {
                 load_meta(&session_name, &tab_id).and_then(|m| {
                     if m.transcript_path.as_deref() == path_str.as_deref() {
@@ -92,6 +97,7 @@ pub async fn tab_analytics(
                     }
                 })
             })
+            .or_else(|| path_str.as_deref().and_then(resume_cursor))
             .unwrap_or_default();
 
         // Ingest new events if transcript exists and analytics is enabled
@@ -118,12 +124,16 @@ pub async fn tab_analytics(
                     meta.source_id = active_src.clone();
                     let _ = save_meta(&meta);
                 }
-                set_active_cursor(&key, cursor.clone());
+                if let Some(path) = path_str.clone() {
+                    live.by_path.insert(path, cursor.clone());
+                }
+                live.by_key.insert(key, cursor.clone());
             }
         }
 
         // Read accumulated events for this session & tab
         let all_events = read_tab_events(&session_name, &tab_id, 0);
+        drop(guard);
 
         // Filter events strictly to the active agent session/conversation if one is active,
         // so metrics are not polluted by prior or other sessions that were run in this tab.
@@ -188,12 +198,14 @@ pub fn set_analytics_enabled(enabled: bool) -> Result<(), String> {
 
 #[command]
 pub fn clear_analytics_data() -> Result<(), String> {
-    if let Ok(mut lock) = ACTIVE_CURSORS.lock() {
-        if let Some(map) = lock.as_mut() {
-            map.clear();
-        }
+    let mut guard = live_lock();
+    let live = guard.get_or_insert_with(LiveAnalytics::default);
+    let result = clear_all_analytics(live.by_path.clone());
+    if result.is_ok() {
+        live.by_key.clear();
+        live.by_path.clear();
     }
-    clear_all_analytics()
+    result
 }
 
 #[command]

@@ -108,6 +108,42 @@ pub struct Cursor {
     pub ttft_samples: u64,
     #[serde(default)]
     pub ttft_sum_ms: u64,
+    /// Line totals already counted, including a scan of older bytes.
+    /// A purge sets this so a zero total is not filled back in from history.
+    #[serde(default)]
+    pub lines_tracked: bool,
+    /// Session line total at the last purge. Later signal files are cumulative,
+    /// so the HUD shows only the growth above this baseline.
+    #[serde(default)]
+    pub lines_base_added: u64,
+    #[serde(default)]
+    pub lines_base_removed: u64,
+}
+
+impl Cursor {
+    /// Drop captured totals. File offsets stay so the next read continues
+    /// at the end instead of importing the transcript again.
+    pub fn mark_purged(&mut self) {
+        self.lines_base_added = self.lines_base_added.saturating_add(self.lines_added);
+        self.lines_base_removed = self.lines_base_removed.saturating_add(self.lines_removed);
+        self.lines_added = 0;
+        self.lines_removed = 0;
+        self.lines_tracked = true;
+        self.ctx_used = 0;
+        self.ttft_ms = 0;
+        self.ttft_samples = 0;
+        self.ttft_sum_ms = 0;
+        self.pending_reasoning_tokens = 0;
+        self.pending_output_tokens = 0;
+        self.tool_ts.clear();
+        self.turn_ts.clear();
+        self.pending.clear();
+        self.agy_turn_open = false;
+        self.turn_start = 0;
+        self.waiting_ts = 0;
+        self.last_stream_ms = 0;
+        self.last_stream_tokens = 0;
+    }
 }
 
 /// First 8 characters of the Grok session directory or the Claude file stem.
@@ -401,8 +437,9 @@ fn ingest_grok(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
         cur.model = "grok-4.7".to_string();
     }
 
-    // Backfill tool code deltas if cursor has read chat history but lines were not tracked
-    if cur.lines_added == 0 && cur.lines_removed == 0 && cur.offset > 0 {
+    // Older cursors consumed the chat file before line totals existed.
+    // A purge also leaves offset > 0 and totals at 0, and must not rescan.
+    if !cur.lines_tracked && cur.lines_added == 0 && cur.lines_removed == 0 && cur.offset > 0 {
         if let Ok(file) = File::open(path) {
             let reader = BufReader::new(file.take(cur.offset));
             for line in reader.lines().map_while(Result::ok) {
@@ -423,6 +460,7 @@ fn ingest_grok(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
                     }
                 }
             }
+            cur.lines_tracked = true;
         }
     }
 
@@ -693,8 +731,12 @@ fn grok_signals(path: &Path, cur: &mut Cursor) {
     let sig_added = u64_of(&obj, "agentLinesAdded");
     let sig_removed = u64_of(&obj, "agentLinesRemoved");
     if sig_added > 0 || sig_removed > 0 {
-        cur.lines_added = cur.lines_added.max(sig_added);
-        cur.lines_removed = cur.lines_removed.max(sig_removed);
+        // The signal file is the whole session. After a purge, show only
+        // the lines added once the stored totals were wiped.
+        let added = sig_added.saturating_sub(cur.lines_base_added);
+        let removed = sig_removed.saturating_sub(cur.lines_base_removed);
+        cur.lines_added = cur.lines_added.max(added);
+        cur.lines_removed = cur.lines_removed.max(removed);
     }
 }
 
@@ -1822,5 +1864,63 @@ mod tests {
         assert_eq!(turn.ms, 10_530);
         assert_eq!(turn.b, "4 messages");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn purged_grok_cursor_does_not_reimport_history() {
+        let dir = scratch("grok-purge").join("01a19999-session");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("signals.json"),
+            r#"{"contextTokensUsed":20011,"contextWindowTokens":256000,"avgTimeToFirstTokenMs":5692,"agentLinesAdded":7,"agentLinesRemoved":2}"#,
+        )
+        .unwrap();
+        let chat = dir.join("chat_history.jsonl");
+        fs::write(
+            &chat,
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<user_query>count me</user_query>\"}]}\n",
+        )
+        .unwrap();
+
+        let mut cur = Cursor::default();
+        let first = ingest(CliKind::Grok, &chat, &mut cur, 0);
+        assert!(first.iter().any(|event| event.k == "user"));
+        assert_eq!(cur.lines_added, 7);
+        assert_eq!(cur.lines_removed, 2);
+        let offset = cur.offset;
+        assert!(offset > 0);
+
+        cur.mark_purged();
+        assert_eq!(cur.offset, offset);
+        assert_eq!(cur.lines_added, 0);
+        assert_eq!(cur.lines_removed, 0);
+        assert_eq!(cur.lines_base_added, 7);
+        assert_eq!(cur.lines_base_removed, 2);
+        assert!(cur.lines_tracked);
+
+        let again = ingest(CliKind::Grok, &chat, &mut cur, 0);
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(cur.lines_added, 0);
+        assert_eq!(cur.lines_removed, 0);
+
+        // The same cumulative signal file must not refill the wiped totals.
+        cur.signals_mtime = 0;
+        let reread = ingest(CliKind::Grok, &chat, &mut cur, 0);
+        assert!(reread.is_empty(), "{reread:?}");
+        assert_eq!(cur.lines_added, 0);
+        assert_eq!(cur.lines_removed, 0);
+
+        fs::write(
+            dir.join("signals.json"),
+            r#"{"contextTokensUsed":20011,"contextWindowTokens":256000,"avgTimeToFirstTokenMs":1000,"agentLinesAdded":9,"agentLinesRemoved":2}"#,
+        )
+        .unwrap();
+        cur.signals_mtime = 0;
+        let grown = ingest(CliKind::Grok, &chat, &mut cur, 0);
+        assert!(grown.is_empty(), "{grown:?}");
+        assert_eq!(cur.lines_added, 2);
+        assert_eq!(cur.lines_removed, 0);
+
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
     }
 }
