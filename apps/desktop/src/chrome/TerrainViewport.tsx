@@ -16,6 +16,8 @@ interface TerrainViewportProps {
   sessionName?: string;
   tabName?: string;
   stats?: TabAnalyticsStats | null;
+  /** Changes when the tmux tab or agent transcript changes, so a new session starts flat. */
+  mapKey?: string;
   docked?: boolean;
   onExpand?: () => void;
   onClose?: () => void;
@@ -444,6 +446,7 @@ export default function TerrainViewport({
   sessionName,
   tabName,
   stats,
+  mapKey = "",
   docked = false,
   onExpand,
   onClose,
@@ -535,6 +538,17 @@ export default function TerrainViewport({
   // already folded, so dragging moves across activity instead of empty terrain.
   const [followLive, setFollowLive] = useState(true);
   const [windowStart, setWindowStart] = useState(0);
+
+  // A new tmux tab or a new agent transcript must not keep the previous
+  // slice, replay head, or drag offset.
+  useEffect(() => {
+    setFollowLive(true);
+    setWindowStart(0);
+    setScrubProgress(1);
+    scrubProgressRef.current = 1;
+    setIsPlaying(false);
+    isPlayingRef.current = false;
+  }, [mapKey]);
   const windowTrackRef = useRef<HTMLDivElement>(null);
   const axis = activityAxis(timeline ?? [], stats);
   const axisRef = useRef(axis);
@@ -692,12 +706,17 @@ export default function TerrainViewport({
       for (let i = 0; i < count; i++) {
         const t = (i / (count - 1)) * 2 - 1;
         const wave = Math.sin(i * 0.8) * 0.5 + 0.5;
+        const user = currentStats?.user_prompts ?? 0;
+        const think = currentStats?.thinking_blocks ?? 0;
+        const reply = currentStats?.assistant_replies ?? 0;
+        const tool = currentStats?.tool_calls ?? 0;
+        if (user + think + reply + tool <= 0) break;
         dataPoints.push({
           tNorm: t,
-          user: (currentStats?.user_prompts ?? 1) * (0.3 + 0.7 * wave),
-          think: (currentStats?.thinking_blocks ?? 2) * (0.4 + 0.6 * (1 - wave)),
-          reply: (currentStats?.assistant_replies ?? 1) * (0.3 + 0.5 * wave),
-          tool: (currentStats?.tool_calls ?? 3) * (0.2 + 0.8 * wave),
+          user: user * (0.3 + 0.7 * wave),
+          think: think * (0.4 + 0.6 * (1 - wave)),
+          reply: reply * (0.3 + 0.5 * wave),
+          tool: tool * (0.2 + 0.8 * wave),
         });
       }
     }
@@ -1037,10 +1056,10 @@ export default function TerrainViewport({
         name: ch.label,
         color: ch.color,
         pos: [bestX, bestY, zPos] as [number, number, number],
-        val: idx === 0 ? `${currentStats?.user_prompts ?? 1} PROMPTS`
-           : idx === 1 ? `${currentStats?.thinking_blocks ?? 2} TURNS`
-           : idx === 2 ? `${currentStats?.assistant_replies ?? 1} REPLIES`
-           : `${currentStats?.tool_calls ?? 3} CALLS`,
+        val: idx === 0 ? `${currentStats?.user_prompts ?? 0} PROMPTS`
+           : idx === 1 ? `${currentStats?.thinking_blocks ?? 0} TURNS`
+           : idx === 2 ? `${currentStats?.assistant_replies ?? 0} REPLIES`
+           : `${currentStats?.tool_calls ?? 0} CALLS`,
       };
     });
 
@@ -1100,7 +1119,7 @@ export default function TerrainViewport({
   };
 
   // Rebuild when the visible window moves, not only when the column count changes.
-  const dataSignature = `${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.thinking_blocks ?? 0}:${stats?.assistant_replies ?? 0}:${stats?.tool_calls ?? 0}:${stats?.timeline_end ?? 0}:${Math.round(view.compStart ?? view.start)}:${Math.round(view.compEnd ?? view.end)}:${Math.round(axis.spanMs)}:${axis.seams.length}:${baseShape}`;
+  const dataSignature = `${mapKey}:${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.thinking_blocks ?? 0}:${stats?.assistant_replies ?? 0}:${stats?.tool_calls ?? 0}:${stats?.timeline_start ?? 0}:${stats?.timeline_end ?? 0}:${Math.round(view.compStart ?? view.start)}:${Math.round(view.compEnd ?? view.end)}:${Math.round(axis.spanMs)}:${axis.seams.length}:${baseShape}`;
   useEffect(() => {
     scheduleGeometryUpdate();
   }, [dataSignature]);

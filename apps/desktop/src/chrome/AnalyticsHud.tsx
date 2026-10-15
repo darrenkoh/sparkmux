@@ -310,7 +310,20 @@ export default function AnalyticsHud({
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
   const statsRef = useRef(data?.stats);
-  statsRef.current = data?.stats;
+  const fetchGen = useRef(0);
+  // Keep the last real transcript so a missed CLI read does not reset the pan.
+  const transcriptKey = useRef("");
+  const [bound, setBound] = useState({ sessionName, tabId });
+  const sessionChanged = bound.sessionName !== sessionName || bound.tabId !== tabId;
+  if (sessionChanged) {
+    fetchGen.current += 1;
+    transcriptKey.current = "";
+    setBound({ sessionName, tabId });
+    setData(null);
+  }
+  const path = data?.transcript_path ?? "";
+  if (path) transcriptKey.current = path;
+  statsRef.current = sessionChanged ? undefined : data?.stats;
 
   // Track the most recent active event kind and last firing timestamp
   const firingRef = useRef<{ kind: string; time: number }>({
@@ -318,6 +331,7 @@ export default function AnalyticsHud({
     time: performance.now(),
   });
   const prevEventCountRef = useRef<number>(0);
+  if (sessionChanged) prevEventCountRef.current = 0;
 
   // Interactive 3D Orbit Camera for the Brain Viewport
   const brainCamRef = useRef({
@@ -435,8 +449,13 @@ export default function AnalyticsHud({
   }, [centerRowHeight]);
 
   const fetchData = () => {
-    tabAnalytics(sessionName, tabId, command, cwd, title, pid)
+    const gen = fetchGen.current;
+    const session = sessionName;
+    const tab = tabId;
+    tabAnalytics(session, tab, command, cwd, title, pid)
       .then((res) => {
+        if (gen !== fetchGen.current) return;
+        if (res.session_name !== session || res.tab_id !== tab) return;
         setData(res);
         statsRef.current = res.stats;
 
@@ -996,13 +1015,14 @@ export default function AnalyticsHud({
             className="scifi-center"
             style={{ ["--hud-bottom-row-height" as any]: `${centerRowHeight}px` }}
           >
-            {/* Interactive 3D Hill Terrain Viewport with Real Session Data */}
+            {/* Active agent session only. Tab Cumulative stays on the counters. */}
             <TerrainViewport
-              timeline={st?.timeline ?? []}
-              activeModel={st?.active_model}
+              timeline={data?.stats?.timeline ?? []}
+              activeModel={data?.stats?.active_model}
               sessionName={sessionName}
               tabName={tabName}
-              stats={st}
+              stats={data?.stats}
+              mapKey={`${sessionName}\0${tabId}\0${transcriptKey.current}`}
             />
 
             {/* Horizontal Splitter between 3D Area Map and Telemetry Row */}
