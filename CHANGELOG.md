@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.44
+
+### Improvements
+
+- The docked area map is a Mini Stat: the focused agent, token and tool totals, sub-agents, and a quieter terrain underneath.
+- Stats follows Grok sub-agents recorded on the parent session, including a resume, so their tokens and tools show in the Subagents table.
+- The app icon is a new mark.
+
+### Bug Fixes
+
+- A missing clock no longer marks the Mini Stat agent as live.
+
 ## 0.1.43
 
 ### Improvements
