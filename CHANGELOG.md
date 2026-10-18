@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.42
+
+### Improvements
+
+- Stats and Gits can now be popped out into separate desktop windows.
+- Popout windows follow the main window's active session and tab in real time, with an option to pin/lock to a specific tab.
+- Added Pop Out controls to the Stats HUD, docked area map panel, and Gits toolbar.
+- Separate windows can be closed independently (`Cmd+W` or window close) without quitting the main window or detaching tmux.
+
 ## 0.1.41
 
 ### Improvements
