@@ -4,8 +4,14 @@
 //! a separate transcript. The pane follows only the parent, so that work never
 //! reached Stats. This module finds those children, ingests them with the
 //! parent's source id, and tags every step with the child id.
+//!
+//! Current Grok builds omit `parent_session_id` on the child summary. The
+//! parent session directory has `subagents/<id>/meta.json`, and `updates.jsonl`
+//! emits `subagent_spawned`. The child's tokens stay in that child's own
+//! session directory. Older transcripts still link through `summary.json` when
+//! `session_kind` starts with `subagent`.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,8 +19,8 @@ use serde_json::{Map, Value};
 
 use super::event::{self, Event};
 use super::ingest::{
-    agent_id_ok, clip_label, ingest_one, pull_claude_sidechain, read_new_lines, read_small_json,
-    source_id, Cursor, Spawned, MAX_READ,
+    agent_id_ok, clip_label, ingest_one, parse_obj, pull_claude_sidechain, read_new_lines,
+    read_small_json, source_id, Cursor, Spawned, MAX_READ,
 };
 use super::stats::TabAnalyticsStats;
 use crate::artifacts::{CliKind, TranscriptRoots};
@@ -41,7 +47,7 @@ pub fn ingest_session(
     seen.insert(path_key(path));
     match kind {
         CliKind::Grok => {
-            for child in grok_descendants(&roots.grok_sessions, path) {
+            for child in grok_family(&roots.grok_sessions, path, cur) {
                 ingest_found(kind, child, cur, now, false, &mut seen, &mut out);
             }
         }
@@ -199,37 +205,117 @@ struct GrokNode {
     path: PathBuf,
 }
 
-fn grok_descendants(root: &Path, parent_transcript: &Path) -> Vec<Found> {
-    let Some(root_id) = session_dir_name(parent_transcript) else {
-        return Vec::new();
-    };
+/// Summary links, `subagents/<id>/meta.json`, and `subagent_spawned` events.
+/// A resume child's summary points at the previous child, not the human
+/// session, so each discovered id is expanded through the summary index too.
+fn grok_family(root: &Path, transcript: &Path, cur: &mut Cursor) -> Vec<Found> {
     let index = grok_index(root);
-    let mut out = Vec::new();
-    let mut queue = VecDeque::from([(root_id.clone(), 0usize)]);
-    let mut seen = HashSet::from([root_id]);
-    while let Some((id, depth)) = queue.pop_front() {
-        if depth >= MAX_DEPTH || out.len() >= MAX_CHILDREN {
-            break;
+    let mut walk = FamilyWalk {
+        root,
+        index: &index,
+        seen: HashSet::new(),
+        out: Vec::new(),
+        pending: vec![(transcript.to_path_buf(), 0)],
+        queued: HashSet::from([path_key(transcript)]),
+    };
+    if let Some(id) = session_dir_name(transcript) {
+        walk.seen.insert(id);
+    }
+    let parent_key = path_key(transcript);
+    let mut index_at = 0;
+    while index_at < walk.pending.len()
+        && walk.out.len() < MAX_CHILDREN
+        && index_at < MAX_DEPTH * MAX_CHILDREN
+    {
+        let (path, depth) = walk.pending[index_at].clone();
+        index_at += 1;
+        if let Some(id) = session_dir_name(&path) {
+            walk.push_summary_children(&id, depth);
         }
-        let Some(kids) = index.get(&id) else {
+        if depth >= MAX_DEPTH || walk.out.len() >= MAX_CHILDREN {
             continue;
+        }
+        let key = path_key(&path);
+        let spawned = if key == parent_key {
+            note_grok_spawns(&path, cur);
+            note_meta_children(&path, cur);
+            cur.spawned.clone()
+        } else {
+            let slot = cur.children.entry(key.clone()).or_default();
+            note_grok_spawns(&path, slot);
+            note_meta_children(&path, slot);
+            slot.spawned.clone()
         };
-        for kid in kids {
-            if !seen.insert(kid.id.clone()) {
+        for spawned in spawned {
+            if walk.seen.contains(&spawned.id) || walk.out.len() >= MAX_CHILDREN {
                 continue;
             }
-            queue.push_back((kid.id.clone(), depth + 1));
-            out.push(Found {
+            let Some(chat) = resolve_chat(root, &path, &spawned.id, &spawned.path) else {
+                continue;
+            };
+            if key == parent_key {
+                remember_spawn_path(&mut cur.spawned, &spawned.id, &chat);
+            } else if let Some(slot) = cur.children.get_mut(&key) {
+                remember_spawn_path(&mut slot.spawned, &spawned.id, &chat);
+            }
+            let label = label_from_session(chat.parent(), &spawned.label);
+            walk.seen.insert(spawned.id.clone());
+            walk.out.push(Found {
+                path: chat.clone(),
+                id: spawned.id,
+                label,
+            });
+            let child_key = path_key(&chat);
+            if walk.queued.insert(child_key) && depth + 1 < MAX_DEPTH {
+                walk.pending.push((chat, depth + 1));
+            }
+        }
+    }
+    // A resumed Grok transcript copies the earlier session's usage turns and
+    // tool calls. Counting both would double the pane totals.
+    drop_copied_resumes(transcript, &mut walk.out);
+    walk.out
+}
+
+struct FamilyWalk<'a> {
+    root: &'a Path,
+    index: &'a HashMap<String, Vec<GrokNode>>,
+    seen: HashSet<String>,
+    out: Vec<Found>,
+    pending: Vec<(PathBuf, usize)>,
+    queued: HashSet<String>,
+}
+
+impl FamilyWalk<'_> {
+    fn push_summary_children(&mut self, id: &str, depth: usize) {
+        if depth >= MAX_DEPTH || self.out.len() >= MAX_CHILDREN {
+            return;
+        }
+        let Some(kids) = self.index.get(id) else {
+            return;
+        };
+        for kid in kids {
+            if self.out.len() >= MAX_CHILDREN {
+                break;
+            }
+            if !self.seen.insert(kid.id.clone()) {
+                continue;
+            }
+            if !file_inside(self.root, &kid.path) {
+                self.seen.remove(&kid.id);
+                continue;
+            }
+            let child_depth = depth + 1;
+            self.out.push(Found {
                 path: kid.path.clone(),
                 id: kid.id.clone(),
                 label: kid.label.clone(),
             });
-            if out.len() >= MAX_CHILDREN {
-                break;
+            if self.queued.insert(path_key(&kid.path)) && child_depth < MAX_DEPTH {
+                self.pending.push((kid.path.clone(), child_depth));
             }
         }
     }
-    out
 }
 
 fn grok_index(root: &Path) -> std::collections::HashMap<String, Vec<GrokNode>> {
@@ -304,6 +390,277 @@ fn text_of(obj: &Map<String, Value>, key: &str) -> String {
         .unwrap_or("")
         .trim()
         .to_string()
+}
+
+fn note_grok_spawns(transcript: &Path, cur: &mut Cursor) {
+    let Some(updates) = transcript.parent().map(|dir| dir.join("updates.jsonl")) else {
+        return;
+    };
+    let Some((lines, next)) = read_new_lines(&updates, cur.spawn_offset, MAX_READ) else {
+        return;
+    };
+    cur.spawn_offset = next;
+    for line in lines {
+        let Ok(text) = std::str::from_utf8(&line) else {
+            continue;
+        };
+        if !text.contains("subagent_spawned") {
+            continue;
+        }
+        let Some(obj) = parse_obj(&line) else {
+            continue;
+        };
+        let Some((id, label)) = grok_spawn_record(&obj) else {
+            continue;
+        };
+        push_spawn(cur, id, label);
+    }
+}
+
+fn grok_spawn_record(obj: &Map<String, Value>) -> Option<(String, String)> {
+    let update = obj
+        .get("params")
+        .and_then(Value::as_object)
+        .and_then(|params| params.get("update"))
+        .and_then(Value::as_object)?;
+    if text_of(update, "sessionUpdate") != "subagent_spawned" {
+        return None;
+    }
+    let primary = text_of(update, "subagent_id");
+    let id = if agent_id_ok(&primary) {
+        primary
+    } else {
+        text_of(update, "child_session_id")
+    };
+    if !agent_id_ok(&id) {
+        return None;
+    }
+    let description = text_of(update, "description");
+    let label = if !description.is_empty() {
+        clip_label(&description)
+    } else {
+        clip_label(&text_of(update, "subagent_type"))
+    };
+    Some((id, label))
+}
+
+/// `subagents/<id>/meta.json` is the parent's registry. The directory name is
+/// the child id. Token totals are not in this file; they live on the child
+/// transcript.
+fn note_meta_children(transcript: &Path, cur: &mut Cursor) {
+    let Some(session_dir) = transcript.parent() else {
+        return;
+    };
+    let dir = session_dir.join("subagents");
+    let Ok(meta) = fs::symlink_metadata(&dir) else {
+        return;
+    };
+    if !meta.file_type().is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let label = meta_label(&entry.path().join("meta.json"));
+        push_spawn(cur, id, label);
+    }
+}
+
+fn meta_label(path: &Path) -> String {
+    let Some(obj) = read_small_json(path, 256 * 1024) else {
+        return String::new();
+    };
+    let description = text_of(&obj, "description");
+    if !description.is_empty() {
+        return clip_label(&description);
+    }
+    clip_label(&text_of(&obj, "subagent_type"))
+}
+
+fn push_spawn(cur: &mut Cursor, id: String, label: String) {
+    if !agent_id_ok(&id) || cur.spawned.len() >= MAX_CHILDREN {
+        return;
+    }
+    if let Some(row) = cur.spawned.iter_mut().find(|row| row.id == id) {
+        if row.label.is_empty() && !label.is_empty() {
+            row.label = label;
+        }
+        return;
+    }
+    cur.spawned.push(Spawned {
+        id,
+        label,
+        path: String::new(),
+    });
+}
+
+fn remember_spawn_path(spawned: &mut [Spawned], id: &str, path: &Path) {
+    if let Some(row) = spawned.iter_mut().find(|row| row.id == id) {
+        if row.path.is_empty() {
+            row.path = path.to_string_lossy().into_owned();
+        }
+    }
+}
+
+fn resolve_chat(root: &Path, hint: &Path, id: &str, stored: &str) -> Option<PathBuf> {
+    if !stored.is_empty() {
+        let path = PathBuf::from(stored);
+        if file_inside(root, &path) {
+            return Some(path);
+        }
+    }
+    find_grok_chat(root, hint, id)
+}
+
+fn find_grok_chat(root: &Path, hint: &Path, id: &str) -> Option<PathBuf> {
+    if !agent_id_ok(id) || session_dir_name(hint).as_deref() == Some(id) {
+        return None;
+    }
+    if let Some(chat) = hint
+        .parent()
+        .and_then(|dir| dir.parent())
+        .map(|project| project.join(id).join("chat_history.jsonl"))
+    {
+        if file_inside(root, &chat) {
+            return Some(chat);
+        }
+    }
+    let projects = fs::read_dir(root).ok()?;
+    for project in projects.flatten() {
+        if !project
+            .file_type()
+            .map(|kind| kind.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let chat = project.path().join(id).join("chat_history.jsonl");
+        if file_inside(root, &chat) {
+            return Some(chat);
+        }
+    }
+    None
+}
+
+fn file_inside(root: &Path, file: &Path) -> bool {
+    if !regular_file(file) {
+        return false;
+    }
+    let Ok(root_real) = root.canonicalize() else {
+        return false;
+    };
+    let Ok(file_real) = file.canonicalize() else {
+        return false;
+    };
+    file_real.starts_with(&root_real)
+}
+
+fn label_from_session(dir: Option<&Path>, fallback: &str) -> String {
+    if let Some(dir) = dir {
+        if let Some(node) = grok_node(dir) {
+            if !node.label.is_empty() {
+                return node.label;
+            }
+        }
+    }
+    fallback.to_string()
+}
+
+/// Drop an earlier session when a later `subagent_resume` already contains
+/// its usage turns. The latest file is the one Stats ingests.
+fn drop_copied_resumes(transcript: &Path, found: &mut Vec<Found>) {
+    let mut drop_ids = HashSet::new();
+    for child in found.iter() {
+        let mut prior = resume_ancestor(transcript, &child.id, &child.path);
+        let mut guard = 0;
+        while let Some(ancestor_id) = prior {
+            if guard >= MAX_DEPTH {
+                break;
+            }
+            guard += 1;
+            let Some(ancestor) = found.iter().find(|row| row.id == ancestor_id) else {
+                break;
+            };
+            let ancestor_path = ancestor.path.clone();
+            if usage_covers(&child.path, &ancestor_path) {
+                drop_ids.insert(ancestor_id.clone());
+            }
+            prior = resume_ancestor(transcript, &ancestor_id, &ancestor_path);
+        }
+    }
+    if !drop_ids.is_empty() {
+        found.retain(|row| !drop_ids.contains(&row.id));
+    }
+}
+
+fn resume_ancestor(transcript: &Path, id: &str, chat: &Path) -> Option<String> {
+    if let Some(dir) = chat.parent() {
+        if let Some(summary) = read_small_json(&dir.join("summary.json"), 1024 * 1024) {
+            if text_of(&summary, "session_kind") == "subagent_resume" {
+                let parent = text_of(&summary, "parent_session_id");
+                if agent_id_ok(&parent) && parent != id {
+                    return Some(parent);
+                }
+            }
+        }
+    }
+    let meta = transcript
+        .parent()?
+        .join("subagents")
+        .join(id)
+        .join("meta.json");
+    let prior = text_of(&read_small_json(&meta, 256 * 1024)?, "resumed_from");
+    (agent_id_ok(&prior) && prior != id).then_some(prior)
+}
+
+fn usage_covers(resume_chat: &Path, ancestor_chat: &Path) -> bool {
+    let ancestor = usage_turns(ancestor_chat);
+    if ancestor.is_empty() {
+        return false;
+    }
+    let resume = usage_turns(resume_chat);
+    ancestor
+        .iter()
+        .all(|turn| resume.iter().any(|row| row == turn))
+}
+
+fn usage_turns(chat: &Path) -> Vec<(String, u64, u64)> {
+    let Some(dir) = chat.parent() else {
+        return Vec::new();
+    };
+    let Some(obj) = read_small_json(&dir.join("usage.json"), 8 * 1024 * 1024) else {
+        return Vec::new();
+    };
+    let Some(turns) = obj.get("turns").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    turns
+        .iter()
+        .filter_map(|turn| {
+            let turn = turn.as_object()?;
+            let ended = text_of(turn, "endedAt");
+            if ended.is_empty() {
+                return None;
+            }
+            Some((
+                ended,
+                json_u64(turn, "inputTokens"),
+                json_u64(turn, "outputTokens"),
+            ))
+        })
+        .collect()
+}
+
+fn json_u64(obj: &Map<String, Value>, key: &str) -> u64 {
+    obj.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------- Claude
@@ -723,6 +1080,199 @@ mod tests {
             .iter()
             .any(|event| event.g == child_id && event.k == "tool"));
         assert!(events.iter().all(|event| event.s == "01a10000"));
+
+        let again = ingest_session(
+            CliKind::Grok,
+            &transcript,
+            &mut cur,
+            1_700_000_000_000,
+            &roots(&dir),
+        );
+        assert!(
+            again.is_empty(),
+            "a second poll must not reimport the children"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grok_meta_and_spawn_event_link_children_without_parent_session_id() {
+        let dir = scratch("grok-meta");
+        let parent_id = "01a10000-0000-7000-8000-000000000011";
+        let child_id = "01a10000-0000-7000-8000-000000000012";
+        let grand_id = "01a10000-0000-7000-8000-000000000013";
+        let decoy_id = "01a10000-0000-7000-8000-000000000014";
+        let link_id = "01a10000-0000-7000-8000-000000000015";
+        let resume_id = "01a10000-0000-7000-8000-000000000016";
+        let parent = dir.join("grok").join("sparkmux").join(parent_id);
+        let other = dir.join("grok").join("other");
+        write(
+            &parent.join("summary.json"),
+            &format!(r#"{{"id":"{parent_id}","session_kind":"primary"}}"#),
+        );
+        write(
+            &parent.join("chat_history.jsonl"),
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<user_query>check the map</user_query>\"}]}\n",
+        );
+        write(
+            &parent.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-18T20:00:00Z","inputTokens":10,"outputTokens":1,"primaryModelId":"grok-4.7"}]}"#,
+        );
+        write(
+            &parent.join("signals.json"),
+            r#"{"agentLinesAdded":1,"agentLinesRemoved":0}"#,
+        );
+        write(
+            &parent.join("updates.jsonl"),
+            &format!(
+                concat!(
+                    "{{\"params\":{{\"update\":{{\"sessionUpdate\":\"tool_call_update\",\"content\":\"subagent_spawned subagent_id: {decoy}\"}}}}}}\n",
+                    "{{\"params\":{{\"update\":{{\"sessionUpdate\":\"subagent_spawned\",\"subagent_id\":\"{link}\",\"description\":\"linked away\"}}}}}}\n",
+                ),
+                decoy = decoy_id,
+                link = link_id,
+            ),
+        );
+        write(
+            &parent.join("subagents").join(child_id).join("meta.json"),
+            &format!(
+                r#"{{"subagent_id":"{child_id}","parent_session_id":"{parent_id}","description":"QA aggregation math","subagent_type":"general-purpose"}}"#
+            ),
+        );
+        write(
+            &parent.join("subagents").join(resume_id).join("meta.json"),
+            &format!(
+                r#"{{"subagent_id":"{resume_id}","parent_session_id":"{parent_id}","resumed_from":"{child_id}","description":"QA the map","subagent_type":"general-purpose"}}"#
+            ),
+        );
+        let child = other.join(child_id);
+        write(
+            &child.join("summary.json"),
+            &format!(
+                r#"{{"id":"{child_id}","session_kind":"subagent","generated_title":"QA the map","agent_name":"general-purpose"}}"#
+            ),
+        );
+        write(
+            &child.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"Looking.\",\"tool_calls\":[{\"id\":\"c1\",\"name\":\"grep\",\"arguments\":\"{\\\"pattern\\\":\\\"map\\\"}\"}]}\n",
+        );
+        write(
+            &child.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-18T20:05:00Z","inputTokens":200,"outputTokens":20,"cachedReadTokens":50,"primaryModelId":"grok-4.7"}]}"#,
+        );
+        write(
+            &child.join("signals.json"),
+            r#"{"agentLinesAdded":7,"agentLinesRemoved":2}"#,
+        );
+        write(
+            &child.join("updates.jsonl"),
+            &format!(
+                "{{\"params\":{{\"update\":{{\"sessionUpdate\":\"subagent_spawned\",\"subagent_id\":\"{grand_id}\",\"child_session_id\":\"{grand_id}\",\"description\":\"nested\"}}}}}}\n"
+            ),
+        );
+        let resume = other.join(resume_id);
+        write(
+            &resume.join("summary.json"),
+            &format!(
+                r#"{{"id":"{resume_id}","parent_session_id":"{child_id}","session_kind":"subagent_resume","generated_title":"QA the map"}}"#
+            ),
+        );
+        write(
+            &resume.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"Looking.\",\"tool_calls\":[{\"id\":\"c1\",\"name\":\"grep\",\"arguments\":\"{\\\"pattern\\\":\\\"map\\\"}\"}]}\n",
+        );
+        write(
+            &resume.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-18T20:05:00Z","inputTokens":200,"outputTokens":20,"cachedReadTokens":50,"primaryModelId":"grok-4.7"},{"endedAt":"2026-10-18T20:08:00Z","inputTokens":40,"outputTokens":5,"primaryModelId":"grok-4.7"}]}"#,
+        );
+        write(
+            &resume.join("signals.json"),
+            r#"{"agentLinesAdded":7,"agentLinesRemoved":2}"#,
+        );
+        let grand = other.join(grand_id);
+        write(
+            &grand.join("summary.json"),
+            &format!(
+                r#"{{"id":"{grand_id}","session_kind":"subagent_resume","generated_title":"Nested check"}}"#
+            ),
+        );
+        write(
+            &grand.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"Checked.\"}\n",
+        );
+        write(
+            &grand.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-18T20:06:00Z","inputTokens":30,"outputTokens":4,"primaryModelId":"grok-4.7"}]}"#,
+        );
+        let decoy = other.join(decoy_id);
+        write(
+            &decoy.join("summary.json"),
+            &format!(
+                r#"{{"id":"{decoy_id}","session_kind":"subagent","generated_title":"not ours"}}"#
+            ),
+        );
+        write(
+            &decoy.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"no\"}\n",
+        );
+        write(
+            &decoy.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-18T20:07:00Z","inputTokens":99999,"outputTokens":99999,"primaryModelId":"grok-4.7"}]}"#,
+        );
+        let linked = other.join(link_id);
+        fs::create_dir_all(&linked).unwrap();
+        write(
+            &linked.join("summary.json"),
+            &format!(
+                r#"{{"id":"{link_id}","session_kind":"subagent","generated_title":"outside"}}"#
+            ),
+        );
+        let outside = dir.join("outside.jsonl");
+        write(
+            &outside,
+            "{\"type\":\"assistant\",\"content\":\"escape\"}\n",
+        );
+        std::os::unix::fs::symlink(&outside, linked.join("chat_history.jsonl")).unwrap();
+
+        let transcript = parent.join("chat_history.jsonl");
+        let mut cur = Cursor::default();
+        let events = ingest_session(
+            CliKind::Grok,
+            &transcript,
+            &mut cur,
+            1_700_000_000_000,
+            &roots(&dir),
+        );
+        let mut stats = compute_stats(&events, 0, 0, 0, cur.lines_added, cur.lines_removed, "");
+        apply_child_totals(&mut stats, &cur);
+
+        assert_eq!(stats.user_prompts, 1);
+        assert_eq!(stats.total_input_tokens, 10 + 150 + 40 + 30);
+        assert_eq!(stats.total_output_tokens, 1 + 20 + 5 + 4);
+        assert_eq!(stats.tool_calls, 1);
+        assert_eq!(stats.lines_added, 1 + 7);
+        assert_eq!(stats.subagents.len(), 2);
+        let map = stats
+            .subagents
+            .iter()
+            .find(|row| row.id == resume_id)
+            .unwrap();
+        assert_eq!(map.label, "QA the map");
+        assert_eq!(map.input_tokens, 190);
+        assert_eq!(map.output_tokens, 25);
+        assert_eq!(map.tool_calls, 1);
+        assert_eq!(map.lines_added, 7);
+        assert!(stats.subagents.iter().all(|row| row.id != child_id),);
+        assert!(stats
+            .subagents
+            .iter()
+            .any(|row| row.id == grand_id && row.label == "Nested check"));
+        assert!(events
+            .iter()
+            .any(|event| event.g == resume_id && event.k == "tool"));
+        assert!(events
+            .iter()
+            .all(|event| event.g != child_id && event.g != decoy_id && event.g != link_id));
 
         let again = ingest_session(
             CliKind::Grok,
