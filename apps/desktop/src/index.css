@@ -1622,6 +1622,18 @@ code {
   background: #2dd4bf;
   box-shadow: 0 0 6px #2dd4bf;
 }
+.scifi-badge-pill.agents {
+  border-color: rgba(165, 180, 252, 0.5);
+  background: rgba(165, 180, 252, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+.scifi-badge-pill.agents strong {
+  color: #a5b4fc;
+}
+.scifi-badge-pill.agents .scifi-pill-dot {
+  background: #a5b4fc;
+  box-shadow: 0 0 6px #a5b4fc;
+}
 .scifi-pill-dot {
   width: 6px;
   height: 6px;
@@ -1970,6 +1982,21 @@ code {
 .tools-table-panel {
   flex: 1;
   min-height: 0;
+}
+.subagent-panel {
+  flex: 0.8;
+  min-height: 0;
+  overflow: hidden;
+}
+.subagent-panel .table-scroll {
+  overflow: auto;
+}
+.scifi-table td.agent-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #a5b4fc;
+  font-weight: 600;
 }
 .table-scroll {
   overflow-y: auto;
@@ -2631,12 +2658,32 @@ code {
 }
 .scifi-log-item details > summary {
   display: grid;
-  grid-template-columns: 12px 66px 72px minmax(0, 1fr);
+  grid-template-columns: 12px 66px auto minmax(0, 1fr);
   gap: 8px;
   align-items: baseline;
   padding: 4px 8px;
   cursor: pointer;
   list-style: none;
+}
+.ev-kind {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+.ev-agent {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #a5b4fc;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(165, 180, 252, 0.45);
+  padding: 0 4px;
+  border-radius: 2px;
 }
 .scifi-log-item details > summary::-webkit-details-marker {
   display: none;
@@ -2687,6 +2734,7 @@ code {
 
 .stream-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   align-items: center;
   padding: 6px 8px;

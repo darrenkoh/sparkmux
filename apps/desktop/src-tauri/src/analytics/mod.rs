@@ -5,18 +5,20 @@ pub mod event;
 pub mod ingest;
 pub mod stats;
 pub mod storage;
+mod subagents;
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use tauri::command;
 
 use self::event::now_ms;
-use self::ingest::{ingest, source_id, Cursor};
+use self::ingest::{source_id, Cursor};
 use self::stats::{compute_stats, TabAnalyticsStats};
 use self::storage::{
     append_events, clear_all_analytics, get_storage_stats, is_enabled, load_meta, read_tab_events,
     resume_cursor, save_meta, set_enabled, AnalyticsConfig, TabMeta,
 };
+use self::subagents::{apply_child_totals, ingest_session};
 use crate::artifacts::{default_roots, detect_cli, pane_family, select_transcript};
 
 #[derive(Default)]
@@ -104,7 +106,7 @@ pub async fn tab_analytics(
         if enabled {
             if let (Some(k), Some(p)) = (kind, &transcript) {
                 let now = now_ms();
-                let new_events = ingest(k, p, &mut cursor, now);
+                let new_events = ingest_session(k, p, &mut cursor, now, &roots);
                 if !new_events.is_empty() {
                     let _ = append_events(&session_name, &tab_id, &new_events);
                     let mut meta = load_meta(&session_name, &tab_id).unwrap_or_else(|| TabMeta {
@@ -148,7 +150,7 @@ pub async fn tab_analytics(
         };
 
         let active_model = cursor.model.clone();
-        let stats = compute_stats(
+        let mut stats = compute_stats(
             &events_to_analyze,
             cursor.ctx_used,
             cursor.ctx_window,
@@ -157,9 +159,10 @@ pub async fn tab_analytics(
             cursor.lines_removed,
             &active_model,
         );
+        apply_child_totals(&mut stats, &cursor);
 
         let lifetime_stats = if active_src.is_some() && all_events.len() > events_to_analyze.len() {
-            Some(compute_stats(
+            let mut lifetime = compute_stats(
                 &all_events,
                 cursor.ctx_used,
                 cursor.ctx_window,
@@ -167,7 +170,9 @@ pub async fn tab_analytics(
                 cursor.lines_added,
                 cursor.lines_removed,
                 &active_model,
-            ))
+            );
+            apply_child_totals(&mut lifetime, &cursor);
+            Some(lifetime)
         } else {
             Some(stats.clone())
         };

@@ -292,7 +292,16 @@ function eventDetail(ev: AnalyticsEvent): string {
 }
 
 function eventKey(ev: AnalyticsEvent): string {
-  return [ev.t, ev.k, ev.n ?? "", ev.ms ?? 0, ev.a ?? "", (ev.b ?? "").slice(0, 48)].join("|");
+  return [ev.t, ev.k, ev.g ?? "", ev.n ?? "", ev.ms ?? 0, ev.a ?? "", (ev.b ?? "").slice(0, 48)].join(
+    "|",
+  );
+}
+
+function agentChip(ev: AnalyticsEvent): string {
+  const label = (ev.h ?? "").trim();
+  if (label) return label;
+  const id = ev.g ?? "";
+  return id.length > 8 ? id.slice(-8) : id;
 }
 
 function clearedStats(prev: TabAnalyticsStats): TabAnalyticsStats {
@@ -324,6 +333,7 @@ function clearedStats(prev: TabAnalyticsStats): TabAnalyticsStats {
     timeline_start: 0,
     timeline_end: 0,
     recent_events: [],
+    subagents: [],
   };
 }
 
@@ -345,7 +355,9 @@ export default function AnalyticsHud({
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [eventFilter, setEventFilter] = useState<"all" | "turns" | "tools" | "usage">("all");
+  const [eventFilter, setEventFilter] = useState<
+    "all" | "turns" | "tools" | "usage" | "agents"
+  >("all");
   const [openEvents, setOpenEvents] = useState<Set<string>>(() => new Set());
 
   const radarCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -792,6 +804,11 @@ export default function AnalyticsHud({
     st?.total_cache_write_tokens ?? 0,
   );
   const netDiff = (st?.lines_added ?? 0) - (st?.lines_removed ?? 0);
+  const subagents = st?.subagents ?? [];
+  const subagentTokens = subagents.reduce(
+    (sum, row) => sum + (row.input_tokens ?? 0) + (row.output_tokens ?? 0),
+    0,
+  );
 
   return (
     <div
@@ -848,6 +865,15 @@ export default function AnalyticsHud({
               <span className="scifi-pill-dot" />
               TOTAL CALLS: <strong>{st?.tool_calls ?? 0}</strong>
             </span>
+            {subagents.length > 0 && (
+              <span
+                className="scifi-badge-pill agents"
+                title="Child agents whose tokens and tools are included in these totals"
+              >
+                <span className="scifi-pill-dot" />
+                SUBAGENTS: <strong>{subagents.length}</strong>
+              </span>
+            )}
           </div>
 
           <div className="scifi-controls">
@@ -1093,6 +1119,70 @@ export default function AnalyticsHud({
                 </table>
               </div>
             </section>
+
+            <section className="scifi-panel subagent-panel">
+              <header>
+                <span className="tag">03</span>
+                <span>SUBAGENTS</span>
+                <small>
+                  {subagents.length} AGENTS · {formatNum(subagentTokens)} TOKENS
+                </small>
+              </header>
+              <div className="body table-scroll">
+                <table className="scifi-table">
+                  <thead>
+                    <tr>
+                      <th>AGENT</th>
+                      <th className="num">TOKENS</th>
+                      <th className="num">TOOLS</th>
+                      <th className="num">LAST</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {subagents.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="empty-row">
+                          NO SUBAGENTS
+                        </td>
+                      </tr>
+                    )}
+                    {subagents.map((row) => {
+                      const name = row.label.trim() || row.id;
+                      const tokens = row.input_tokens + row.output_tokens;
+                      const detail = [
+                        row.model,
+                        `+${row.lines_added} / -${row.lines_removed} lines`,
+                        row.tool_errors > 0 ? `${row.tool_errors} errors` : "",
+                        row.id,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ");
+                      return (
+                        <tr key={row.id || name}>
+                          <td className="agent-name" title={detail}>
+                            {name}
+                          </td>
+                          <td className="num" title={detail}>
+                            {formatNum(tokens)}
+                          </td>
+                          <td className="num">
+                            {row.tool_calls}
+                            {row.tool_errors > 0 ? (
+                              <span className="scifi-status error"> {row.tool_errors} ERR</span>
+                            ) : null}
+                          </td>
+                          <td className="num">
+                            {row.last_ts > 0
+                              ? new Date(row.last_ts).toLocaleTimeString()
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </aside>
 
           {/* Vertical resize sash between Left Panel and Center Viewport */}
@@ -1208,7 +1298,7 @@ export default function AnalyticsHud({
                 <small>LIVE REPLAY</small>
               </header>
               <div className="stream-filters">
-                {(["all", "turns", "tools", "usage"] as const).map((mode) => (
+                {(["all", "turns", "tools", "usage", "agents"] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
@@ -1238,6 +1328,7 @@ export default function AnalyticsHud({
                       if (eventFilter === "tools")
                         return ev.k === "tool" || ev.k === "result" || ev.k === "done";
                       if (eventFilter === "usage") return ev.k === "usage";
+                      if (eventFilter === "agents") return Boolean(ev.g);
                       return true;
                     })
                     .slice()
@@ -1264,8 +1355,15 @@ export default function AnalyticsHud({
                               <span className="ev-time">
                                 {new Date(ev.t).toLocaleTimeString()}
                               </span>
-                              <span className={`ev-tag ${ev.k}`}>
-                                [{ev.k.toUpperCase()}]
+                              <span className="ev-kind">
+                                {agentChip(ev) && (
+                                  <span className="ev-agent" title={ev.g || ev.h}>
+                                    {agentChip(ev)}
+                                  </span>
+                                )}
+                                <span className={`ev-tag ${ev.k}`}>
+                                  [{ev.k.toUpperCase()}]
+                                </span>
                               </span>
                               <span className="ev-content" title={detail}>
                                 {ev.n ? <strong>{ev.n}</strong> : null}

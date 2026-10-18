@@ -65,6 +65,12 @@ pub struct Event {
     /// Reasoning tokens.
     #[serde(default, skip_serializing_if = "zero")]
     pub tr: u64,
+    /// Subagent session id. Empty when the step belongs to the pane's own agent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub g: String,
+    /// Short label for that subagent (task title or role).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub h: String,
 }
 
 impl Event {

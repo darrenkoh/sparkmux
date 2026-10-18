@@ -38,6 +38,27 @@ pub struct ToolStat {
     pub last_used: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SubagentStat {
+    pub id: String,
+    pub label: String,
+    pub model: String,
+    pub tool_calls: u64,
+    pub tool_errors: u64,
+    pub thinking_blocks: u64,
+    pub replies: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+    pub last_ts: i64,
+    /// Wall time of the subagent's own turns. Not mixed into the human average.
+    pub turn_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelStat {
     pub model: String,
@@ -92,6 +113,10 @@ pub struct TabAnalyticsStats {
     pub timeline_end: i64,
     /// Recent log entries for HUD stream
     pub recent_events: Vec<Event>,
+    /// Child agents launched by this session. Their tokens and tools are
+    /// already included in the totals above.
+    #[serde(default)]
+    pub subagents: Vec<SubagentStat>,
 }
 
 /// Shortest column. A two-minute session still grows a new node every 15 seconds.
@@ -142,6 +167,7 @@ pub fn compute_stats(
 
     let mut tool_map: HashMap<String, (u64, u64, u64, u64, i64)> = HashMap::new(); // calls, errors, sum_dur, max_dur, last_ts
     let mut model_map: HashMap<String, ModelStat> = HashMap::new();
+    let mut sub_map: HashMap<String, SubagentStat> = HashMap::new();
 
     let mut turn_durations = Vec::new();
 
@@ -176,25 +202,58 @@ pub fn compute_stats(
             continue;
         }
 
+        let subagent = !ev.g.is_empty();
+        if subagent {
+            let row = sub_map.entry(ev.g.clone()).or_insert_with(|| SubagentStat {
+                id: ev.g.clone(),
+                ..SubagentStat::default()
+            });
+            if !ev.h.is_empty() {
+                row.label.clone_from(&ev.h);
+            }
+            row.last_ts = row.last_ts.max(ev.t);
+            if !ev.n.is_empty() && (ev.k == REPLY || ev.k == USAGE) {
+                row.model.clone_from(&ev.n);
+            }
+        }
+
         match ev.k.as_str() {
             USER => {
-                stats.user_prompts += 1;
-                buckets[b_idx].user_count += 1;
+                // A subagent's user step is the delegated task, not a person typing.
+                if !subagent {
+                    stats.user_prompts += 1;
+                    buckets[b_idx].user_count += 1;
+                }
             }
             THINK => {
                 stats.thinking_blocks += 1;
                 buckets[b_idx].think_count += 1;
+                if subagent {
+                    if let Some(row) = sub_map.get_mut(&ev.g) {
+                        row.thinking_blocks += 1;
+                    }
+                }
             }
             REPLY => {
                 stats.assistant_replies += 1;
                 buckets[b_idx].reply_count += 1;
-                if !ev.n.is_empty() && stats.active_model.is_empty() {
+                if !ev.n.is_empty() && stats.active_model.is_empty() && !subagent {
                     stats.active_model.clone_from(&ev.n);
+                }
+                if subagent {
+                    if let Some(row) = sub_map.get_mut(&ev.g) {
+                        row.replies += 1;
+                    }
                 }
             }
             TOOL => {
                 stats.tool_calls += 1;
                 buckets[b_idx].tool_count += 1;
+                if subagent {
+                    if let Some(row) = sub_map.get_mut(&ev.g) {
+                        row.tool_calls += 1;
+                    }
+                }
                 let entry = tool_map.entry(ev.n.clone()).or_insert((0, 0, 0, 0, ev.t));
                 entry.0 += 1;
                 entry.4 = entry.4.max(ev.t);
@@ -206,6 +265,11 @@ pub fn compute_stats(
                 stats.tool_results += 1;
                 if ev.err {
                     stats.tool_errors += 1;
+                    if subagent {
+                        if let Some(row) = sub_map.get_mut(&ev.g) {
+                            row.tool_errors += 1;
+                        }
+                    }
                 }
             }
             DONE => {
@@ -246,13 +310,28 @@ pub fn compute_stats(
                 buckets[b_idx].cache_read_tokens += ev.tc;
                 buckets[b_idx].cache_write_tokens += ev.tw;
                 buckets[b_idx].reasoning_tokens += ev.tr;
+                if subagent {
+                    if let Some(row) = sub_map.get_mut(&ev.g) {
+                        row.input_tokens += ev.ti;
+                        row.output_tokens += ev.to;
+                        row.cache_read_tokens += ev.tc;
+                        row.cache_write_tokens += ev.tw;
+                        row.reasoning_tokens += ev.tr;
+                    }
+                }
             }
             TURN => {
-                stats.turn_count += 1;
-                if ev.ms > 0 {
-                    turn_durations.push(ev.ms);
-                    stats.total_turn_duration_ms += ev.ms;
-                    stats.max_turn_duration_ms = stats.max_turn_duration_ms.max(ev.ms);
+                if subagent {
+                    if let Some(row) = sub_map.get_mut(&ev.g) {
+                        row.turn_ms = row.turn_ms.saturating_add(ev.ms);
+                    }
+                } else {
+                    stats.turn_count += 1;
+                    if ev.ms > 0 {
+                        turn_durations.push(ev.ms);
+                        stats.total_turn_duration_ms += ev.ms;
+                        stats.max_turn_duration_ms = stats.max_turn_duration_ms.max(ev.ms);
+                    }
                 }
             }
             _ => {}
@@ -289,6 +368,15 @@ pub fn compute_stats(
     let mut models: Vec<ModelStat> = model_map.into_values().collect();
     models.sort_by_key(|a| std::cmp::Reverse(a.input_tokens + a.output_tokens));
     stats.models = models;
+
+    let mut subagents: Vec<SubagentStat> = sub_map.into_values().collect();
+    subagents.sort_by(|a, b| {
+        b.last_ts
+            .cmp(&a.last_ts)
+            .then_with(|| a.label.cmp(&b.label))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    stats.subagents = subagents;
 
     for (i, b) in buckets.iter_mut().enumerate() {
         if b.user_count > 0 {
@@ -364,6 +452,52 @@ mod tests {
         let total_bucket_output: u64 = stats.timeline.iter().map(|b| b.output_tokens).sum();
         assert_eq!(total_bucket_input, 500);
         assert_eq!(total_bucket_output, 100);
+    }
+
+    #[test]
+    fn subagent_work_counts_without_a_human_prompt() {
+        let mut human = Event::new(1_000, USER);
+        human.b = "do it".into();
+        let mut delegated = Event::new(1_100, USER);
+        delegated.b = "research the parser".into();
+        delegated.g = "01a10000-0000-7000-8000-000000000002".into();
+        delegated.h = "Fix control-mode hang".into();
+        let mut tool = Event::new(1_500, TOOL);
+        tool.g.clone_from(&delegated.g);
+        tool.h.clone_from(&delegated.h);
+        tool.n = "grep".into();
+        let mut usage = Event::new(2_000, USAGE);
+        usage.g.clone_from(&delegated.g);
+        usage.h.clone_from(&delegated.h);
+        usage.ti = 400;
+        usage.to = 50;
+        usage.n = "grok-4.7".into();
+        usage.c = 1;
+        let mut child_turn = Event::new(2_100, TURN);
+        child_turn.g.clone_from(&delegated.g);
+        child_turn.ms = 5_000;
+
+        let stats = compute_stats(
+            &[human, delegated, tool, usage, child_turn],
+            0,
+            0,
+            0,
+            0,
+            0,
+            "grok-4.7",
+        );
+        assert_eq!(stats.user_prompts, 1);
+        assert_eq!(stats.turn_count, 1);
+        assert_eq!(stats.tool_calls, 1);
+        assert_eq!(stats.total_input_tokens, 400);
+        assert_eq!(stats.total_output_tokens, 50);
+        assert_eq!(stats.subagents.len(), 1);
+        assert_eq!(stats.subagents[0].label, "Fix control-mode hang");
+        assert_eq!(stats.subagents[0].input_tokens, 400);
+        assert_eq!(stats.subagents[0].tool_calls, 1);
+        assert_eq!(stats.subagents[0].turn_ms, 5_000);
+        assert_eq!(stats.timeline.iter().map(|b| b.user_count).sum::<u32>(), 1);
+        assert_eq!(stats.timeline.iter().map(|b| b.tokens).sum::<u64>(), 450);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! `events.jsonl` does. Tool calls and user turns are matched to
 //! `tool_started` and `turn_started` by position, which both files share.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -118,6 +118,48 @@ pub struct Cursor {
     pub lines_base_added: u64,
     #[serde(default)]
     pub lines_base_removed: u64,
+    /// Child transcripts already followed for this pane. Keyed by transcript path.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub children: HashMap<String, Cursor>,
+    /// Set on a child cursor. Full subagent id, not the parent's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_id: String,
+    /// Task title or role for `agent_id`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_label: String,
+    /// Claude parent bytes already scanned for sidechain records.
+    /// Independent of `offset`, which still skips those records.
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub side_offset: u64,
+    /// Bytes scanned for spawned conversation ids. Independent of `offset`.
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub spawn_offset: u64,
+    /// Roles seen on an Antigravity spawn call, waiting for the result line.
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    pub pending_roles: VecDeque<String>,
+    /// Subagents named by a parent transcript, including ones not on disk yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spawned: Vec<Spawned>,
+    /// Claude agent ids already imported from the parent sidechain.
+    /// A later agent file for one of these ids is followed from its end.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub side_ids: Vec<String>,
+    /// Tool-pairing state for Claude sidechain lines. Kept off the parent cursor
+    /// so a child tool result cannot close a parent tool call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<Box<Cursor>>,
+}
+
+fn zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+/// One child conversation discovered from a parent transcript.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Spawned {
+    pub id: String,
+    pub label: String,
+    pub path: String,
 }
 
 impl Cursor {
@@ -143,6 +185,12 @@ impl Cursor {
         self.waiting_ts = 0;
         self.last_stream_ms = 0;
         self.last_stream_tokens = 0;
+        for child in self.children.values_mut() {
+            child.mark_purged();
+        }
+        if let Some(side) = self.sidechain.as_mut() {
+            side.mark_purged();
+        }
     }
 }
 
@@ -168,13 +216,12 @@ pub fn source_id(kind: CliKind, path: &Path) -> String {
     raw.chars().take(8).collect()
 }
 
-pub fn ingest(kind: CliKind, path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
+/// Parent transcript only. Live Stats adds child agents on top of `ingest_one`.
+/// Unit tests keep this path so a parent fixture stays parent-only.
+#[cfg(test)]
+fn ingest(kind: CliKind, path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
     let src = source_id(kind, path);
-    let mut out = match kind {
-        CliKind::Grok => ingest_grok(path, cur, now),
-        CliKind::Claude => ingest_claude(path, cur, now),
-        CliKind::Antigravity => ingest_agy(path, cur, now),
-    };
+    let mut out = ingest_one(kind, path, cur, now, false);
     for event in &mut out {
         event.s.clone_from(&src);
         event.cli = kind.as_str().to_string();
@@ -183,9 +230,26 @@ pub fn ingest(kind: CliKind, path: &Path, cur: &mut Cursor, now: i64) -> Vec<Eve
     out
 }
 
+/// Read one transcript. `keep_sidechain` is for a Claude agent file, whose
+/// records are the subagent's own steps. The parent transcript leaves this
+/// false and picks those steps up separately so they are not mixed in twice.
+pub(super) fn ingest_one(
+    kind: CliKind,
+    path: &Path,
+    cur: &mut Cursor,
+    now: i64,
+    keep_sidechain: bool,
+) -> Vec<Event> {
+    match kind {
+        CliKind::Grok => ingest_grok(path, cur, now),
+        CliKind::Claude => ingest_claude(path, cur, now, keep_sidechain),
+        CliKind::Antigravity => ingest_agy(path, cur, now),
+    }
+}
+
 /// Complete lines appended after `offset`. Returns the lines and the new offset.
 /// A file that shrank was rewritten; skip to its end rather than import twice.
-fn read_new_lines(path: &Path, offset: u64, max: u64) -> Option<(Vec<Vec<u8>>, u64)> {
+pub(super) fn read_new_lines(path: &Path, offset: u64, max: u64) -> Option<(Vec<Vec<u8>>, u64)> {
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.file_type().is_file() {
         return None;
@@ -217,7 +281,7 @@ fn read_new_lines(path: &Path, offset: u64, max: u64) -> Option<(Vec<Vec<u8>>, u
     Some((lines, offset + consumed.len() as u64))
 }
 
-fn parse_obj(line: &[u8]) -> Option<Map<String, Value>> {
+pub(super) fn parse_obj(line: &[u8]) -> Option<Map<String, Value>> {
     match serde_json::from_slice::<Value>(line).ok()? {
         Value::Object(map) => Some(map),
         _ => None,
@@ -251,7 +315,7 @@ fn sibling(path: &Path, name: &str) -> Option<std::path::PathBuf> {
     meta.file_type().is_file().then_some(file)
 }
 
-fn read_small_json(path: &Path, cap: u64) -> Option<Map<String, Value>> {
+pub(super) fn read_small_json(path: &Path, cap: u64) -> Option<Map<String, Value>> {
     let file = File::open(path).ok()?;
     match serde_json::from_reader::<_, Value>(file.take(cap)).ok()? {
         Value::Object(map) => Some(map),
@@ -839,7 +903,7 @@ fn grok_chat(
 
 // ---------------------------------------------------------------- Claude
 
-fn ingest_claude(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
+fn ingest_claude(path: &Path, cur: &mut Cursor, now: i64, keep_sidechain: bool) -> Vec<Event> {
     let mut out = Vec::new();
     let modified = mtime_ms(path) as i64;
     if let Some((lines, next)) = read_new_lines(path, cur.offset, MAX_READ) {
@@ -851,15 +915,115 @@ fn ingest_claude(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
                 } else {
                     modified.min(now)
                 };
-                claude_record(&obj, cur, fallback, &mut out);
+                claude_record(&obj, cur, fallback, keep_sidechain, &mut out);
             }
         }
     }
     out
 }
 
-fn claude_record(obj: &Map<String, Value>, cur: &mut Cursor, fallback: i64, out: &mut Vec<Event>) {
-    if obj.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+/// Sidechain lines from the parent Claude transcript whose agent has no
+/// `subagents/agent-<id>.jsonl` file yet. Ids in `skip` are read from that file
+/// instead, so the same step is not stored twice.
+pub(super) fn pull_claude_sidechain(
+    path: &Path,
+    cur: &mut Cursor,
+    now: i64,
+    skip: &HashSet<String>,
+) -> Vec<Event> {
+    let mut out = Vec::new();
+    let Some((lines, next)) = read_new_lines(path, cur.side_offset, MAX_READ) else {
+        return out;
+    };
+    cur.side_offset = next;
+    let parent_ts = cur.last_ts;
+    let mut noted = Vec::new();
+    {
+        let side = cur
+            .sidechain
+            .get_or_insert_with(|| Box::new(Cursor::default()));
+        for line in lines {
+            let Some(obj) = parse_obj(&line) else {
+                continue;
+            };
+            if obj.get("isSidechain").and_then(Value::as_bool) != Some(true) {
+                continue;
+            }
+            let id = claude_agent_id(&obj);
+            if id.is_empty() || skip.contains(&id) || !agent_id_ok(&id) {
+                continue;
+            }
+            let fallback = if side.last_ts > 0 {
+                side.last_ts
+            } else if parent_ts > 0 {
+                parent_ts
+            } else {
+                now
+            };
+            let from = out.len();
+            claude_record(&obj, side, fallback, true, &mut out);
+            let label = claude_agent_label(&obj);
+            for event in &mut out[from..] {
+                event.g.clone_from(&id);
+                if event.h.is_empty() {
+                    event.h.clone_from(&label);
+                }
+            }
+            noted.push(id);
+        }
+    }
+    for id in noted {
+        if !cur.side_ids.iter().any(|seen| seen == &id) && cur.side_ids.len() < 128 {
+            cur.side_ids.push(id);
+        }
+    }
+    out
+}
+
+pub(super) fn agent_id_ok(id: &str) -> bool {
+    let n = id.len();
+    (8..=80).contains(&n)
+        && !id.contains("..")
+        && !id.starts_with('.')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn claude_agent_id(obj: &Map<String, Value>) -> String {
+    for key in ["agentId", "agent_id", "subagentId", "subagent_id"] {
+        let text = str_of(obj, key).trim();
+        if agent_id_ok(text) {
+            return text.to_string();
+        }
+    }
+    String::new()
+}
+
+fn claude_agent_label(obj: &Map<String, Value>) -> String {
+    for key in ["subagent_type", "subagentType", "agentType", "agent_type"] {
+        let text = str_of(obj, key).trim();
+        if !text.is_empty() {
+            return clip_label(text);
+        }
+    }
+    String::new()
+}
+
+pub(super) fn clip_label(text: &str) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.chars().take(80).collect()
+}
+
+fn claude_record(
+    obj: &Map<String, Value>,
+    cur: &mut Cursor,
+    fallback: i64,
+    keep_sidechain: bool,
+    out: &mut Vec<Event>,
+) {
+    let sidechain = obj.get("isSidechain").and_then(Value::as_bool) == Some(true);
+    if sidechain && !keep_sidechain {
         return;
     }
     let ts = parse_iso_ms(str_of(obj, "timestamp")).unwrap_or(fallback);

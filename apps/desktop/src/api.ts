@@ -337,6 +337,26 @@ export interface ModelStat {
   reasoning_tokens: number;
 }
 
+export interface SubagentStat {
+  id: string;
+  label: string;
+  model: string;
+  tool_calls: number;
+  tool_errors: number;
+  thinking_blocks: number;
+  replies: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  lines_added: number;
+  lines_removed: number;
+  last_ts: number;
+  /** Wall time of this subagent's own turns. Kept out of the human average. */
+  turn_ms: number;
+}
+
 export interface AnalyticsEvent {
   t: number;
   k: string;
@@ -353,6 +373,10 @@ export interface AnalyticsEvent {
   tc?: number;
   tw?: number;
   tr?: number;
+  /** Subagent session id. Empty when the step belongs to the pane's own agent. */
+  g?: string;
+  /** Short label for that subagent (task title or role). */
+  h?: string;
 }
 
 export interface TabAnalyticsStats {
@@ -390,6 +414,8 @@ export interface TabAnalyticsStats {
   /** Last event time. */
   timeline_end?: number;
   recent_events: AnalyticsEvent[];
+  /** Child agents. Their tokens and tools are already included in the totals. */
+  subagents?: SubagentStat[];
 }
 
 export interface AnalyticsConfig {
