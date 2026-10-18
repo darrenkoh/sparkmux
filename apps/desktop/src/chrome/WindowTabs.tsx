@@ -52,7 +52,7 @@ export default function WindowTabs({
       {windows.map((win) => {
         const active = win.id === visibleWindowId;
         const editing = editingId === win.id;
-        const unread = (win.bell || win.activity) && !active;
+        const unread = win.unread && !active;
         return (
           <div
             key={win.id}

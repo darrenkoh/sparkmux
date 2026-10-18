@@ -24,6 +24,8 @@ const sampleSnapshot: Snapshot = {
           layout: "",
           bell: false,
           activity: false,
+          activity_epoch: 0,
+          unread: false,
           panes: [
             {
               id: "%1",
@@ -50,6 +52,8 @@ const sampleSnapshot: Snapshot = {
           layout: "",
           bell: false,
           activity: false,
+          activity_epoch: 0,
+          unread: false,
           panes: [
             {
               id: "%2",

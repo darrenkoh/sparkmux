@@ -1,5 +1,6 @@
 mod analytics;
 mod artifacts;
+mod attention;
 mod bedrock_cost;
 mod change_graph;
 mod chronicle;

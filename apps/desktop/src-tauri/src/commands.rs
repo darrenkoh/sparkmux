@@ -1,10 +1,14 @@
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use sparkmux_core::{attach_target, parse_window_layout, LayoutNode, Snapshot, SOCKET_NAME};
+use sparkmux_core::{
+    attach_target, parse_window_layout, LayoutNode, Pane, Snapshot, Window, SOCKET_NAME,
+};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
+use crate::attention::{self, AttentionLabel, LabelToken};
 use crate::control;
 use crate::error::{map_error, too_old};
 use crate::state::{persist_last_session, ActiveTarget, AppState};
@@ -12,6 +16,8 @@ use crate::state::{persist_last_session, ActiveTarget, AppState};
 /// A stuck tmux server must not pin the UI. Blocking `TmuxClient::run` calls
 /// happen off the `AppState` lock and fail closed after this bound.
 const TMUX_BLOCKING_TIMEOUT: Duration = Duration::from_secs(5);
+/// Hidden agent windows that need a fresh transcript on this poll.
+const MAX_ATTENTION_READS: usize = 8;
 
 async fn off_lock<T, F>(op: F) -> Result<T, String>
 where
@@ -107,7 +113,7 @@ pub async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
         inner.ensure_client()?.clone()
     };
     match off_lock(move || client.snapshot().map_err(|e| map_error(&e))).await {
-        Ok(s) => Ok(s),
+        Ok(snap) => annotate_attention(&state, snap).await,
         Err(msg) if msg.starts_with("server-down") => Ok(sparkmux_core::Snapshot::empty()),
         Err(msg) => Err(msg),
     }
@@ -129,8 +135,117 @@ pub async fn ensure_ready(state: State<'_, AppState>) -> Result<Snapshot, String
             .map_err(|e| map_error(&e))
     })
     .await?;
+    {
+        let mut inner = state.inner.lock().await;
+        inner.stopped = false;
+    }
+    annotate_attention(&state, snap).await
+}
+
+struct AttentionRead {
+    id: String,
+    command: String,
+    cwd: String,
+    title: String,
+}
+
+fn attention_pane(window: &Window) -> Option<&Pane> {
+    if let Some(pane) = window.panes.iter().find(|pane| pane.active) {
+        return Some(pane);
+    }
+    window.panes.first()
+}
+
+fn pane_is_agent(pane: &Pane) -> bool {
+    crate::artifacts::detect_cli(&pane.command, &pane.title, &[]).is_some()
+}
+
+/// Mark hidden windows unread. Transcript reads happen off the state lock.
+async fn annotate_attention(state: &AppState, mut snap: Snapshot) -> Result<Snapshot, String> {
+    let now = Instant::now();
+    let (attached, mut reads) = {
+        let inner = state.inner.lock().await;
+        let attached = inner.attached_session.clone();
+        let mut reads = Vec::new();
+        for session in &snap.sessions {
+            let on_screen = attached.as_deref() == Some(session.name.as_str());
+            for window in &session.windows {
+                if on_screen && window.active {
+                    continue;
+                }
+                let Some(pane) = attention_pane(window) else {
+                    continue;
+                };
+                if !pane_is_agent(pane) {
+                    continue;
+                }
+                if !inner
+                    .attention
+                    .wants_transcript(&window.id, window.activity_epoch, now)
+                {
+                    continue;
+                }
+                reads.push(AttentionRead {
+                    id: window.id.clone(),
+                    command: pane.command.clone(),
+                    cwd: pane.path.to_string_lossy().into_owned(),
+                    title: pane.title.clone(),
+                });
+            }
+        }
+        (attached, reads)
+    };
+
+    if reads.len() > MAX_ATTENTION_READS {
+        reads.truncate(MAX_ATTENTION_READS);
+    }
+
+    let roots = crate::artifacts::default_roots();
+    let loaded = tokio::task::spawn_blocking(move || {
+        let mut out = Vec::with_capacity(reads.len());
+        for read in reads {
+            // pid 0 skips the process-family walk. Snapshot polling must not touch /proc.
+            let feed =
+                crate::artifacts::load_artifacts(&read.command, &read.cwd, &read.title, 0, &roots);
+            out.push((read.id, attention::label_from_feed(&feed)));
+        }
+        out
+    })
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!("attention transcripts were not read: {err}");
+        Vec::new()
+    });
+    let mut fresh: HashMap<String, (Option<LabelToken>, Option<AttentionLabel>)> =
+        loaded.into_iter().collect();
+
     let mut inner = state.inner.lock().await;
-    inner.stopped = false;
+    for session in &mut snap.sessions {
+        let on_screen = attached.as_deref() == Some(session.name.as_str());
+        for window in &mut session.windows {
+            let visible = on_screen && window.active;
+            let agent = attention_pane(window).is_some_and(pane_is_agent);
+            let label = if visible {
+                None
+            } else if let Some((token, label)) = fresh.remove(&window.id) {
+                inner.attention.store_label(&window.id, token, label, now)
+            } else {
+                // A skipped read is not "no classifier result". Keep the last label.
+                inner.attention.cached_label(&window.id)
+            };
+            window.unread = inner.attention.unread(
+                &attention::WindowAttention {
+                    id: window.id.clone(),
+                    bell: window.bell,
+                    activity_epoch: window.activity_epoch,
+                    visible,
+                    agent,
+                    label,
+                },
+                now,
+            );
+        }
+    }
     Ok(snap)
 }
 
@@ -556,4 +671,234 @@ pub fn open_popout_window(
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use sparkmux_core::{Pane, Session};
+
+    use super::*;
+
+    fn pane(id: &str, command: &str) -> Pane {
+        Pane {
+            id: id.into(),
+            index: 0,
+            command: command.into(),
+            path: PathBuf::from("/sparkmux-qa-attention-does-not-exist"),
+            pid: 0,
+            active: true,
+            width: 80,
+            height: 24,
+            title: String::new(),
+            alternate: false,
+            mouse: false,
+            mouse_drag: false,
+            mouse_any: false,
+            mouse_sgr: false,
+        }
+    }
+
+    fn window(
+        id: &str,
+        name: &str,
+        index: u32,
+        active: bool,
+        bell: bool,
+        activity: bool,
+        epoch: i64,
+        command: &str,
+    ) -> Window {
+        Window {
+            id: id.into(),
+            index,
+            name: name.into(),
+            active,
+            layout: String::new(),
+            bell,
+            activity,
+            activity_epoch: epoch,
+            unread: false,
+            panes: vec![pane(id, command)],
+        }
+    }
+
+    fn session(name: &str, attached: bool, windows: Vec<Window>) -> Session {
+        Session {
+            id: name.into(),
+            name: name.into(),
+            attached,
+            created_epoch: 0,
+            activity_epoch: 0,
+            path: PathBuf::from("/tmp"),
+            windows,
+        }
+    }
+
+    fn tree(sessions: Vec<Session>) -> Snapshot {
+        Snapshot {
+            sessions,
+            fetched_at: Instant::now(),
+        }
+    }
+
+    async fn attached(name: &str) -> AppState {
+        let state = AppState::new();
+        state.inner.lock().await.attached_session = Some(name.to_string());
+        state
+    }
+
+    #[tokio::test]
+    async fn annotate_visible_window_is_the_attached_sessions_active_window() {
+        let state = attached("Sparkmux").await;
+        // "other" is first and tmux-attached, so a bug that uses snapshot order
+        // or session.attached would treat the wrong window as on screen.
+        let snap = annotate_attention(
+            &state,
+            tree(vec![
+                session(
+                    "other",
+                    true,
+                    vec![window("old", "zsh", 0, true, true, true, 10, "zsh")],
+                ),
+                session(
+                    "Sparkmux",
+                    false,
+                    vec![
+                        window("agy", "agy", 0, false, true, true, 10, "zsh"),
+                        window("grok", "grok", 1, true, true, true, 50, "grok"),
+                    ],
+                ),
+            ]),
+        )
+        .await
+        .expect("annotate");
+        let spark = snap
+            .sessions
+            .iter()
+            .find(|s| s.name == "Sparkmux")
+            .expect("sparkmux");
+        let grok = spark.windows.iter().find(|w| w.id == "grok").expect("grok");
+        let agy = spark.windows.iter().find(|w| w.id == "agy").expect("agy");
+        let other = &snap.sessions[0].windows[0];
+        assert!(
+            !grok.unread,
+            "the active window of the attached session is never unread"
+        );
+        assert!(
+            agy.unread,
+            "a hidden bell is unread even on the first sight"
+        );
+        assert!(
+            other.unread,
+            "the active window of another session is not the one on screen"
+        );
+    }
+
+    #[tokio::test]
+    async fn annotate_activity_flag_does_not_dot_a_hidden_shell() {
+        let state = attached("Sparkmux").await;
+        let hidden = |epoch| {
+            tree(vec![session(
+                "Sparkmux",
+                true,
+                vec![
+                    window("grok", "grok", 0, true, false, true, epoch + 5, "grok"),
+                    window("agy", "agy", 1, false, false, true, epoch, "zsh"),
+                ],
+            )])
+        };
+        let first = annotate_attention(&state, hidden(100))
+            .await
+            .expect("first");
+        let agy = &first.sessions[0].windows[1];
+        assert!(!agy.unread, "first hidden sight baselines");
+        assert!(!first.sessions[0].windows[0].unread, "visible grok");
+        let same = annotate_attention(&state, hidden(100))
+            .await
+            .expect("same epoch");
+        assert!(
+            !same.sessions[0].windows[1].unread,
+            "a latched activity flag is not unread"
+        );
+        let moved = annotate_attention(&state, hidden(102))
+            .await
+            .expect("moved");
+        assert!(
+            !moved.sessions[0].windows[1].unread,
+            "a shell burst is not unread before it has been quiet for 3s"
+        );
+    }
+
+    #[tokio::test]
+    async fn annotate_keeps_a_cached_label_when_the_read_cap_drops_the_window() {
+        let state = attached("Sparkmux").await;
+        let mut windows = Vec::new();
+        for index in 0..9 {
+            windows.push(window(
+                &format!("w{index}"),
+                "agy",
+                index,
+                false,
+                false,
+                true,
+                10,
+                "agy",
+            ));
+        }
+        let first = annotate_attention(
+            &state,
+            tree(vec![session("Sparkmux", true, windows.clone())]),
+        )
+        .await
+        .expect("baseline");
+        assert!(
+            first.sessions[0].windows.iter().all(|w| !w.unread),
+            "first sight does not dot"
+        );
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(5))
+            .expect("past");
+        {
+            let mut inner = state.inner.lock().await;
+            assert!(!inner.attention.unread(
+                &attention::WindowAttention {
+                    id: "w8".into(),
+                    bell: false,
+                    activity_epoch: 12,
+                    visible: false,
+                    agent: true,
+                    label: Some(AttentionLabel::Running),
+                },
+                past,
+            ));
+            inner.attention.store_label(
+                "w8",
+                Some(LabelToken {
+                    transcript_path: "/tmp/chat.jsonl".into(),
+                    file_len: 4,
+                    last_entry_id: "a".into(),
+                }),
+                Some(AttentionLabel::Running),
+                past,
+            );
+        }
+        for window in &mut windows {
+            window.activity_epoch = 12;
+        }
+        let second = annotate_attention(&state, tree(vec![session("Sparkmux", true, windows)]))
+            .await
+            .expect("capped");
+        let held = second.sessions[0]
+            .windows
+            .iter()
+            .find(|w| w.id == "w8")
+            .expect("w8");
+        assert!(
+            !held.unread,
+            "a running agent past the 8-read cap must not be treated as unlabeled"
+        );
+    }
 }

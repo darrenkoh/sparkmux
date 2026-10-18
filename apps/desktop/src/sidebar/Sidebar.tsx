@@ -95,7 +95,7 @@ export default function Sidebar({
             selection?.kind === "session" && selection.name === session.name;
           const live = attachedSession === session.name;
           const sessAttn = session.windows.some(
-            (w) => (w.bell || w.activity) && !(live && w.id === visibleWindowId),
+            (w) => w.unread && !(live && w.id === visibleWindowId),
           );
           return (
             <div key={session.id} className={`sess ${live ? "live" : ""}`}>
@@ -149,7 +149,7 @@ export default function Sidebar({
                   const winSelected =
                     selection?.kind === "window" && selection.id === win.id;
                   const winVisible = visibleWindowId === win.id && live;
-                  const winAttn = (win.bell || win.activity) && !winVisible;
+                  const winAttn = win.unread && !winVisible;
                   return (
                     <div key={win.id} className="win-block">
                       <div

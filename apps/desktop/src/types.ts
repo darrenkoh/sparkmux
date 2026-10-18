@@ -42,6 +42,8 @@ export interface Window {
   layout: string;
   bell: boolean;
   activity: boolean;
+  activity_epoch: number;
+  unread: boolean;
   panes: Pane[];
 }
 

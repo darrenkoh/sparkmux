@@ -10,6 +10,7 @@ use sparkmux_core::{
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tokio::sync::Mutex;
 
+use crate::attention::AttentionBook;
 use crate::error::map_error;
 
 pub struct PaneFeed {
@@ -44,6 +45,7 @@ pub struct Inner {
     pub config: Config,
     pub spawn: SessionSpawn,
     pub attached_session: Option<String>,
+    pub attention: AttentionBook,
     pub channels: Arc<Mutex<HashMap<String, PaneFeed>>>,
     pub pump: Option<tauri::async_runtime::JoinHandle<()>>,
     pub stopped: bool,
@@ -63,6 +65,7 @@ impl AppState {
                 config,
                 spawn: gui_spawn_env(),
                 attached_session: None,
+                attention: AttentionBook::default(),
                 channels: Arc::new(Mutex::new(HashMap::new())),
                 pump: None,
                 stopped: false,

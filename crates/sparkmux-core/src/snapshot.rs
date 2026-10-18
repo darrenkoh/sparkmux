@@ -25,7 +25,8 @@ pub const WIN_FMT: &str = concat!(
     "#{s/@@@/_/:window_name}@@@",
     "#{window_active}@@@#{window_panes}@@@",
     "#{s/@@@/_/:window_layout}@@@",
-    "#{window_bell_flag}@@@#{window_activity_flag}",
+    "#{window_bell_flag}@@@#{window_activity_flag}@@@",
+    "#{window_activity}",
 );
 pub const PANE_FMT: &str = concat!(
     "#{session_id}@@@#{window_id}@@@#{pane_id}@@@#{pane_index}@@@",
@@ -74,6 +75,9 @@ pub struct Window {
     pub layout: String,
     pub bell: bool,
     pub activity: bool,
+    pub activity_epoch: i64,
+    /// Filled by the desktop crate before the UI sees the snapshot; the parser leaves this false.
+    pub unread: bool,
     pub panes: Vec<Pane>,
 }
 
@@ -128,6 +132,7 @@ struct RawWindow {
     layout: String,
     bell: bool,
     activity: bool,
+    activity_epoch: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +172,8 @@ pub fn parse_snapshot(sessions: &str, windows: &str, panes: &str) -> Result<Snap
             layout: win.layout,
             bell: win.bell,
             activity: win.activity,
+            activity_epoch: win.activity_epoch,
+            unread: false,
             panes: Vec::new(),
         });
     }
@@ -270,6 +277,7 @@ fn parse_windows(blob: &str) -> Result<Vec<RawWindow>> {
             layout: field(&f, 6).to_string(),
             bell: parse_flag(field(&f, 7)),
             activity: parse_flag(field(&f, 8)),
+            activity_epoch: parse_i64(field(&f, 9)),
         });
     }
     Ok(out)
@@ -614,6 +622,8 @@ mod tests {
             layout: String::new(),
             bell: false,
             activity: false,
+            activity_epoch: 0,
+            unread: false,
             panes,
         }
     }
@@ -627,8 +637,26 @@ mod tests {
         let snap = parse_snapshot(sessions, windows, panes).unwrap();
         assert!(!snap.sessions[0].windows[0].bell);
         assert!(!snap.sessions[0].windows[0].activity);
+        assert_eq!(snap.sessions[0].windows[0].activity_epoch, 0);
+        assert!(!snap.sessions[0].windows[0].unread);
         assert!(snap.sessions[0].windows[1].bell);
         assert!(snap.sessions[0].windows[1].activity);
+        assert_eq!(snap.sessions[0].windows[1].activity_epoch, 0);
+        assert!(!snap.sessions[0].windows[1].unread);
+    }
+
+    #[test]
+    fn window_activity_field_is_activity_epoch() {
+        let sessions = "$0@@@main@@@1@@@1@@@10@@@20@@@/\n";
+        let windows = "$0@@@@7@@@3@@@build@@@0@@@1@@@layout@@@1@@@0@@@1700001111\n";
+        let snap = parse_snapshot(sessions, windows, "").unwrap();
+        let win = &snap.sessions[0].windows[0];
+        assert_eq!(win.id, "@7");
+        assert_eq!(win.index, 3);
+        assert!(win.bell);
+        assert!(!win.activity);
+        assert_eq!(win.activity_epoch, 1_700_001_111);
+        assert!(!win.unread);
     }
 
     fn pane(id: &str) -> Pane {
