@@ -9,6 +9,7 @@ import {
   aggregateMiniStats,
   buildChannelBreakdown,
   buildSubagentsSummary,
+  isLiveAt,
   shortModelName,
   type AggregatedMiniStats,
 } from "./miniStatModel.ts";
@@ -109,6 +110,7 @@ test("shortModelName drops provider, date, and build suffixes", () => {
   assert.equal(shortModelName("models/gemini-2.5-pro"), "gemini-2.5-pro");
   assert.equal(shortModelName("claude-opus-4-5-20251101"), "opus-4-5");
   assert.equal(shortModelName("grok-4"), "grok-4");
+  assert.equal(shortModelName("models/claude-sonnet-4-5-20250929-build"), "sonnet-4-5");
   assert.equal(shortModelName("  "), "");
   assert.equal(shortModelName(null), "");
 });
@@ -212,6 +214,23 @@ test("subagents sum tokens, tools, and errors and sort live rows first", () => {
   assert.equal(summary.rows[2].modelShort, "haiku-4-5");
   assert.equal(summary.rows[2].linesAdded, 8);
   assert.equal(summary.rows[2].linesRemoved, 3);
+});
+
+test("a non-finite clock does not mark a recent event live", () => {
+  const now = 1_000_000;
+  assert.equal(isLiveAt(now - 1_000, Number.NaN), false);
+  assert.equal(isLiveAt(now - 1_000, Number.POSITIVE_INFINITY), false);
+  const agg = aggregateMiniStats(
+    stats({
+      timeline_end: now - 500,
+      subagents: [sub({ id: "child", label: "Scout", last_ts: now - 500 })],
+    }),
+    "grok",
+    Number.NaN,
+  );
+  assert.equal(agg.agent.isLive, false);
+  assert.equal(agg.subagents.activeCount, 0);
+  assert.equal(agg.subagents.rows[0].isLive, false);
 });
 
 test("a live child does not mark the primary agent live", () => {

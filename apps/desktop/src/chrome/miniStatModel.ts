@@ -89,9 +89,10 @@ function finite(value: number): number {
 /** Recent enough to paint a live dot. A missing or zero timestamp is idle. */
 export function isLiveAt(ts: number | null | undefined, nowMs: number): boolean {
   const t = raw(ts);
-  const now = raw(nowMs);
   if (t <= 0) return false;
-  return now - t <= LIVE_THRESHOLD_MS;
+  // A bad clock must not collapse to 0, or every past event looks live.
+  if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) return false;
+  return nowMs - t <= LIVE_THRESHOLD_MS;
 }
 
 /**
@@ -103,8 +104,8 @@ export function shortModelName(model: string | null | undefined): string {
   if (!name) return "";
   name = name.replace(/^models\//, "");
   name = name.replace(/^claude-/, "");
-  name = name.replace(/-\d{8}$/, "");
   name = name.replace(/-build$/, "");
+  name = name.replace(/-\d{8}$/, "");
   return name;
 }
 
