@@ -2996,6 +2996,9 @@ code {
   min-width: 0;
   position: relative;
   overflow: hidden;
+  background: #06080c;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .scifi-panel.viewport.docked {
@@ -3052,6 +3055,456 @@ code {
   background: rgba(255, 154, 60, 0.2);
   border-color: #ff9a3c;
   color: #ff9a3c;
+}
+
+.mini-stat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  background: rgba(12, 16, 23, 0.95);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.mini-stat-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mini-stat-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: #ff9a3c;
+  white-space: nowrap;
+}
+
+.mini-stat-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+  flex: 0 0 auto;
+}
+
+.mini-stat-dot.live {
+  background: #4ade80;
+  box-shadow: 0 0 6px #4ade80;
+  animation: mini-stat-pulse 1.4s ease-in-out infinite;
+}
+
+.mini-stat-cli {
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: #ff9a3c;
+  border: 1px solid rgba(255, 154, 60, 0.35);
+  background: rgba(255, 154, 60, 0.12);
+  padding: 1px 5px;
+  border-radius: 2px;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-stat-cli.idle {
+  color: #94a3b8;
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.mini-stat-actions {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.mini-stat-btn {
+  background: rgba(14, 18, 24, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #94a3b8;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+}
+
+.mini-stat-btn:hover {
+  background: rgba(255, 154, 60, 0.2);
+  border-color: #ff9a3c;
+  color: #ff9a3c;
+}
+
+.mini-stat-deck {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  flex: 0 0 auto;
+  max-height: 58%;
+  overflow-y: auto;
+  border-bottom: 1px solid rgba(255, 154, 60, 0.18);
+  background: linear-gradient(180deg, rgba(15, 20, 28, 0.85), rgba(8, 11, 16, 0.95));
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 154, 60, 0.35) transparent;
+}
+
+.mini-agent-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 3px;
+  font-size: 9.5px;
+  line-height: 1.3;
+}
+
+.mini-agent-model {
+  color: #e2e8f0;
+  font-weight: 600;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mini-live-pill {
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  padding: 0 5px;
+  letter-spacing: 0.06em;
+  font-size: 8px;
+}
+
+.mini-live-pill.live {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.55);
+  animation: mini-stat-pulse 1.4s ease-in-out infinite;
+}
+
+.mini-channels-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+}
+
+.mini-channel-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.mini-channel-cell {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  font-size: 8.5px;
+}
+
+.mini-channel-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.mini-channel-tag {
+  letter-spacing: 0.04em;
+  color: #cbd5e1;
+}
+
+.mini-channel-count {
+  margin-left: auto;
+  color: #e2e8f0;
+}
+
+.mini-channel-bar {
+  display: flex;
+  height: 3px;
+  width: 100%;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mini-channel-seg {
+  height: 3px;
+  min-width: 0;
+}
+
+.mini-channel-seg.is-empty {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mini-kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.mini-kpi-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+}
+
+.mini-kpi-label {
+  font-size: 8px;
+  letter-spacing: 0.07em;
+  color: #94a3b8;
+}
+
+.mini-kpi-value {
+  font-size: 11px;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-kpi-value.mini-cost {
+  color: #facc15;
+}
+
+.mini-kpi-sub {
+  font-size: 8px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mini-kpi-sub.is-err {
+  color: #f87171;
+}
+
+.mini-cache-bar,
+.mini-churn-bar {
+  display: flex;
+  height: 3px;
+  width: 100%;
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mini-cache-bar > span {
+  height: 3px;
+  background: #5b8def;
+}
+
+.mini-churn-add {
+  height: 3px;
+  background: #2dd4bf;
+}
+
+.mini-churn-del {
+  height: 3px;
+  background: #f87171;
+}
+
+.mini-subagents-card {
+  border: 1px solid rgba(165, 180, 252, 0.2);
+  background: rgba(165, 180, 252, 0.04);
+  border-radius: 3px;
+}
+
+.mini-subagents-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 6px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+div.mini-subagents-head {
+  cursor: default;
+}
+
+.mini-sub-title {
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: #c7d2fe;
+  white-space: nowrap;
+}
+
+.mini-sub-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 8px;
+  color: #a5b4fc;
+  white-space: nowrap;
+}
+
+.mini-err {
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 2px;
+  padding: 0 3px;
+  letter-spacing: 0.04em;
+}
+
+.mini-subagent-list {
+  /* Three 22px rows, two 2px gaps, and 6px of vertical padding. */
+  max-height: 76px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(165, 180, 252, 0.4) transparent;
+}
+
+.mini-subagent-row {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  min-width: 0;
+}
+
+.sub-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #64748b;
+  flex: 0 0 auto;
+}
+
+.sub-dot.live {
+  background: #4ade80;
+  box-shadow: 0 0 4px #4ade80;
+}
+
+.sub-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e2e8f0;
+}
+
+.sub-model {
+  flex: 0 1 72px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #a5b4fc;
+  font-size: 8px;
+}
+
+.sub-metrics {
+  flex: 0 0 auto;
+  color: #cbd5e1;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.mini-map-container {
+  flex: 1 1 120px;
+  min-height: 110px;
+  position: relative;
+  overflow: hidden;
+}
+
+.mini-map-container > .scifi-panel.viewport.docked {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+}
+
+.mini-map-label {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  z-index: 12;
+  pointer-events: none;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: rgba(255, 154, 60, 0.8);
+  background: rgba(8, 10, 14, 0.55);
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+.mini-map-tools {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 12;
+  display: flex;
+  gap: 4px;
+}
+
+.mini-map-tool {
+  background: rgba(8, 10, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  padding: 2px 5px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.mini-map-tool:hover {
+  border-color: #ff9a3c;
+  color: #ff9a3c;
+}
+
+@keyframes mini-stat-pulse {
+  0%,
+  100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-stat-dot.live,
+  .mini-live-pill.live {
+    animation: none;
+  }
 }
 
 .status-graph {

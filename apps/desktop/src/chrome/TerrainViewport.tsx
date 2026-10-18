@@ -19,6 +19,10 @@ interface TerrainViewportProps {
   /** Changes when the tmux tab or agent transcript changes, so a new session starts flat. */
   mapKey?: string;
   docked?: boolean;
+  /** Host panel draws expand, pop-out, and close, so the canvas omits those buttons. */
+  hideDockedControls?: boolean;
+  /** Spectral or mono relief. Omitted keeps the viewport's own toggle. */
+  colorMode?: "mono" | "color";
   onExpand?: () => void;
   onPopOut?: () => void;
   onClose?: () => void;
@@ -192,6 +196,8 @@ const CHANNELS = [
   { key: "reply", label: "ASSISTANT", color: [0.36, 0.58, 0.95], hex: "#5b8def", zIndex: 2 },
   { key: "tool", label: "TOOL RUNTIME", color: [0.18, 0.84, 0.75], hex: "#2dd4bf", zIndex: 3 },
 ] as const;
+
+const CHANNEL_TAGS = ["USR", "THK", "RPL", "TOL"] as const;
 
 const zLanes = [-6.75, -2.25, 2.25, 6.75]; // USER, THINK, REPLY, TOOL
 const TIME_SPAN = 28; // X extent: -14 to +14
@@ -449,13 +455,16 @@ export default function TerrainViewport({
   stats,
   mapKey = "",
   docked = false,
+  hideDockedControls = false,
+  colorMode,
   onExpand,
   onPopOut,
   onClose,
 }: TerrainViewportProps) {
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const hudCanvasRef = useRef<HTMLCanvasElement>(null);
-  const [realism, setRealism] = useState<"mono" | "color">("color");
+  const [realismState, setRealism] = useState<"mono" | "color">("color");
+  const realism = colorMode ?? realismState;
   const realismRef = useRef<"mono" | "color">("color");
   realismRef.current = realism;
 
@@ -535,6 +544,8 @@ export default function TerrainViewport({
   statsRef.current = stats;
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
+  const dockedRef = useRef(docked);
+  dockedRef.current = docked;
 
   // The map shows at most 30 minutes of compressed time. Long idle gaps are
   // already folded, so dragging moves across activity instead of empty terrain.
@@ -1295,9 +1306,12 @@ export default function TerrainViewport({
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
 
-      const eyeX = cam.target[0] + cam.radius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
-      const eyeY = cam.target[1] + cam.radius * Math.sin(cam.elevation);
-      const eyeZ = cam.target[2] + cam.radius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
+      // The dock shares this camera. A 40/46 scale fills the short mini-map without
+      // moving the fullscreen orbit.
+      const orbitRadius = dockedRef.current ? cam.radius * (40 / 46) : cam.radius;
+      const eyeX = cam.target[0] + orbitRadius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
+      const eyeY = cam.target[1] + orbitRadius * Math.sin(cam.elevation);
+      const eyeZ = cam.target[2] + orbitRadius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
 
       const matProj = perspective(38 * (Math.PI / 180), w / h, 0.5, 260.0);
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
@@ -1362,7 +1376,7 @@ export default function TerrainViewport({
       gl.useProgram(progTerrain);
       gl.uniformMatrix4fv(uT.uVP, false, matVP);
       gl.uniform1f(uT.uTime, elapsed);
-      gl.uniform1f(uT.uFocus, cam.radius * 0.9);
+      gl.uniform1f(uT.uFocus, orbitRadius * 0.9);
       gl.uniform1f(uT.uAperture, 0.5 * (h / 700));
       gl.uniform1f(uT.uDpr, dpr);
       gl.uniform1f(uT.uGain, 0.44);
@@ -1446,55 +1460,73 @@ export default function TerrainViewport({
 
       // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
       hud.save();
-      hud.font = '8.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+      const mini = dockedRef.current;
+      hud.font = mini
+        ? "8px ui-monospace, SFMono-Regular, Menlo, monospace"
+        : "8.5px ui-monospace, SFMono-Regular, Menlo, monospace";
 
       const extentZ = currentShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
       const tStartX = extentX * 0.92;
       const tStartZ = -(extentZ + 1.6);
       const tStart = project([-tStartX, 0, tStartZ]);
       const tEnd = project([tStartX, 0, tStartZ]);
-      if (tStart && tEnd) {
+      // Compact bounds only when the mini canvas is tall enough to read them.
+      const showTimeBounds = !mini || rect.height >= 110;
+      if (showTimeBounds && tStart && tEnd) {
         const timed = meta.sessionStart > 0 && meta.endTime > meta.startTime;
         hud.fillStyle = "rgba(255, 255, 255, 0.75)";
-        hud.textAlign = "left";
-        hud.fillText(
-          timed ? `◄ +${formatElapsed(meta.startTime - meta.sessionStart)}` : "◄ CHRONO TIME: 00:00 (START)",
-          tStart[0],
-          tStart[1],
-        );
-        hud.textAlign = "right";
-        hud.fillText(
-          timed
-            ? `+${formatElapsed(meta.endTime - meta.sessionStart)}${meta.live ? " NOW" : ""} ►`
-            : "LATEST EVENT (NOW) ►",
-          tEnd[0],
-          tEnd[1],
-        );
+        if (mini) {
+          hud.textAlign = "left";
+          hud.fillText(
+            timed ? `+${formatElapsed(meta.startTime - meta.sessionStart)}` : "+0:00",
+            tStart[0],
+            tStart[1],
+          );
+          hud.textAlign = "right";
+          hud.fillText("NOW", tEnd[0], tEnd[1]);
+        } else {
+          hud.textAlign = "left";
+          hud.fillText(
+            timed ? `◄ +${formatElapsed(meta.startTime - meta.sessionStart)}` : "◄ CHRONO TIME: 00:00 (START)",
+            tStart[0],
+            tStart[1],
+          );
+          hud.textAlign = "right";
+          hud.fillText(
+            timed
+              ? `+${formatElapsed(meta.endTime - meta.sessionStart)}${meta.live ? " NOW" : ""} ►`
+              : "LATEST EVENT (NOW) ►",
+            tEnd[0],
+            tEnd[1],
+          );
+        }
       }
 
-      // Clock ticks follow the compressed axis, so a seam does not stretch them.
-      for (const tick of meta.timeTicks) {
-        const xTick = -tStartX + tick.fraction * (tStartX * 2);
-        const ptTick = project([xTick, 0, tStartZ]);
-        if (!ptTick) continue;
-        hud.fillStyle = "rgba(255, 255, 255, 0.4)";
-        hud.textAlign = "center";
-        hud.fillText(tick.label, ptTick[0], ptTick[1]);
-      }
+      if (!mini) {
+        // Clock ticks follow the compressed axis, so a seam does not stretch them.
+        for (const tick of meta.timeTicks) {
+          const xTick = -tStartX + tick.fraction * (tStartX * 2);
+          const ptTick = project([xTick, 0, tStartZ]);
+          if (!ptTick) continue;
+          hud.fillStyle = "rgba(255, 255, 255, 0.4)";
+          hud.textAlign = "center";
+          hud.fillText(tick.label, ptTick[0], ptTick[1]);
+        }
 
-      for (const seam of meta.seamMarks) {
-        const xSeam = -tStartX + seam.fraction * (tStartX * 2);
-        const ptSeam = project([xSeam, 0, tStartZ]);
-        if (!ptSeam) continue;
-        hud.strokeStyle = "rgba(255, 196, 96, 0.9)";
-        hud.lineWidth = 1;
-        hud.beginPath();
-        hud.moveTo(ptSeam[0], ptSeam[1]);
-        hud.lineTo(ptSeam[0], ptSeam[1] - 10);
-        hud.stroke();
-        hud.fillStyle = "#ff9a3c";
-        hud.textAlign = "center";
-        hud.fillText(seam.label, ptSeam[0], ptSeam[1] - 14);
+        for (const seam of meta.seamMarks) {
+          const xSeam = -tStartX + seam.fraction * (tStartX * 2);
+          const ptSeam = project([xSeam, 0, tStartZ]);
+          if (!ptSeam) continue;
+          hud.strokeStyle = "rgba(255, 196, 96, 0.9)";
+          hud.lineWidth = 1;
+          hud.beginPath();
+          hud.moveTo(ptSeam[0], ptSeam[1]);
+          hud.lineTo(ptSeam[0], ptSeam[1] - 10);
+          hud.stroke();
+          hud.fillStyle = "#ff9a3c";
+          hud.textAlign = "center";
+          hud.fillText(seam.label, ptSeam[0], ptSeam[1] - 14);
+        }
       }
 
       const chLabelX = -(extentX + 0.8);
@@ -1503,11 +1535,13 @@ export default function TerrainViewport({
         if (sc) {
           hud.fillStyle = ch.hex;
           hud.textAlign = "right";
-          hud.fillText(`[${ch.key.toUpperCase()}] ${ch.label}`, sc[0] - 6, sc[1]);
+          hud.fillText(mini ? CHANNEL_TAGS[idx] : `[${ch.key.toUpperCase()}] ${ch.label}`, sc[0] - 6, sc[1]);
         }
       });
       hud.restore();
 
+      // Waypoint pins and the altitude ruler cover a short docked canvas.
+      if (!dockedRef.current) {
       // (C) Waypoint Target Pins with Leader Lines
       for (const node of meta.channelWaypoints) {
         const groundPt = project(node.pos);
@@ -1607,9 +1641,10 @@ export default function TerrainViewport({
       hud.lineTo(8, cursorY + 4);
       hud.closePath();
       hud.fill();
+      }
 
       // (F) Bottom Right Telemetry Readout
-      if (rect.width >= 550) {
+      if (!dockedRef.current && rect.width >= 550) {
         hud.textAlign = 'right';
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
         hud.fillStyle = 'rgba(255, 255, 255, 0.40)';
@@ -1645,9 +1680,10 @@ export default function TerrainViewport({
       const mouseY = e.clientY - rect.top;
 
       const cam = persistentCam;
-      const eyeX = cam.target[0] + cam.radius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
-      const eyeY = cam.target[1] + cam.radius * Math.sin(cam.elevation);
-      const eyeZ = cam.target[2] + cam.radius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
+      const orbitRadius = dockedRef.current ? cam.radius * (40 / 46) : cam.radius;
+      const eyeX = cam.target[0] + orbitRadius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
+      const eyeY = cam.target[1] + orbitRadius * Math.sin(cam.elevation);
+      const eyeZ = cam.target[2] + orbitRadius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
       const matProj = perspective(38 * (Math.PI / 180), rect.width / rect.height, 0.5, 260.0);
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
@@ -1741,6 +1777,7 @@ export default function TerrainViewport({
         <div className="docked-terrain-badge">
           ◈ AREA MAP
         </div>
+        {!hideDockedControls && (
         <div className="docked-terrain-controls">
           {onExpand && (
             <button
@@ -1776,6 +1813,7 @@ export default function TerrainViewport({
             </button>
           )}
         </div>
+        )}
       </section>
     );
   }
