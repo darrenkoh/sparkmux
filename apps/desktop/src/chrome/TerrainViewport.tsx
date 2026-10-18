@@ -20,6 +20,7 @@ interface TerrainViewportProps {
   mapKey?: string;
   docked?: boolean;
   onExpand?: () => void;
+  onPopOut?: () => void;
   onClose?: () => void;
 }
 
@@ -449,6 +450,7 @@ export default function TerrainViewport({
   mapKey = "",
   docked = false,
   onExpand,
+  onPopOut,
   onClose,
 }: TerrainViewportProps) {
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1749,6 +1751,17 @@ export default function TerrainViewport({
               aria-label="Expand to Fullscreen Telemetry HUD"
             >
               ⤢
+            </button>
+          )}
+          {onPopOut && (
+            <button
+              type="button"
+              className="docked-terrain-btn"
+              onClick={onPopOut}
+              title="Open Stats in a separate desktop window"
+              aria-label="Open Stats in a separate window"
+            >
+              ⧉
             </button>
           )}
           {onClose && (

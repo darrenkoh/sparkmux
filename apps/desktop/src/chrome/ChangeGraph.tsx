@@ -58,11 +58,18 @@ function writeGitsView(view: "canvas" | "chronicle") {
 }
 
 export interface ChangeGraphProps {
+  sessionName?: string;
+  tabId?: string;
+  tabName?: string;
   command: string;
   cwd: string;
   title: string;
   pid: number;
   onClose: () => void;
+  onPopOut?: () => void;
+  isStandaloneWindow?: boolean;
+  pinned?: boolean;
+  onTogglePin?: () => void;
 }
 
 export interface FileCardData {
@@ -175,7 +182,20 @@ function renderHighlightedText(text: string, query: string): React.ReactNode {
   return <>{parts}</>;
 }
 
-export default function ChangeGraph({ command, cwd, title, pid, onClose }: ChangeGraphProps) {
+export default function ChangeGraph({
+  sessionName,
+  tabId,
+  tabName,
+  command,
+  cwd,
+  title,
+  pid,
+  onClose,
+  onPopOut,
+  isStandaloneWindow = false,
+  pinned = false,
+  onTogglePin,
+}: ChangeGraphProps) {
   const [data, setData] = useState<ChangeGraphResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -323,7 +343,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
         event.stopImmediatePropagation();
         if (selectedCardId) {
           setSelectedCardId(null);
-        } else {
+        } else if (!isStandaloneWindow) {
           closeGraph();
         }
         return;
@@ -346,14 +366,14 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
       if (!applyChronicleKeyEvent(event, action)) return;
       if (!action.swallow || action.action === "none") return;
       if (action.action === "close") {
-        closeGraph();
+        if (!isStandaloneWindow) closeGraph();
         return;
       }
       chronicleApplyRef.current(action);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [view, selectedCardId, closeGraph]);
+  }, [view, selectedCardId, closeGraph, isStandaloneWindow]);
 
   useEffect(() => {
     if (view !== "chronicle") return;
@@ -884,7 +904,7 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
   return (
     <div
       className="scifi-hud-overlay graph-overlay"
-      onClick={closeGraph}
+      onClick={isStandaloneWindow ? undefined : closeGraph}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div
@@ -908,6 +928,24 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
             <span style={{ letterSpacing: "0.14em" }}>
               {view === "chronicle" ? "GITS · CHRONICLE" : "GITS · CHAIN GRAPH"}
             </span>
+            {sessionName && (
+              <span
+                style={{
+                  fontSize: "9.5px",
+                  fontWeight: 500,
+                  letterSpacing: "0.06em",
+                  color: "rgba(255, 255, 255, 0.55)",
+                  padding: "2px 6px",
+                  borderRadius: "3px",
+                  background: "rgba(45, 212, 191, 0.08)",
+                  border: "1px solid rgba(45, 212, 191, 0.2)",
+                  whiteSpace: "nowrap",
+                }}
+                title={`Active target: ${sessionName}:${tabName ?? "shell"}${tabId ? ` (${tabId})` : ""}`}
+              >
+                {sessionName}:{tabName ?? "shell"}
+              </span>
+            )}
           </div>
 
           {/* Repo Cluster Filter Tabs */}
@@ -1192,6 +1230,60 @@ export default function ChangeGraph({ command, cwd, title, pid, onClose }: Chang
               RESET VIEW ({(zoom * 100).toFixed(0)}%)
             </button>
             </>
+            )}
+
+            {isStandaloneWindow && onTogglePin && (
+              <button
+                type="button"
+                onClick={onTogglePin}
+                aria-pressed={pinned}
+                title={
+                  pinned
+                    ? `Pinned to ${sessionName ?? "sparkmux"}:${tabName ?? "shell"} — click to follow active tab in main window`
+                    : "Following active tab in main window — click to pin to this tab"
+                }
+                style={{
+                  background: pinned ? "rgba(45, 212, 191, 0.2)" : "transparent",
+                  color: pinned ? "#2dd4bf" : "rgba(255, 255, 255, 0.7)",
+                  border: pinned
+                    ? "1px solid rgba(45, 212, 191, 0.5)"
+                    : "1px solid rgba(255, 255, 255, 0.2)",
+                  padding: "3px 8px",
+                  fontSize: "9px",
+                  borderRadius: "3px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontWeight: 600,
+                  letterSpacing: "0.06em",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {pinned ? "📌 PINNED" : "◎ FOLLOWING"}
+              </button>
+            )}
+
+            {onPopOut && !isStandaloneWindow && (
+              <button
+                type="button"
+                onClick={onPopOut}
+                title="Open Gits in a separate desktop window"
+                aria-label="Open Gits in a separate window"
+                style={{
+                  background: "rgba(45, 212, 191, 0.14)",
+                  color: "#2dd4bf",
+                  border: "1px solid rgba(45, 212, 191, 0.38)",
+                  padding: "3px 8px",
+                  fontSize: "9px",
+                  borderRadius: "3px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  fontWeight: 600,
+                  letterSpacing: "0.06em",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                ⧉ POP OUT
+              </button>
             )}
 
             {/* Close Button */}

@@ -12,6 +12,7 @@ export interface DockedStatsPanelProps {
   pid: number;
   paused?: boolean;
   onExpand: () => void;
+  onPopOut?: () => void;
   onClose: () => void;
 }
 
@@ -25,6 +26,7 @@ export default function DockedStatsPanel({
   pid,
   paused = false,
   onExpand,
+  onPopOut,
   onClose,
 }: DockedStatsPanelProps) {
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
@@ -80,6 +82,7 @@ export default function DockedStatsPanel({
         mapKey={mapKey}
         docked={true}
         onExpand={onExpand}
+        onPopOut={onPopOut}
         onClose={onClose}
       />
     </div>

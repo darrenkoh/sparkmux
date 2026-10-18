@@ -535,3 +535,36 @@ export async function listenServerStopped(handler: () => void): Promise<Unlisten
 export async function listenMenu(handler: (id: string) => void): Promise<UnlistenFn> {
   return listen<string>("menu", (e) => handler(e.payload));
 }
+
+export interface ActiveTarget {
+  session_name: string;
+  tab_id: string;
+  tab_name: string;
+  focused_pane: string;
+  command: string;
+  cwd: string;
+  title: string;
+  pid: number;
+}
+
+export function syncActiveTarget(target: ActiveTarget): Promise<void> {
+  return invoke("sync_active_target", { target });
+}
+
+export function getActiveTarget(): Promise<ActiveTarget> {
+  return invoke("get_active_target");
+}
+
+export function openPopoutWindow(
+  kind: "stats" | "gits",
+  target?: ActiveTarget,
+): Promise<void> {
+  return invoke("open_popout_window", { kind, target: target ?? null });
+}
+
+export async function listenActiveTargetChanged(
+  handler: (target: ActiveTarget) => void,
+): Promise<UnlistenFn> {
+  return listen<ActiveTarget>("active-target-changed", (e) => handler(e.payload));
+}
+

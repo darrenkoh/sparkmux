@@ -25,6 +25,7 @@ import {
   listenTreeDirty,
   newSession,
   newWindow,
+  openPopoutWindow,
   parseLayout,
   selectWindow,
   rememberSession,
@@ -33,8 +34,10 @@ import {
   snapshot as fetchSnapshot,
   splitPane,
   stopServer,
+  syncActiveTarget,
   tmuxStatus,
   windowResize,
+  type ActiveTarget,
 } from "./api";
 import ArtifactPanel from "./chrome/ArtifactPanel";
 import AnalyticsHud from "./chrome/AnalyticsHud";
@@ -48,6 +51,7 @@ import {
 } from "./chrome/DockSplitters";
 import { outputPaneForTab } from "./chrome/artifactModel";
 import { allowanceWatchKey, parseAgyUsageScreen } from "./chrome/llmUsage";
+import { ACTIVE_TARGET_STORAGE_KEY } from "./chrome/popoutModel";
 import ErrorPanel from "./chrome/ErrorPanel";
 import Splitter, {
   SIDEBAR_DEFAULT,
@@ -1033,6 +1037,93 @@ export default function App() {
   const showTiles = !error && !empty && layout && attachedSession;
   const isDockOpen = Boolean(showTiles) && (outputOpen || statsDocked);
 
+  useEffect(() => {
+    if (!attachedSession || !visibleWindowId) return;
+    const target: ActiveTarget = {
+      session_name: attachedSession,
+      tab_id: visibleWindowId,
+      tab_name: winName ?? "shell",
+      focused_pane: usagePaneId || focusedPane || "",
+      command: usageCommand,
+      cwd: usageCwd,
+      title: usageTitle,
+      pid: usagePid,
+    };
+    try {
+      window.localStorage.setItem(ACTIVE_TARGET_STORAGE_KEY, JSON.stringify(target));
+    } catch {}
+    void syncActiveTarget(target).catch(() => {});
+  }, [
+    attachedSession,
+    visibleWindowId,
+    winName,
+    usagePaneId,
+    focusedPane,
+    usageCommand,
+    usageCwd,
+    usageTitle,
+    usagePid,
+  ]);
+
+  const popOutStats = useCallback(() => {
+    const target: ActiveTarget = {
+      session_name: attachedSession ?? "sparkmux",
+      tab_id: visibleWindowId ?? "main",
+      tab_name: winName ?? "shell",
+      focused_pane: usagePaneId || focusedPane || "",
+      command: usageCommand,
+      cwd: usageCwd,
+      title: usageTitle,
+      pid: usagePid,
+    };
+    try {
+      window.localStorage.setItem(ACTIVE_TARGET_STORAGE_KEY, JSON.stringify(target));
+    } catch {}
+    setAnalyticsOpen(false);
+    setStatsDocked(false);
+    void openPopoutWindow("stats", target).catch((e) => showToast(String(e)));
+  }, [
+    attachedSession,
+    visibleWindowId,
+    winName,
+    usagePaneId,
+    focusedPane,
+    usageCommand,
+    usageCwd,
+    usageTitle,
+    usagePid,
+    showToast,
+  ]);
+
+  const popOutGits = useCallback(() => {
+    const target: ActiveTarget = {
+      session_name: attachedSession ?? "sparkmux",
+      tab_id: visibleWindowId ?? "main",
+      tab_name: winName ?? "shell",
+      focused_pane: usagePaneId || focusedPane || "",
+      command: usageCommand,
+      cwd: usageCwd,
+      title: usageTitle,
+      pid: usagePid,
+    };
+    try {
+      window.localStorage.setItem(ACTIVE_TARGET_STORAGE_KEY, JSON.stringify(target));
+    } catch {}
+    setGraphOpen(false);
+    void openPopoutWindow("gits", target).catch((e) => showToast(String(e)));
+  }, [
+    attachedSession,
+    visibleWindowId,
+    winName,
+    usagePaneId,
+    focusedPane,
+    usageCommand,
+    usageCwd,
+    usageTitle,
+    usagePid,
+    showToast,
+  ]);
+
   return (
     <div className="app">
       <div className="body">
@@ -1234,6 +1325,7 @@ export default function App() {
                               pid={outputPane?.pid ?? 0}
                               paused={analyticsOpen}
                               onExpand={() => setAnalyticsOpen(true)}
+                              onPopOut={popOutStats}
                               onClose={() => setStatsDocked(false)}
                             />
                           </div>
@@ -1302,6 +1394,7 @@ export default function App() {
                               pid={outputPane?.pid ?? 0}
                               paused={analyticsOpen}
                               onExpand={() => setAnalyticsOpen(true)}
+                              onPopOut={popOutStats}
                               onClose={() => setStatsDocked(false)}
                             />
                           </div>
@@ -1325,15 +1418,20 @@ export default function App() {
                       setAnalyticsOpen(false);
                       setStatsDocked(true);
                     }}
+                    onPopOut={popOutStats}
                   />
                 )}
                 {graphOpen && (
                   <ChangeGraph
+                    sessionName={attachedSession ?? "sparkmux"}
+                    tabId={visibleWindowId ?? "main"}
+                    tabName={winName ?? "shell"}
                     command={outputPane?.command ?? ""}
                     cwd={outputPane?.path ?? ""}
                     title={outputPane?.title ?? ""}
                     pid={outputPane?.pid ?? 0}
                     onClose={() => setGraphOpen(false)}
+                    onPopOut={popOutGits}
                   />
                 )}
               </div>

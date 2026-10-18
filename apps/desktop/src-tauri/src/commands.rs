@@ -3,11 +3,11 @@ use std::time::Duration;
 use serde::Serialize;
 use sparkmux_core::{attach_target, parse_window_layout, LayoutNode, Snapshot, SOCKET_NAME};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::control;
 use crate::error::{map_error, too_old};
-use crate::state::{persist_last_session, AppState};
+use crate::state::{persist_last_session, ActiveTarget, AppState};
 
 /// A stuck tmux server must not pin the UI. Blocking `TmuxClient::run` calls
 /// happen off the `AppState` lock and fail closed after this bound.
@@ -483,5 +483,77 @@ fn check_version(client: &sparkmux_core::TmuxClient) -> Result<(), String> {
     if !v.is_supported() {
         return Err(too_old(&v.raw));
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn sync_active_target(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: ActiveTarget,
+) -> Result<(), String> {
+    let changed = {
+        let mut guard = state
+            .active_target
+            .lock()
+            .map_err(|_| "active target lock poisoned".to_string())?;
+        if *guard != target {
+            *guard = target.clone();
+            true
+        } else {
+            false
+        }
+    };
+    if changed {
+        let _ = app.emit("active-target-changed", &target);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_active_target(state: State<'_, AppState>) -> Result<ActiveTarget, String> {
+    let guard = state
+        .active_target
+        .lock()
+        .map_err(|_| "active target lock poisoned".to_string())?;
+    Ok(guard.clone())
+}
+
+#[tauri::command]
+pub fn open_popout_window(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+    target: Option<ActiveTarget>,
+) -> Result<(), String> {
+    let label = match kind.as_str() {
+        "stats" => "stats",
+        "gits" => "gits",
+        _ => return Err(format!("unsupported popout window kind: {kind}")),
+    };
+    if let Some(target) = target {
+        if let Ok(mut guard) = state.active_target.lock() {
+            *guard = target.clone();
+        }
+        let _ = app.emit("active-target-changed", &target);
+    }
+    if let Some(existing) = app.get_webview_window(label) {
+        let _ = existing.show();
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+    let title = if label == "stats" {
+        "Sparkmux — Stats"
+    } else {
+        "Sparkmux — Gits"
+    };
+    let url = WebviewUrl::App(format!("index.html?window={label}").into());
+    WebviewWindowBuilder::new(&app, label, url)
+        .title(title)
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(720.0, 480.0)
+        .build()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }

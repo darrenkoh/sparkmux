@@ -73,6 +73,9 @@ pub fn run() {
             analytics::analytics_config,
             open_url::open_http_url,
             relaunch::relaunch_after_update,
+            commands::sync_active_target,
+            commands::get_active_target,
+            commands::open_popout_window,
         ])
         .setup(|app| {
             llm_usage::init_agy_usage();
@@ -86,6 +89,9 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
                 if crate::relaunch::is_relaunching() {
                     return;
                 }

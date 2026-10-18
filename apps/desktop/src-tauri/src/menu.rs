@@ -231,8 +231,17 @@ pub fn on_event(app: &AppHandle, id: &str) {
     }
     match id {
         "quit" => quit_detach(app),
+        "close-tab" => {
+            for (label, win) in app.webview_windows() {
+                if label != "main" && win.is_focused().unwrap_or(false) {
+                    let _ = win.close();
+                    return;
+                }
+            }
+            let _ = app.emit_to("main", "menu", "close-tab");
+        }
         other => {
-            let _ = app.emit("menu", other);
+            let _ = app.emit_to("main", "menu", other);
         }
     }
 }

@@ -30,6 +30,10 @@ export interface AnalyticsHudProps {
   pid: number;
   onClose: () => void;
   onDock?: () => void;
+  onPopOut?: () => void;
+  isStandaloneWindow?: boolean;
+  pinned?: boolean;
+  onTogglePin?: () => void;
 }
 
 export { formatBytes, formatNum, formatMs, formatUsd, estimateCost, estimateTotalCost };
@@ -333,6 +337,10 @@ export default function AnalyticsHud({
   pid,
   onClose,
   onDock,
+  onPopOut,
+  isStandaloneWindow = false,
+  pinned = false,
+  onTogglePin,
 }: AnalyticsHudProps) {
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
   const [clearing, setClearing] = useState(false);
@@ -786,7 +794,10 @@ export default function AnalyticsHud({
   const netDiff = (st?.lines_added ?? 0) - (st?.lines_removed ?? 0);
 
   return (
-    <div className="scifi-hud-overlay" onClick={onClose}>
+    <div
+      className="scifi-hud-overlay"
+      onClick={isStandaloneWindow ? undefined : onClose}
+    >
       <div
         className="scifi-hud-frame fullscreen"
         onClick={(e) => e.stopPropagation()}
@@ -898,7 +909,23 @@ export default function AnalyticsHud({
               </button>
             )}
 
-            {onDock && (
+            {isStandaloneWindow && onTogglePin && (
+              <button
+                type="button"
+                className={`scifi-btn ${pinned ? "on" : "off"}`}
+                onClick={onTogglePin}
+                aria-pressed={pinned}
+                title={
+                  pinned
+                    ? `Pinned to ${sessionName}:${tabName} — click to follow active tab in main window`
+                    : "Following active tab in main window — click to pin to this tab"
+                }
+              >
+                {pinned ? "📌 PINNED" : "◎ FOLLOWING"}
+              </button>
+            )}
+
+            {onDock && !isStandaloneWindow && (
               <button
                 type="button"
                 className="scifi-btn"
@@ -906,6 +933,18 @@ export default function AnalyticsHud({
                 title="Dock area map to the bottom right panel"
               >
                 ⇲ DOCK
+              </button>
+            )}
+
+            {onPopOut && !isStandaloneWindow && (
+              <button
+                type="button"
+                className="scifi-btn"
+                onClick={onPopOut}
+                title="Open Stats in a separate desktop window"
+                aria-label="Open Stats in a separate window"
+              >
+                ⧉ POP OUT
               </button>
             )}
 

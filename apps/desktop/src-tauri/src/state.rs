@@ -18,8 +18,21 @@ pub struct PaneFeed {
     pub buf: Vec<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ActiveTarget {
+    pub session_name: String,
+    pub tab_id: String,
+    pub tab_name: String,
+    pub focused_pane: String,
+    pub command: String,
+    pub cwd: String,
+    pub title: String,
+    pub pid: u32,
+}
+
 pub struct AppState {
     pub inner: Mutex<Inner>,
+    pub active_target: std::sync::Mutex<ActiveTarget>,
 }
 
 pub struct Inner {
@@ -54,6 +67,7 @@ impl AppState {
                 pump: None,
                 stopped: false,
             }),
+            active_target: std::sync::Mutex::new(ActiveTarget::default()),
         }
     }
 }
