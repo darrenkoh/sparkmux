@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.43
+
+### Improvements
+
+- Stats follows Grok, Claude, and Antigravity sub-agents launched from the focused pane. Their tokens, tools, and file edits are included in the pane totals, and a Subagents table lists each one. A child's own prompt stays out of the human prompt count and turn time.
+
+### Bug Fixes
+
+- The unread dot lights only when a hidden agent is waiting on you or reports a failure. A background agent that keeps repainting no longer leaves the session row lit.
+
 ## 0.1.42
 
 ### Improvements
