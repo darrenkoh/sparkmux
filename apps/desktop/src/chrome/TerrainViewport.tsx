@@ -1,6 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
 import {
+  CHANNEL_RING_FRAC,
+  GLOBE_RADIUS,
+  RADAR_PERIOD_S,
+  RING_TIME_GAP,
+  TRACK_RING_VERTS,
+  angleToTimeFrac,
+  globeBezelVerts,
+  globeHaloVerts,
+  globeRadarVerts,
+  globeRingRidges,
+  globeTrackVerts,
+  ringXZ,
+  sampleElev,
+  timeFracToAngle,
+  type ElevField,
+  type RingPeak,
+} from "./globeSensor";
+import {
   activityAxis,
   compressedToWall,
   formatGap,
@@ -117,6 +135,7 @@ function makeRng(seed: number) {
 const VS_TERRAIN = `#version 300 es
 uniform mat4 uVP;
 uniform float uTime, uFocus, uAperture, uDpr, uGain, uScanX, uMaxX, uReal;
+uniform float uGlobe, uScanAng, uMaxFrac;
 in vec4 aPos;      // xyz + brightness
 in vec3 aCol;      // label category color
 in float aSeed;
@@ -132,13 +151,20 @@ void main() {
   gl_PointSize = size * uDpr;
   float energy = (base * base) / (size * size);
   float twinkle = 0.84 + 0.16 * sin(uTime * (0.8 + aSeed * 2.2) + aSeed * 53.0);
-  
-  // Chronological X-axis scanning pulse
+
   float scan = 1.0 + 3.2 * exp(-pow((aPos.x - uScanX) * 0.95, 2.0));
-  
-  // Scrubber / growth clip: hide or fade particles ahead of current timeline scrub
   float timeClip = smoothstep(uMaxX + 0.45, uMaxX - 0.2, aPos.x);
-  
+  if (uGlobe > 0.5) {
+    float ang = atan(aPos.z, aPos.x);
+    float dAng = ang - uScanAng;
+    dAng = dAng - 6.2831853 * floor((dAng + 3.14159265) / 6.2831853);
+    scan = 1.0 + 3.2 * exp(-pow(dAng * 3.2, 2.0));
+    float delta = mod(ang - 3.14159265 + 6.2831853, 6.2831853);
+    float span = 6.2831853 - ${RING_TIME_GAP.toFixed(4)};
+    float frac = delta / span;
+    timeClip = delta > span ? 1.0 : smoothstep(uMaxFrac + 0.03, uMaxFrac - 0.015, frac);
+  }
+
   float fog = exp(-max(c.w - 38.0, 0.0) * 0.035);
   vA = aPos.w * energy * twinkle * scan * fog * uGain * timeClip;
   vRing = smoothstep(5.0, 15.0, coc);
@@ -168,6 +194,7 @@ const VS_CONTOUR = `#version 300 es
 uniform mat4 uVP;
 uniform vec3 uCam;
 uniform float uScanX, uScanAmount, uMaxX;
+uniform float uGlobe, uScanAng, uMaxFrac;
 in vec3 aPos;
 in float aA;
 out float vA;
@@ -177,6 +204,16 @@ void main() {
   float fog = exp(-max(d - 30.0, 0.0) * 0.035);
   float scan = 1.0 + uScanAmount * exp(-pow((aPos.x - uScanX) * 0.85, 2.0));
   float timeClip = smoothstep(uMaxX + 0.45, uMaxX - 0.2, aPos.x);
+  if (uGlobe > 0.5) {
+    float ang = atan(aPos.z, aPos.x);
+    float dAng = ang - uScanAng;
+    dAng = dAng - 6.2831853 * floor((dAng + 3.14159265) / 6.2831853);
+    scan = 1.0 + uScanAmount * exp(-pow(dAng * 2.8, 2.0));
+    float delta = mod(ang - 3.14159265 + 6.2831853, 6.2831853);
+    float span = 6.2831853 - ${RING_TIME_GAP.toFixed(4)};
+    float frac = delta / span;
+    timeClip = delta > span ? 1.0 : smoothstep(uMaxFrac + 0.03, uMaxFrac - 0.015, frac);
+  }
   vA = aA * fog * scan * timeClip;
 }
 `;
@@ -205,7 +242,6 @@ const zLanes = [-6.75, -2.25, 2.25, 6.75]; // USER, THINK, REPLY, TOOL
 const TIME_SPAN = 28; // X extent: -14 to +14
 const RECT_HX = 14.0;
 const RECT_HZ = 9.0;
-const GLOBE_RADIUS = 18.0;
 const POINT_COUNT = 50000;
 const LIGHT_DIR = [-0.45, 0.8, 0.4];
 
@@ -307,7 +343,30 @@ function generateBaseParticles(shape: BaseShape): BaseParticle[] {
     if (distNorm > 1.0) continue;
 
     let r = 0.2, g = 0.8, b = 0.7;
-    if (rz < -4.5) {
+    if (shape === "globe") {
+      // Hub and the outer annulus stay cool. Color belongs to the channel ring.
+      const rn = Math.hypot(rx, rz) / GLOBE_RADIUS;
+      let nearest = 0;
+      let best = 1;
+      for (let c = 0; c < CHANNEL_RING_FRAC.length; c++) {
+        const d = Math.abs(rn - CHANNEL_RING_FRAC[c]);
+        if (d < best) {
+          best = d;
+          nearest = c;
+        }
+      }
+      if (best > 0.055) {
+        r = 0.18; g = 0.36; b = 0.48;
+      } else if (nearest === 0) {
+        r = 1.0; g = 0.58; b = 0.12;
+      } else if (nearest === 1) {
+        r = 0.82; g = 0.38; b = 1.0;
+      } else if (nearest === 2) {
+        r = 0.22; g = 0.62; b = 1.0;
+      } else {
+        r = 0.10; g = 0.95; b = 0.82;
+      }
+    } else if (rz < -4.5) {
       r = 1.0; g = 0.58; b = 0.12;
     } else if (rz < 0.0) {
       r = 0.82; g = 0.38; b = 1.0;
@@ -334,6 +393,7 @@ function generateBaseParticles(shape: BaseShape): BaseParticle[] {
   return particles;
 }
 
+/** Cartesian pad for rect mode. Globe draws its bezel from globeSensor. */
 function generateBaseGridVerts(shape: BaseShape): Float32Array {
   const verts: number[] = [];
   const gridExtentX = shape === "globe" ? GLOBE_RADIUS : RECT_HX;
@@ -386,30 +446,6 @@ function generateBaseGridVerts(shape: BaseShape): Float32Array {
     verts.push(RECT_HX, 0.02, -RECT_HZ, rA, RECT_HX, 0.02, RECT_HZ, rA);
     verts.push(RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, RECT_HZ, rA);
     verts.push(-RECT_HX, 0.02, RECT_HZ, rA, -RECT_HX, 0.02, -RECT_HZ, rA);
-  } else {
-    const GLOBE_SEGS = 240;
-    for (let i = 0; i < GLOBE_SEGS; i++) {
-      const th0 = (i / GLOBE_SEGS) * Math.PI * 2;
-      const th1 = ((i + 1) / GLOBE_SEGS) * Math.PI * 2;
-      const x0 = Math.cos(th0) * GLOBE_RADIUS;
-      const z0 = Math.sin(th0) * GLOBE_RADIUS;
-      const x1 = Math.cos(th1) * GLOBE_RADIUS;
-      const z1 = Math.sin(th1) * GLOBE_RADIUS;
-      verts.push(x0, 0.02, z0, 0.85, x1, 0.02, z1, 0.85);
-    }
-
-    for (const frac of [0.35, 0.70]) {
-      const rSub = GLOBE_RADIUS * frac;
-      for (let i = 0; i < 120; i++) {
-        const th0 = (i / 120) * Math.PI * 2;
-        const th1 = ((i + 1) / 120) * Math.PI * 2;
-        const x0 = Math.cos(th0) * rSub;
-        const z0 = Math.sin(th0) * rSub;
-        const x1 = Math.cos(th1) * rSub;
-        const z1 = Math.sin(th1) * rSub;
-        verts.push(x0, 0.015, z0, 0.18, x1, 0.015, z1, 0.18);
-      }
-    }
   }
 
   return new Float32Array(verts);
@@ -432,7 +468,7 @@ interface TerrainMeta {
   maxAltitude: number;
   maxMetric: number;
   keyMilestones: MilestoneInfo[];
-  curvedSlopeTrail: Array<[number, number, number]>;
+  curvedSlopeTrail: Array<[number, number, number, number]>;
   channelWaypoints: Array<{
     code: string;
     name: string;
@@ -537,6 +573,7 @@ export default function TerrainViewport({
     startTime: performance.now(),
     lastRenderTime: performance.now(),
     scanProgress: 0.0,
+    radarFrac: 0.2,
   });
   const isDraggingRef = useRef<boolean>(false);
   const lastXRef = useRef<number>(0);
@@ -612,6 +649,9 @@ export default function TerrainViewport({
   const vaoBaseGridRef = useRef<WebGLVertexArrayObject | null>(null);
   const bufBaseGridRef = useRef<WebGLBuffer | null>(null);
   const baseGridCountRef = useRef<number>(0);
+  const bufPolarRef = useRef<WebGLBuffer | null>(null);
+  const polarCountRef = useRef<number>(0);
+  const elevFieldRef = useRef<ElevField | null>(null);
 
   const progTerrainRef = useRef<WebGLProgram | null>(null);
   const progContourRef = useRef<WebGLProgram | null>(null);
@@ -645,9 +685,9 @@ export default function TerrainViewport({
         gl.bufferData(gl.ARRAY_BUFFER, seedData, gl.STATIC_DRAW);
       }
 
-      // Update base grid buffer
+      // Rect keeps the cartesian pad. Globe swaps in the compass bezel.
       if (bufBaseGridRef.current) {
-        const gridVerts = generateBaseGridVerts(currentShape);
+        const gridVerts = currentShape === "globe" ? globeBezelVerts() : generateBaseGridVerts("rect");
         gl.bindBuffer(gl.ARRAY_BUFFER, bufBaseGridRef.current);
         gl.bufferData(gl.ARRAY_BUFFER, gridVerts, gl.STATIC_DRAW);
         baseGridCountRef.current = gridVerts.length / 4;
@@ -679,6 +719,7 @@ export default function TerrainViewport({
       topLabel?: string;
     }> = [];
     const seamBands: Array<{ x0: number; x1: number }> = [];
+    const seamFracBands: Array<{ f0: number; f1: number }> = [];
     const timeTicks: Array<{ fraction: number; label: string }> = [];
     const seamMarks: Array<{ fraction: number; label: string }> = [];
     const xOfComp = (comp: number) => {
@@ -705,6 +746,9 @@ export default function TerrainViewport({
       for (const seam of axis.seams) {
         if (seam.compEnd <= compStart || seam.compStart >= compEnd) continue;
         seamBands.push({ x0: xOfComp(seam.compStart), x1: xOfComp(seam.compEnd) });
+        const f0 = compSpan <= 0 ? 0 : (Math.max(seam.compStart, compStart) - compStart) / compSpan;
+        const f1 = compSpan <= 0 ? 1 : (Math.min(seam.compEnd, compEnd) - compStart) / compSpan;
+        seamFracBands.push({ f0, f1 });
         const mid = (Math.max(seam.compStart, compStart) + Math.min(seam.compEnd, compEnd)) / 2;
         seamMarks.push({
           fraction: compSpan <= 0 ? 0.5 : (mid - compStart) / compSpan,
@@ -748,7 +792,7 @@ export default function TerrainViewport({
     const maxGaussianHeight = Math.max(1.0, maxAltitude - (currentShape === "globe" ? 1.7 : 0.35));
     const heightScale = (maxGaussianHeight * 0.96) / (Math.log1p(Math.max(1, maxMetric)) * 1.1);
 
-    // Precompute Gaussian peak heights and positions across all 4 channels
+    // Rect keeps peaks on the X axis. Globe peaks are a fraction around the rings.
     const prePeaks: Array<{
       x: number;
       h0: number;
@@ -756,14 +800,22 @@ export default function TerrainViewport({
       h2: number;
       h3: number;
     }> = [];
+    const ringPeaks: RingPeak[] = [];
     for (const pt of dataPoints) {
-      const ptX = pt.tNorm * (TIME_SPAN / 2 - 1.5);
+      const hUser = Math.log1p(pt.user) * 1.1 * heightScale;
+      const hThink = Math.log1p(pt.think) * 0.95 * heightScale;
+      const hReply = Math.log1p(pt.reply) * 1.05 * heightScale;
+      const hTool = Math.log1p(pt.tool) * 0.85 * heightScale;
       prePeaks.push({
-        x: ptX,
-        h0: Math.log1p(pt.user) * 1.1 * heightScale,
-        h1: Math.log1p(pt.think) * 0.95 * heightScale,
-        h2: Math.log1p(pt.reply) * 1.05 * heightScale,
-        h3: Math.log1p(pt.tool) * 0.85 * heightScale,
+        x: pt.tNorm * (TIME_SPAN / 2 - 1.5),
+        h0: hUser,
+        h1: hThink,
+        h2: hReply,
+        h3: hTool,
+      });
+      ringPeaks.push({
+        frac: (pt.tNorm + 1) / 2,
+        h: [hUser, hThink, hReply, hTool],
       });
     }
 
@@ -773,35 +825,46 @@ export default function TerrainViewport({
       if (distNorm >= 1.0) return 0;
 
       let val = 0.12;
+      let ridges = 0;
+      let seamDamp = 1;
       if (currentShape === "globe") {
         val += Math.sqrt(Math.max(0, 1.0 - distNorm * distNorm)) * 1.6;
         val += 0.08 * Math.sin(x * 0.6) * Math.cos(z * 0.7);
+        const frac = angleToTimeFrac(Math.atan2(z, x));
+        if (frac != null) {
+          for (let s = 0; s < seamFracBands.length; s++) {
+            const band = seamFracBands[s];
+            if (frac < band.f0 || frac > band.f1) continue;
+            const half = Math.max(0.001, (band.f1 - band.f0) / 2);
+            const along = Math.abs(frac - (band.f0 + band.f1) / 2) / half;
+            seamDamp = Math.min(seamDamp, along * along);
+          }
+        }
+        ridges = globeRingRidges(x, z, ringPeaks);
       } else {
         val += 0.14 * Math.sin(x * 0.7 + 0.4) * Math.cos(z * 0.8);
         val += 0.07 * Math.sin(x * 1.8 - z * 1.2);
-      }
 
-      const zw0 = Math.exp(-((z - zLanes[0]) * (z - zLanes[0])) / 4.84);
-      const zw1 = Math.exp(-((z - zLanes[1]) * (z - zLanes[1])) / 4.84);
-      const zw2 = Math.exp(-((z - zLanes[2]) * (z - zLanes[2])) / 4.84);
-      const zw3 = Math.exp(-((z - zLanes[3]) * (z - zLanes[3])) / 4.84);
+        const zw0 = Math.exp(-((z - zLanes[0]) * (z - zLanes[0])) / 4.84);
+        const zw1 = Math.exp(-((z - zLanes[1]) * (z - zLanes[1])) / 4.84);
+        const zw2 = Math.exp(-((z - zLanes[2]) * (z - zLanes[2])) / 4.84);
+        const zw3 = Math.exp(-((z - zLanes[3]) * (z - zLanes[3])) / 4.84);
 
-      let ridges = 0;
-      for (let p = 0; p < prePeaks.length; p++) {
-        const peak = prePeaks[p];
-        const dx = x - peak.x;
-        const dx2 = dx * dx;
-        if (dx2 > 25.0) continue;
-        const xw = Math.exp(-dx2 / 2.56);
-        ridges += xw * (peak.h0 * zw0 + peak.h1 * zw1 + peak.h2 * zw2 + peak.h3 * zw3);
-      }
-      let seamDamp = 1;
-      for (let s = 0; s < seamBands.length; s++) {
-        const band = seamBands[s];
-        if (x < band.x0 || x > band.x1) continue;
-        const half = Math.max(0.001, (band.x1 - band.x0) / 2);
-        const along = Math.abs(x - (band.x0 + band.x1) / 2) / half;
-        seamDamp = Math.min(seamDamp, along * along);
+        for (let p = 0; p < prePeaks.length; p++) {
+          const peak = prePeaks[p];
+          const dx = x - peak.x;
+          const dx2 = dx * dx;
+          if (dx2 > 25.0) continue;
+          const xw = Math.exp(-dx2 / 2.56);
+          ridges += xw * (peak.h0 * zw0 + peak.h1 * zw1 + peak.h2 * zw2 + peak.h3 * zw3);
+        }
+        for (let s = 0; s < seamBands.length; s++) {
+          const band = seamBands[s];
+          if (x < band.x0 || x > band.x1) continue;
+          const half = Math.max(0.001, (band.x1 - band.x0) / 2);
+          const along = Math.abs(x - (band.x0 + band.x1) / 2) / half;
+          seamDamp = Math.min(seamDamp, along * along);
+        }
       }
       val += ridges * seamDamp;
 
@@ -828,6 +891,28 @@ export default function TerrainViewport({
         const cx = -gridExtentX + gx * stepX;
         elevMap[gz * GRID_X + gx] = getAlt(cx, cz);
       }
+    }
+
+    // Channel rings sample the relief, so they rebuild with the terrain. The bezel does not.
+    if (currentShape === "globe") {
+      elevFieldRef.current = {
+        map: elevMap,
+        gridX: GRID_X,
+        gridZ: GRID_Z,
+        originX: minX,
+        originZ: minZ,
+        invStepX,
+        invStepZ,
+      };
+      if (bufPolarRef.current) {
+        const tracks = globeTrackVerts(getAlt);
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufPolarRef.current);
+        gl.bufferData(gl.ARRAY_BUFFER, tracks, gl.DYNAMIC_DRAW);
+        polarCountRef.current = tracks.length / 4;
+      }
+    } else {
+      elevFieldRef.current = null;
+      polarCountRef.current = 0;
     }
 
     // 2. High-Speed Particle Evaluation from elevMap
@@ -947,6 +1032,14 @@ export default function TerrainViewport({
 
     // 4. Milestone Waypoints and Catmull-Rom Spline Trail
     const keyMilestones: MilestoneInfo[] = [];
+    const globeLayout = currentShape === "globe";
+    const placeOnMap = (catIdx: number, tNorm: number): { x: number; z: number } => {
+      if (globeLayout) {
+        const [x, z] = ringXZ(catIdx, (tNorm + 1) / 2);
+        return { x, z };
+      }
+      return { x: tNorm * (TIME_SPAN / 2 - 1.5), z: zLanes[catIdx] };
+    };
 
     dataPoints.forEach((pt, i) => {
       let timeStr = `T+${i + 1}`;
@@ -977,8 +1070,9 @@ export default function TerrainViewport({
       if (activeChannels.length === 0) {
         if (pt.timestamp != null) return;
         const catIdx = pt.topKind === "tool" ? 3 : pt.topKind === "reply" ? 2 : pt.topKind === "think" ? 1 : 0;
-        const tx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
-        const tz = zLanes[catIdx];
+        const placed = placeOnMap(catIdx, pt.tNorm);
+        const tx = placed.x;
+        const tz = placed.z;
         const ty = getAlt(tx, tz) + 0.08;
         keyMilestones.push({
           x: tx,
@@ -995,12 +1089,13 @@ export default function TerrainViewport({
       } else {
         const nChannels = activeChannels.length;
         const bucketSpanX = (TIME_SPAN / Math.max(1, dataPoints.length)) * 0.72;
-        const baseTx = pt.tNorm * (TIME_SPAN / 2 - 1.5);
 
         activeChannels.forEach((ch, chIdx) => {
-          const xOffset = nChannels > 1 ? ((chIdx / (nChannels - 1)) - 0.5) * bucketSpanX : 0;
-          const tx = baseTx + xOffset;
-          const tz = zLanes[ch.catIdx];
+          const placed = placeOnMap(ch.catIdx, pt.tNorm);
+          // Rect separates stacked channels along X. On a ring they already share a spoke.
+          const xOffset = !globeLayout && nChannels > 1 ? ((chIdx / (nChannels - 1)) - 0.5) * bucketSpanX : 0;
+          const tx = placed.x + xOffset;
+          const tz = placed.z;
           const ty = getAlt(tx, tz) + 0.08;
 
           keyMilestones.push({
@@ -1019,10 +1114,37 @@ export default function TerrainViewport({
       }
     });
 
-    const curvedSlopeTrail: Array<[number, number, number]> = [];
-    if (keyMilestones.length === 1) {
+    const curvedSlopeTrail: Array<[number, number, number, number]> = [];
+    if (globeLayout) {
+      // One arc per ring. A NaN break keeps the pen from chord-cutting across the disc.
+      for (let c = 0; c < CHANNELS.length; c++) {
+        const points = keyMilestones.filter((m) => m.cat === CHANNELS[c].label);
+        if (points.length === 0) continue;
+        if (curvedSlopeTrail.length > 0) curvedSlopeTrail.push([Number.NaN, 0, 0, 0]);
+        if (points.length === 1) {
+          const p = points[0];
+          curvedSlopeTrail.push([p.x, p.y, p.z, (p.tNorm + 1) / 2]);
+          continue;
+        }
+        for (let i = 0; i < points.length - 1; i++) {
+          const a = points[i];
+          const b = points[i + 1];
+          const fa = (a.tNorm + 1) / 2;
+          const fb = (b.tNorm + 1) / 2;
+          const steps = Math.max(8, Math.ceil(Math.abs(fb - fa) * 96));
+          for (let s = 0; s < steps; s++) {
+            const t = s / steps;
+            const frac = fa + (fb - fa) * t;
+            const [x, z] = ringXZ(c, frac);
+            curvedSlopeTrail.push([x, getAlt(x, z) + 0.08, z, frac]);
+          }
+        }
+        const last = points[points.length - 1];
+        curvedSlopeTrail.push([last.x, last.y, last.z, (last.tNorm + 1) / 2]);
+      }
+    } else if (keyMilestones.length === 1) {
       const p = keyMilestones[0];
-      curvedSlopeTrail.push([p.x, p.y, p.z]);
+      curvedSlopeTrail.push([p.x, p.y, p.z, 0]);
     } else if (keyMilestones.length > 1) {
       const n = keyMilestones.length;
       for (let i = 0; i < n - 1; i++) {
@@ -1053,28 +1175,41 @@ export default function TerrainViewport({
           );
 
           const cy = getAlt(cx, cz) + 0.08;
-          curvedSlopeTrail.push([cx, cy, cz]);
+          curvedSlopeTrail.push([cx, cy, cz, 0]);
         }
       }
       const last = keyMilestones[n - 1];
-      curvedSlopeTrail.push([last.x, last.y, last.z]);
+      curvedSlopeTrail.push([last.x, last.y, last.z, 0]);
     }
 
     const channelWaypoints = CHANNELS.map((ch, idx) => {
-      const zPos = zLanes[idx];
-      let bestX = 0, bestY = 0;
-      for (let x = -12; x <= 12; x += 0.5) {
-        const y = getAlt(x, zPos);
-        if (y > bestY) {
-          bestY = y;
-          bestX = x;
+      let bestX = 0;
+      let bestY = 0;
+      let bestZ = zLanes[idx];
+      if (globeLayout) {
+        for (let f = 0; f <= 1.0001; f += 0.02) {
+          const [x, z] = ringXZ(idx, Math.min(1, f));
+          const y = getAlt(x, z);
+          if (y > bestY) {
+            bestY = y;
+            bestX = x;
+            bestZ = z;
+          }
+        }
+      } else {
+        for (let x = -12; x <= 12; x += 0.5) {
+          const y = getAlt(x, bestZ);
+          if (y > bestY) {
+            bestY = y;
+            bestX = x;
+          }
         }
       }
       return {
         code: ch.key.toUpperCase(),
         name: ch.label,
         color: ch.color,
-        pos: [bestX, bestY, zPos] as [number, number, number],
+        pos: [bestX, bestY, bestZ] as [number, number, number],
         val: idx === 0 ? `${currentStats?.user_prompts ?? 0} PROMPTS`
            : idx === 1 ? `${currentStats?.thinking_blocks ?? 0} TURNS`
            : idx === 2 ? `${currentStats?.assistant_replies ?? 0} REPLIES`
@@ -1187,6 +1322,9 @@ export default function TerrainViewport({
       uScanX: gl.getUniformLocation(progTerrain, "uScanX"),
       uMaxX: gl.getUniformLocation(progTerrain, "uMaxX"),
       uReal: gl.getUniformLocation(progTerrain, "uReal"),
+      uGlobe: gl.getUniformLocation(progTerrain, "uGlobe"),
+      uScanAng: gl.getUniformLocation(progTerrain, "uScanAng"),
+      uMaxFrac: gl.getUniformLocation(progTerrain, "uMaxFrac"),
     };
     uTRef.current = uT;
 
@@ -1197,6 +1335,9 @@ export default function TerrainViewport({
       uScanAmount: gl.getUniformLocation(progContour, "uScanAmount"),
       uMaxX: gl.getUniformLocation(progContour, "uMaxX"),
       uColor: gl.getUniformLocation(progContour, "uColor"),
+      uGlobe: gl.getUniformLocation(progContour, "uGlobe"),
+      uScanAng: gl.getUniformLocation(progContour, "uScanAng"),
+      uMaxFrac: gl.getUniformLocation(progContour, "uMaxFrac"),
     };
     uCRef.current = uC;
 
@@ -1252,10 +1393,29 @@ export default function TerrainViewport({
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
-    const initialGrid = generateBaseGridVerts(baseShapeRef.current);
+    const initialShape = baseShapeRef.current;
+    const initialGrid = initialShape === "globe" ? globeBezelVerts() : generateBaseGridVerts("rect");
     gl.bufferData(gl.ARRAY_BUFFER, initialGrid, gl.STATIC_DRAW);
     baseGridCountRef.current = initialGrid.length / 4;
     gl.bindVertexArray(null);
+
+    const makeLineVao = () => {
+      const vao = gl.createVertexArray()!;
+      const buf = gl.createBuffer()!;
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
+      gl.bindVertexArray(null);
+      return { vao, buf };
+    };
+
+    const haloLines = makeLineVao();
+    const polarLines = makeLineVao();
+    bufPolarRef.current = polarLines.buf;
+    const radarLines = makeLineVao();
 
     // Generate initial geometry
     updateGeometry();
@@ -1352,25 +1512,69 @@ export default function TerrainViewport({
       if (speedMultiplier > 0 && !isPlayingRef.current) {
         clockRef.current.scanProgress = (clockRef.current.scanProgress + (dt * speedMultiplier) / 7.0) % 1.0;
       }
+      if (speedMultiplier > 0) {
+        clockRef.current.radarFrac = (clockRef.current.radarFrac + (dt * speedMultiplier) / RADAR_PERIOD_S) % 1;
+      }
       const scanPhase = clockRef.current.scanProgress;
       const scanXPos = -extentX + scanPhase * (curMaxX - (-extentX));
       const scanFade = speedMultiplier === 0 ? 0.8 : smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
+      const globeOn = currentShape === "globe";
+      const revealed = scrubProgressRef.current >= 0.98 ? 1 : scrubProgressRef.current;
+      const scanFrac = Math.min(1, scanPhase * revealed);
+      const scanAng = globeOn ? timeFracToAngle(scanFrac) : 0;
+      const maxFrac = scrubProgressRef.current >= 0.98 ? 1.2 : revealed;
 
       const isMono = realismRef.current === "mono";
 
-      // Draw Grid Lines (Base perimeter and grid lines are always fully visible and never sliced by time scrubber)
+      // Bezel, halo, channel rings, and the outward ping stay whole. Relief clips to the scrubber.
       gl.useProgram(progContour);
       gl.uniformMatrix4fv(uC.uVP, false, matVP);
       gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
       gl.uniform1f(uC.uScanX, scanXPos);
       gl.uniform1f(uC.uScanAmount, 0);
       gl.uniform1f(uC.uMaxX, 999.0);
-      gl.uniform3f(uC.uColor, 1.0, 1.0, 1.0);
+      gl.uniform1f(uC.uGlobe, 0);
+      gl.uniform1f(uC.uScanAng, scanAng);
+      gl.uniform1f(uC.uMaxFrac, maxFrac);
+
+      if (currentShape === "globe") {
+        const breath = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * 1.35));
+        const halo = globeHaloVerts(breath);
+        gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.5, isMono ? 1.0 : 0.86, 1.0);
+        gl.bindVertexArray(haloLines.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, haloLines.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, halo, gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.LINES, 0, halo.length / 4);
+        gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.62, isMono ? 1.0 : 0.92, 1.0);
+      } else {
+        gl.uniform3f(uC.uColor, 1.0, 1.0, 1.0);
+      }
       gl.bindVertexArray(vaoBaseGrid);
       gl.drawArrays(gl.LINES, 0, baseGridCountRef.current);
 
+      if (currentShape === "globe" && polarCountRef.current > 0) {
+        gl.uniform1f(uC.uGlobe, 0);
+        gl.uniform1f(uC.uScanAmount, 0);
+        gl.uniform1f(uC.uMaxX, 999.0);
+        gl.bindVertexArray(polarLines.vao);
+        for (let c = 0; c < CHANNELS.length; c++) {
+          const col = CHANNELS[c].color;
+          gl.uniform3f(uC.uColor, isMono ? 1.0 : col[0], isMono ? 1.0 : col[1], isMono ? 1.0 : col[2]);
+          gl.drawArrays(gl.LINES, c * TRACK_RING_VERTS, TRACK_RING_VERTS);
+        }
+        const spokeStart = CHANNELS.length * TRACK_RING_VERTS;
+        const spokeCount = polarCountRef.current - spokeStart;
+        if (spokeCount > 0) {
+          gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.62, isMono ? 1.0 : 0.9, 1.0);
+          gl.drawArrays(gl.LINES, spokeStart, spokeCount);
+        }
+      }
+
       // Draw Marching Squares Contours
       if (contoursCountRef.current > 0) {
+        gl.uniform1f(uC.uGlobe, globeOn ? 1 : 0);
+        gl.uniform1f(uC.uScanAng, scanAng);
+        gl.uniform1f(uC.uMaxFrac, maxFrac);
         gl.uniform1f(uC.uScanAmount, 3.0 * scanFade);
         gl.uniform1f(uC.uMaxX, curMaxX);
         gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.78, isMono ? 1.0 : 1.0, isMono ? 1.0 : 0.94);
@@ -1389,9 +1593,31 @@ export default function TerrainViewport({
       gl.uniform1f(uT.uScanX, scanXPos);
       gl.uniform1f(uT.uMaxX, curMaxX);
       gl.uniform1f(uT.uReal, isMono ? 0.0 : 1.0);
+      gl.uniform1f(uT.uGlobe, globeOn ? 1 : 0);
+      gl.uniform1f(uT.uScanAng, scanAng);
+      gl.uniform1f(uT.uMaxFrac, maxFrac);
 
       gl.bindVertexArray(vaoTerrain);
       gl.drawArrays(gl.POINTS, 0, POINT_COUNT);
+
+      if (currentShape === "globe" && elevFieldRef.current) {
+        const field = elevFieldRef.current;
+        const sweep = globeRadarVerts(clockRef.current.radarFrac, (x, z) => sampleElev(field, x, z));
+        gl.useProgram(progContour);
+        gl.uniformMatrix4fv(uC.uVP, false, matVP);
+        gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
+        gl.uniform1f(uC.uScanX, scanXPos);
+        gl.uniform1f(uC.uScanAmount, 0);
+        gl.uniform1f(uC.uMaxX, 999.0);
+        gl.uniform1f(uC.uGlobe, 0);
+        gl.uniform1f(uC.uScanAng, scanAng);
+        gl.uniform1f(uC.uMaxFrac, 1.2);
+        gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.28, isMono ? 1.0 : 0.96, 1.0);
+        gl.bindVertexArray(radarLines.vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, radarLines.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, sweep, gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.LINES, 0, sweep.length / 4);
+      }
       gl.bindVertexArray(null);
 
       // 2D HUD Canvas Overlay
@@ -1408,34 +1634,43 @@ export default function TerrainViewport({
         // Outer golden aura (subtle, thin glow)
         hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
         hud.lineWidth = 2.0;
+        const strokeTrail = () => {
+          let first = true;
+          for (const pos of meta.curvedSlopeTrail) {
+            if (!Number.isFinite(pos[0])) {
+              first = true;
+              continue;
+            }
+            if (globeOn) {
+              if (pos[3] > revealed + 0.004) {
+                first = true;
+                continue;
+              }
+            } else if (pos[0] > curMaxX + 0.1) {
+              break;
+            }
+            const sc = project([pos[0], pos[1], pos[2]]);
+            if (!sc) { first = true; continue; }
+            if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
+            else { hud.lineTo(sc[0], sc[1]); }
+          }
+          hud.stroke();
+        };
         hud.beginPath();
-        let first = true;
-        for (const pos of meta.curvedSlopeTrail) {
-          if (pos[0] > curMaxX + 0.1) break;
-          const sc = project(pos);
-          if (!sc) { first = true; continue; }
-          if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
-          else { hud.lineTo(sc[0], sc[1]); }
-        }
-        hud.stroke();
+        strokeTrail();
 
         // Sharp bright core (refined, delicate tracing line)
         hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
         hud.lineWidth = 0.75;
         hud.beginPath();
-        first = true;
-        for (const pos of meta.curvedSlopeTrail) {
-          if (pos[0] > curMaxX + 0.1) break;
-          const sc = project(pos);
-          if (!sc) { first = true; continue; }
-          if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
-          else { hud.lineTo(sc[0], sc[1]); }
-        }
-        hud.stroke();
+        strokeTrail();
 
         // Render visible milestones with glowing beacons (clean, uncluttered nodes; hover reveals time card)
         for (const m of meta.keyMilestones) {
-          if (m.x > curMaxX + 0.2) continue;
+          const pastHead = globeOn
+            ? (m.tNorm + 1) / 2 > revealed + 0.008
+            : m.x > curMaxX + 0.2;
+          if (pastHead) continue;
           const sc = project([m.x, m.y, m.z]);
           if (!sc) continue;
 
@@ -1452,17 +1687,33 @@ export default function TerrainViewport({
         }
       }
 
-      // (A.1) Chronological Time Sweep Laser / Playhead line across the terrain
-      const pScanTop = project([scanXPos, maxAltitude * 1.05, 0]);
-      const pScanBottom = project([scanXPos, 0, 0]);
-      if (pScanTop && pScanBottom) {
-        hud.strokeStyle = `rgba(255, 220, 100, ${0.40 * scanFade})`;
-        hud.lineWidth = 0.75;
-        hud.beginPath();
-        hud.moveTo(pScanTop[0], pScanTop[1]);
-        hud.lineTo(pScanBottom[0], pScanBottom[1]);
-        hud.stroke();
+      // (A.1) Chronological playhead. Rect is a vertical line. Globe is a radial spoke.
+      hud.strokeStyle = `rgba(255, 220, 100, ${0.40 * scanFade})`;
+      hud.lineWidth = 0.75;
+      hud.beginPath();
+      if (globeOn) {
+        const ang = timeFracToAngle(scanFrac);
+        const field = elevFieldRef.current;
+        let started = false;
+        for (let s = 0; s <= 28; s++) {
+          const r = (s / 28) * GLOBE_RADIUS;
+          const x = Math.cos(ang) * r;
+          const z = Math.sin(ang) * r;
+          const y = field ? sampleElev(field, x, z) : 0;
+          const sc = project([x, y + 0.04, z]);
+          if (!sc) continue;
+          if (!started) { hud.moveTo(sc[0], sc[1]); started = true; }
+          else hud.lineTo(sc[0], sc[1]);
+        }
+      } else {
+        const pScanTop = project([scanXPos, maxAltitude * 1.05, 0]);
+        const pScanBottom = project([scanXPos, 0, 0]);
+        if (pScanTop && pScanBottom) {
+          hud.moveTo(pScanTop[0], pScanTop[1]);
+          hud.lineTo(pScanBottom[0], pScanBottom[1]);
+        }
       }
+      hud.stroke();
 
       // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
       hud.save();
@@ -1474,8 +1725,13 @@ export default function TerrainViewport({
       const extentZ = currentShape === "globe" ? GLOBE_RADIUS : RECT_HZ;
       const tStartX = extentX * 0.92;
       const tStartZ = -(extentZ + 1.6);
-      const tStart = project([-tStartX, 0, tStartZ]);
-      const tEnd = project([tStartX, 0, tStartZ]);
+      const rimAt = (fraction: number, scale = 1.22): [number, number, number] => {
+        const ang = timeFracToAngle(Math.min(1, Math.max(0, fraction)));
+        const r = GLOBE_RADIUS * scale;
+        return [Math.cos(ang) * r, 0.05, Math.sin(ang) * r];
+      };
+      const tStart = globeOn ? project(rimAt(0)) : project([-tStartX, 0, tStartZ]);
+      const tEnd = globeOn ? project(rimAt(1)) : project([tStartX, 0, tStartZ]);
       // Compact bounds only when the mini canvas is tall enough to read them.
       const showTimeBounds = !mini || rect.height >= 110;
       if (showTimeBounds && tStart && tEnd) {
@@ -1512,7 +1768,7 @@ export default function TerrainViewport({
         // Clock ticks follow the compressed axis, so a seam does not stretch them.
         for (const tick of meta.timeTicks) {
           const xTick = -tStartX + tick.fraction * (tStartX * 2);
-          const ptTick = project([xTick, 0, tStartZ]);
+          const ptTick = globeOn ? project(rimAt(tick.fraction)) : project([xTick, 0, tStartZ]);
           if (!ptTick) continue;
           hud.fillStyle = "rgba(255, 255, 255, 0.4)";
           hud.textAlign = "center";
@@ -1521,7 +1777,7 @@ export default function TerrainViewport({
 
         for (const seam of meta.seamMarks) {
           const xSeam = -tStartX + seam.fraction * (tStartX * 2);
-          const ptSeam = project([xSeam, 0, tStartZ]);
+          const ptSeam = globeOn ? project(rimAt(seam.fraction, 1.16)) : project([xSeam, 0, tStartZ]);
           if (!ptSeam) continue;
           // Small // notch on the axis. The duration lives on the scrubber.
           hud.strokeStyle = "rgba(255, 154, 60, 0.4)";
@@ -1535,15 +1791,29 @@ export default function TerrainViewport({
         }
       }
 
-      const chLabelX = -(extentX + 0.8);
-      CHANNELS.forEach((ch, idx) => {
-        const sc = project([chLabelX, 0, zLanes[idx]]);
-        if (sc) {
+      if (globeOn) {
+        const field = elevFieldRef.current;
+        CHANNELS.forEach((ch, idx) => {
+          const [x, z] = ringXZ(idx, 0);
+          const y = field ? sampleElev(field, x, z) : 0.15;
+          const sc = project([x, y + 0.12, z]);
+          if (!sc) return;
           hud.fillStyle = ch.hex;
           hud.textAlign = "right";
-          hud.fillText(mini ? CHANNEL_TAGS[idx] : `[${ch.key.toUpperCase()}] ${ch.label}`, sc[0] - 6, sc[1]);
-        }
-      });
+          // Short tags sit on the start ray. Full names stay on the waypoint pins.
+          hud.fillText(CHANNEL_TAGS[idx], sc[0] - 6, sc[1]);
+        });
+      } else {
+        const chLabelX = -(extentX + 0.8);
+        CHANNELS.forEach((ch, idx) => {
+          const sc = project([chLabelX, 0, zLanes[idx]]);
+          if (sc) {
+            hud.fillStyle = ch.hex;
+            hud.textAlign = "right";
+            hud.fillText(mini ? CHANNEL_TAGS[idx] : `[${ch.key.toUpperCase()}] ${ch.label}`, sc[0] - 6, sc[1]);
+          }
+        });
+      }
       hud.restore();
 
       // Waypoint pins and the altitude ruler cover a short docked canvas.
@@ -1654,7 +1924,10 @@ export default function TerrainViewport({
         hud.textAlign = 'right';
         hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
         hud.fillStyle = 'rgba(255, 255, 255, 0.40)';
-        hud.fillText(`SWEEP X ${scanXPos.toFixed(1)}   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 12);
+        const sweepReadout = globeOn
+          ? `PING ${Math.round(clockRef.current.radarFrac * 100)}%`
+          : `SWEEP X ${scanXPos.toFixed(1)}`;
+        hud.fillText(`${sweepReadout}   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 12);
       }
     };
 
@@ -1701,8 +1974,13 @@ export default function TerrainViewport({
           ? extentX + 2.0
           : (scrubProgressRef.current * 2 - 1) * extentX;
 
+        const globeHover = baseShapeRef.current === "globe";
+        const revealedHover = scrubProgressRef.current >= 0.98 ? 1 : scrubProgressRef.current;
         for (const m of terrainMetaRef.current.keyMilestones) {
-          if (m.x > curMaxX + 0.2) continue;
+          const pastHead = globeHover
+            ? (m.tNorm + 1) / 2 > revealedHover + 0.008
+            : m.x > curMaxX + 0.2;
+          if (pastHead) continue;
           const pt = projectPoint(matVP, [m.x, m.y, m.z], rect.width, rect.height);
           if (pt) {
             const dist = Math.hypot(pt[0] - mouseX, pt[1] - mouseY);
@@ -1757,11 +2035,17 @@ export default function TerrainViewport({
       gl.deleteVertexArray(vaoTerrain);
       gl.deleteVertexArray(vaoContours);
       gl.deleteVertexArray(vaoBaseGrid);
+      gl.deleteVertexArray(haloLines.vao);
+      gl.deleteVertexArray(polarLines.vao);
+      gl.deleteVertexArray(radarLines.vao);
       gl.deleteBuffer(bPos);
       gl.deleteBuffer(bCol);
       gl.deleteBuffer(bSeed);
       gl.deleteBuffer(bufContours);
       gl.deleteBuffer(bufBaseGrid);
+      gl.deleteBuffer(haloLines.buf);
+      gl.deleteBuffer(polarLines.buf);
+      gl.deleteBuffer(radarLines.buf);
 
       glRef.current = null;
       vaoTerrainRef.current = null;
@@ -1772,6 +2056,9 @@ export default function TerrainViewport({
       bufContoursRef.current = null;
       vaoBaseGridRef.current = null;
       bufBaseGridRef.current = null;
+      bufPolarRef.current = null;
+      polarCountRef.current = 0;
+      elevFieldRef.current = null;
     };
   }, []);
 
@@ -1885,7 +2172,7 @@ export default function TerrainViewport({
             type="button"
             className={baseShape === "globe" ? "on" : ""}
             onClick={() => setBaseShape("globe")}
-            title="Circular planetary dome base"
+            title="Channel rings, outward ping"
           >
             GLOBE
           </button>
