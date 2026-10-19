@@ -3,6 +3,7 @@ import {
   changeGraph,
   clearChronicleCache,
   fileDiff,
+  openEditorPath,
   searchChangedFiles,
   type ChangeGraphResponse,
   type FileDiffResponse,
@@ -2132,6 +2133,15 @@ export default function ChangeGraph({
                 >
                   {selectedFile.path}
                 </span>
+                <button
+                  type="button"
+                  className="open-editor"
+                  onClick={() => {
+                    void openEditorPath(selectedFile.path, cwd);
+                  }}
+                >
+                  Open in editor
+                </button>
               </div>
 
               {/* Third Row: Connected Chain Links Pills (if any) */}

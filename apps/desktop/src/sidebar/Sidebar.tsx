@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import AgentBoard from "../chrome/AgentBoard.tsx";
+import type { AgentBoardRow } from "../chrome/agentBoard.ts";
 import type { Selection, Snapshot } from "../types";
 
 export default function Sidebar({
@@ -15,6 +17,8 @@ export default function Sidebar({
   onCloseSession,
   onNewSession,
   onCollapse,
+  agentRows = [],
+  onSelectAgent,
 }: {
   snapshot: Snapshot;
   attachedSession: string | null;
@@ -28,6 +32,13 @@ export default function Sidebar({
   onCloseSession: (name: string) => void;
   onNewSession: () => void;
   onCollapse?: () => void;
+  /** Agent board rows. Optional; defaults to an empty board until App passes them. */
+  agentRows?: AgentBoardRow[];
+  /**
+   * Selects the board row's session, window, and pane. Optional; defaults to
+   * `onSelectPane`. The board does not write to the pane.
+   */
+  onSelectAgent?: (session: string, windowId: string, paneId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
@@ -42,8 +53,11 @@ export default function Sidebar({
 
   const n = snapshot.sessions.length;
 
+  const selectAgent = onSelectAgent ?? onSelectPane;
+
   return (
     <aside className="sidebar">
+      <AgentBoard rows={agentRows} onSelect={selectAgent} />
       <header className="sidebar-head">
         <div className="sidebar-kicker-row">
           <div className="sidebar-kicker">Sessions</div>
@@ -94,9 +108,9 @@ export default function Sidebar({
           const sessSelected =
             selection?.kind === "session" && selection.name === session.name;
           const live = attachedSession === session.name;
-          const sessAttn = session.windows.some(
-            (w) => w.unread && !(live && w.id === visibleWindowId),
-          );
+          const hidden = (w: { id: string }) => !(live && w.id === visibleWindowId);
+          const sessAttn = session.windows.some((w) => w.unread && hidden(w));
+          const sessFinished = session.windows.some((w) => w.finished && hidden(w));
           return (
             <div key={session.id} className={`sess ${live ? "live" : ""}`}>
               <div className={`row sess-row ${sessSelected ? "selected" : ""}`}>
@@ -113,7 +127,11 @@ export default function Sidebar({
                 <button
                   className="row-main"
                   aria-label={
-                    sessAttn ? `${session.name}, unread` : session.name
+                    sessAttn
+                      ? `${session.name}, unread`
+                      : sessFinished
+                        ? `${session.name}, finished`
+                        : session.name
                   }
                   onClick={() => onSelectSession(session.name)}
                   onDoubleClick={(e) => {
@@ -126,6 +144,9 @@ export default function Sidebar({
                   <span className="name">{session.name}</span>
                   {sessAttn && (
                     <span className="attn" title="unread" aria-hidden="true" />
+                  )}
+                  {sessFinished && (
+                    <span className="attn-finished" title="finished" aria-hidden="true" />
                   )}
                   <span className="meta">{session.windows.length}w</span>
                 </button>
@@ -150,6 +171,16 @@ export default function Sidebar({
                     selection?.kind === "window" && selection.id === win.id;
                   const winVisible = visibleWindowId === win.id && live;
                   const winAttn = win.unread && !winVisible;
+                  const pendingAsk = winAttn && win.pending_ask ? win.pending_ask : "";
+                  const winFinished = win.finished && !winVisible;
+                  const winLabel = [
+                    win.name,
+                    winAttn ? "unread" : "",
+                    pendingAsk,
+                    winFinished ? "finished" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(", ");
                   return (
                     <div key={win.id} className="win-block">
                       <div
@@ -169,13 +200,23 @@ export default function Sidebar({
                         </button>
                         <button
                           className="row-main"
-                          aria-label={winAttn ? `${win.name}, unread` : win.name}
+                          aria-label={winLabel}
                           onClick={() => onSelectWindow(session.name, win.id)}
                         >
                           <span className="badge">{win.index}</span>
-                          <span className="name">{win.name}</span>
+                          <span className="name-stack">
+                            <span className="name">{win.name}</span>
+                            {pendingAsk && <span className="pending-ask">{pendingAsk}</span>}
+                          </span>
                           {winAttn && (
                             <span className="attn" title="unread" aria-hidden="true" />
+                          )}
+                          {winFinished && (
+                            <span
+                              className="attn-finished"
+                              title="finished"
+                              aria-hidden="true"
+                            />
                           )}
                           <span className="meta">{win.panes.length}p</span>
                         </button>

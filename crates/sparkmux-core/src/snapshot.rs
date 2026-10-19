@@ -78,6 +78,13 @@ pub struct Window {
     pub activity_epoch: i64,
     /// Filled by the desktop crate before the UI sees the snapshot; the parser leaves this false.
     pub unread: bool,
+    /// One-line needs-user question. The parser leaves this empty.
+    pub pending_ask: String,
+    /// Quiet finished mark. The parser leaves this false.
+    pub finished: bool,
+    /// Classifier label that survives a visible visit. The parser leaves this empty.
+    /// Wire values are `needs_user`, `failed`, `succeeded`, `running`, or null.
+    pub attention_label: Option<String>,
     pub panes: Vec<Pane>,
 }
 
@@ -174,6 +181,9 @@ pub fn parse_snapshot(sessions: &str, windows: &str, panes: &str) -> Result<Snap
             activity: win.activity,
             activity_epoch: win.activity_epoch,
             unread: false,
+            pending_ask: String::new(),
+            finished: false,
+            attention_label: None,
             panes: Vec::new(),
         });
     }
@@ -624,6 +634,9 @@ mod tests {
             activity: false,
             activity_epoch: 0,
             unread: false,
+            pending_ask: String::new(),
+            finished: false,
+            attention_label: None,
             panes,
         }
     }
@@ -639,6 +652,9 @@ mod tests {
         assert!(!snap.sessions[0].windows[0].activity);
         assert_eq!(snap.sessions[0].windows[0].activity_epoch, 0);
         assert!(!snap.sessions[0].windows[0].unread);
+        assert!(snap.sessions[0].windows[0].pending_ask.is_empty());
+        assert!(!snap.sessions[0].windows[0].finished);
+        assert!(snap.sessions[0].windows[0].attention_label.is_none());
         assert!(snap.sessions[0].windows[1].bell);
         assert!(snap.sessions[0].windows[1].activity);
         assert_eq!(snap.sessions[0].windows[1].activity_epoch, 0);
@@ -657,6 +673,8 @@ mod tests {
         assert!(!win.activity);
         assert_eq!(win.activity_epoch, 1_700_001_111);
         assert!(!win.unread);
+        assert!(win.pending_ask.is_empty());
+        assert!(!win.finished);
     }
 
     fn pane(id: &str) -> Pane {

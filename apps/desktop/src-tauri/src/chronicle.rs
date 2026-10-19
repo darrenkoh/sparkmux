@@ -397,13 +397,10 @@ fn build_chronicle_session(command: &str, cwd: &str, title: &str, pid: u32) -> C
 }
 
 fn load_for_pane(command: &str, cwd: &str, title: &str, pid: u32) -> Loaded {
-    let roots = artifacts::default_roots();
-    let family = artifacts::pane_family(pid);
-    let Some(kind) = artifacts::detect_cli(command, title, &family) else {
+    let Some((kind, path, _roots)) =
+        artifacts::resolve_pane_transcript(command, cwd, title, pid, &artifacts::default_roots())
+    else {
         return Loaded::empty(None);
-    };
-    let Some(path) = artifacts::select_transcript(kind, cwd, title, &family, &roots) else {
-        return Loaded::empty(Some(kind));
     };
     load_path(kind, &path, Path::new(cwd))
 }

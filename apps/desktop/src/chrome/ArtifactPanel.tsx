@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { paneArtifacts } from "../api";
+import { openEditorPath, paneArtifacts } from "../api";
+import { toolRowPath } from "./openPath";
 import {
   calculatePreservedScrollTop,
   emptyOutputText,
@@ -198,6 +199,7 @@ export default function ArtifactPanel({
             <Entry
               key={entry.id}
               entry={entry}
+              cwd={cwd}
               expanded={expandedIds.has(entry.id)}
               onToggle={(open) => handleToggle(entry.id, open)}
             />
@@ -210,14 +212,17 @@ export default function ArtifactPanel({
 
 function Entry({
   entry,
+  cwd,
   expanded,
   onToggle,
 }: {
   entry: ArtifactEntry;
+  cwd: string;
   expanded: boolean;
   onToggle: (open: boolean) => void;
 }) {
   const preview = previewLine(entry.body);
+  const recordedPath = entry.kind === "tool" ? toolRowPath(entry.body) : null;
   return (
     <details
       className={`artifact-item ${entry.kind}`}
@@ -229,6 +234,19 @@ function Entry({
       <summary>
         <span className="artifact-label">{entry.label}</span>
         {preview && <span className="artifact-preview">{preview}</span>}
+        {recordedPath && (
+          <button
+            type="button"
+            className="open-editor"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void openEditorPath(recordedPath, cwd);
+            }}
+          >
+            Open in editor
+          </button>
+        )}
       </summary>
       {entry.body && <div className="artifact-body">{entry.body}</div>}
     </details>

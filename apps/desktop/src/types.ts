@@ -44,6 +44,15 @@ export interface Window {
   activity: boolean;
   activity_epoch: number;
   unread: boolean;
+  /** One-line ask. The sidebar and tabs show it only on an unread hidden window. */
+  pending_ask: string;
+  /** Quiet finished mark. Never drawn on the visible window. */
+  finished: boolean;
+  /**
+   * Classifier label. Stays set while the window is visible, when unread and
+   * the pending question are cleared.
+   */
+  attention_label: "needs_user" | "failed" | "succeeded" | "running" | null;
   panes: Pane[];
 }
 

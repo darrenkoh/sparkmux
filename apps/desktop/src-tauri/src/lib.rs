@@ -2,6 +2,7 @@ mod analytics;
 mod artifacts;
 mod attention;
 mod bedrock_cost;
+mod board_api;
 mod change_graph;
 mod chronicle;
 mod commands;
@@ -11,10 +12,14 @@ mod helper;
 mod helper_model;
 mod llm_usage;
 mod menu;
+mod notify_attention;
+mod open_path;
 mod open_url;
 mod relaunch;
+mod ssh_bind;
 mod state;
 mod telemetry;
+mod window_label;
 
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
@@ -73,6 +78,9 @@ pub fn run() {
             analytics::clear_analytics_data,
             analytics::analytics_config,
             open_url::open_http_url,
+            open_path::open_editor_path,
+            notify_attention::post_attention_notification,
+            board_api::agent_board,
             relaunch::relaunch_after_update,
             commands::sync_active_target,
             commands::get_active_target,

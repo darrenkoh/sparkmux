@@ -54,6 +54,8 @@ pub struct ArtifactEntry {
     pub kind: String,
     pub label: String,
     pub body: String,
+    /// Model name copied from the transcript record. Empty when the record has none.
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -87,6 +89,7 @@ impl ArtifactFeed {
     }
 }
 
+#[derive(Clone)]
 pub struct TranscriptRoots {
     pub grok_sessions: PathBuf,
     pub claude_projects: PathBuf,
@@ -123,10 +126,76 @@ pub async fn pane_artifacts(
     title: String,
     pid: u32,
 ) -> Result<ArtifactFeed, String> {
-    let roots = default_roots();
-    tokio::task::spawn_blocking(move || load_artifacts(&command, &cwd, &title, pid, &roots))
-        .await
-        .map_err(|err| err.to_string())
+    tokio::task::spawn_blocking(move || {
+        if crate::ssh_bind::ssh_foreground(&command) {
+            let _ = crate::ssh_bind::remote_roots(pid);
+        }
+        let roots = default_roots();
+        load_artifacts(&command, &cwd, &title, pid, &roots)
+    })
+    .await
+    .map_err(|err| err.to_string())
+}
+
+fn remote_transcript_roots(remote: crate::ssh_bind::RemoteRoots) -> TranscriptRoots {
+    TranscriptRoots {
+        grok_sessions: remote.grok_sessions,
+        claude_projects: remote.claude_projects,
+        grok_active_sessions: remote.grok_active_sessions,
+        agy_root: remote.agy_root,
+    }
+}
+
+/// Transcript this pane may follow. `None` means the surfaces stay empty.
+/// An `ssh` pane never receives the caller's local roots. A non-zero ssh pid
+/// fetches its remote store before the gate. Pid 0 does not fetch.
+pub(crate) fn resolve_pane_transcript(
+    command: &str,
+    cwd: &str,
+    title: &str,
+    pid: u32,
+    local: &TranscriptRoots,
+) -> Option<(CliKind, PathBuf, TranscriptRoots)> {
+    if crate::ssh_bind::ssh_foreground(command) {
+        let _ = crate::ssh_bind::remote_roots(pid);
+    }
+    match crate::ssh_bind::bind_roots(command, pid) {
+        crate::ssh_bind::BindRoots::Empty => None,
+        crate::ssh_bind::BindRoots::UseCaller => {
+            let family = pane_family(pid);
+            let kind = detect_cli(command, title, &family)?;
+            let path = select_transcript(kind, cwd, title, &family, local)?;
+            Some((kind, path, local.clone()))
+        }
+        crate::ssh_bind::BindRoots::Remote(remote) => {
+            let roots = remote_transcript_roots(remote);
+            let (kind, path) = select_remote(cwd, title, &roots)?;
+            Some((kind, path, roots))
+        }
+    }
+}
+
+fn select_remote(cwd: &str, title: &str, roots: &TranscriptRoots) -> Option<(CliKind, PathBuf)> {
+    if let Some(kind) = detect_cli("", title, &[]) {
+        let path = select_transcript(kind, cwd, title, &[], roots)?;
+        return Some((kind, path));
+    }
+    let mut best: Option<(CliKind, PathBuf, std::time::SystemTime)> = None;
+    for kind in [CliKind::Grok, CliKind::Claude, CliKind::Antigravity] {
+        let Some(path) = select_transcript(kind, cwd, title, &[], roots) else {
+            continue;
+        };
+        let modified = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let replace = best
+            .as_ref()
+            .is_none_or(|(_, _, previous)| modified >= *previous);
+        if replace {
+            best = Some((kind, path, modified));
+        }
+    }
+    best.map(|(kind, path, _)| (kind, path))
 }
 
 pub fn load_artifacts(
@@ -136,7 +205,40 @@ pub fn load_artifacts(
     pid: u32,
     roots: &TranscriptRoots,
 ) -> ArtifactFeed {
-    load_for_family(command, cwd, title, &pane_family(pid), roots)
+    match crate::ssh_bind::bind_roots(command, pid) {
+        crate::ssh_bind::BindRoots::Empty => ArtifactFeed::none(),
+        crate::ssh_bind::BindRoots::UseCaller => {
+            load_for_family(command, cwd, title, &pane_family(pid), roots)
+        }
+        crate::ssh_bind::BindRoots::Remote(remote) => {
+            let remote_roots = TranscriptRoots {
+                grok_sessions: remote.grok_sessions,
+                claude_projects: remote.claude_projects,
+                grok_active_sessions: remote.grok_active_sessions,
+                agy_root: remote.agy_root,
+            };
+            load_remote(cwd, title, &remote_roots)
+        }
+    }
+}
+
+/// Remote store only. A title that names a CLI selects that CLI. Otherwise
+/// the newest transcript under the remote roots for this cwd wins. The local
+/// home is not consulted.
+fn load_remote(cwd: &str, title: &str, roots: &TranscriptRoots) -> ArtifactFeed {
+    let Some((kind, path)) = select_remote(cwd, title, roots) else {
+        return ArtifactFeed::none();
+    };
+    match read_transcript(kind, &path, MAX_TAIL) {
+        Ok((file_len, entries)) => ArtifactFeed {
+            cli: Some(kind.as_str().to_string()),
+            transcript_path: Some(path.to_string_lossy().into_owned()),
+            file_len,
+            entries,
+            error: None,
+        },
+        Err(_) => ArtifactFeed::none(),
+    }
 }
 
 fn load_for_family(
@@ -1200,6 +1302,7 @@ fn push_grok(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
                 &raw,
                 ASSISTANT_CAP,
             );
+            attach_model(entries, offset, obj.get("model").and_then(Value::as_str));
             if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
                     let name = call.get("name").and_then(Value::as_str).unwrap_or("tool");
@@ -1242,6 +1345,7 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
     let Some(message) = obj.get("message").and_then(Value::as_object) else {
         return;
     };
+    let recorded_model = message.get("model").and_then(Value::as_str);
     let content = message.get("content").unwrap_or(&Value::Null);
     let Some(blocks) = content.as_array() else {
         let raw = text_from_value(content);
@@ -1264,6 +1368,7 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
                 USER_CAP,
             );
         }
+        attach_model(entries, offset, recorded_model);
         return;
     };
 
@@ -1325,6 +1430,7 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
     for (name, summary) in tools {
         push_text(entries, offset, "tool", &name, &summary, ARG_CAP);
     }
+    attach_model(entries, offset, recorded_model);
 }
 
 fn step_index(value: &Value) -> Option<i64> {
@@ -1466,6 +1572,7 @@ fn push_agy(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value, full: 
                 &content,
                 ASSISTANT_CAP,
             );
+            attach_model(entries, offset, obj.get("model").and_then(Value::as_str));
             if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
                 for call in calls {
                     let name = call.get("name").and_then(Value::as_str).unwrap_or("tool");
@@ -1685,7 +1792,25 @@ fn push_text(
         kind: kind.to_string(),
         label: label.to_string(),
         body: truncate_chars(body, cap),
+        model: String::new(),
     });
+}
+
+fn attach_model(entries: &mut [ArtifactEntry], offset: u64, model: Option<&str>) {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return;
+    };
+    if model.chars().any(|ch| ch.is_control()) {
+        return;
+    }
+    let model: String = model.chars().take(80).collect();
+    if let Some(entry) = entries
+        .iter_mut()
+        .rev()
+        .find(|entry| entry.offset == offset && entry.model.is_empty())
+    {
+        entry.model = model;
+    }
 }
 
 pub(crate) fn truncate_chars(text: &str, max: usize) -> String {
@@ -1737,6 +1862,39 @@ mod tests {
             "%2FUsers%2Fdarrenkoh%2Fgithub%2Fsparkmux"
         );
         assert_eq!(percent_encode("/a b"), "%2Fa%20b");
+    }
+
+    #[test]
+    fn claude_message_model_is_the_board_model() {
+        let dir = scratch("claude-model");
+        let path = dir.join("session.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"nemotron_3_nano_omni\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}\n",
+        )
+        .unwrap();
+        let (_len, entries) = read_transcript(CliKind::Claude, &path, MAX_TAIL).unwrap();
+        let hinted = crate::board_api::model_hint(&entries);
+        assert_eq!(hinted.as_deref(), Some("nemotron_3_nano_omni"));
+        let row = crate::attention::board_row(&crate::attention::BoardFields {
+            session: "spark",
+            window_id: "@1",
+            window_name: "agent",
+            pane_id: "%1",
+            command: "claude",
+            title: "",
+            label: Some(crate::attention::AttentionLabel::Running),
+            model: hinted.as_deref(),
+            ask: None,
+            assistant: Some("done"),
+        })
+        .expect("claude row");
+        assert_eq!(row.model, "nemotron_3_nano_omni");
+        assert!(
+            entries.iter().all(|entry| !entry.body.contains("nemotron")),
+            "{entries:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1828,6 +1986,116 @@ mod tests {
             format!("{{\"type\":\"assistant\",\"content\":\"{body}\"}}\n"),
         )
         .unwrap();
+    }
+
+    fn remote_of(roots: &TranscriptRoots) -> crate::ssh_bind::RemoteRoots {
+        crate::ssh_bind::RemoteRoots {
+            grok_sessions: roots.grok_sessions.clone(),
+            claude_projects: roots.claude_projects.clone(),
+            grok_active_sessions: roots.grok_active_sessions.clone(),
+            agy_root: roots.agy_root.clone(),
+        }
+    }
+
+    #[test]
+    fn ssh_without_a_remote_store_does_not_bind_the_local_transcript() {
+        let dir = scratch("ssh-local");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let sessions = dir.join("sessions");
+        let encoded = sessions.join(encode_grok_path(&project));
+        write_grok(&encoded, "local", "local reply");
+        let local = roots(&dir, sessions, dir.join("no-claude"));
+        let local_file = encoded.join("local").join("chat_history.jsonl");
+        let feed = load_artifacts(
+            "/usr/bin/ssh",
+            &project.to_string_lossy(),
+            "dev - grok",
+            0,
+            &local,
+        );
+        assert!(feed.cli.is_none(), "{feed:?}");
+        assert!(feed.entries.is_empty(), "{feed:?}");
+        assert!(feed.transcript_path.is_none(), "{feed:?}");
+        assert_ne!(
+            feed.transcript_path.as_deref(),
+            Some(local_file.to_str().unwrap())
+        );
+        assert!(resolve_pane_transcript(
+            "/usr/bin/ssh",
+            &project.to_string_lossy(),
+            "dev - grok",
+            0,
+            &local,
+        )
+        .is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ssh_with_a_readable_remote_fixture_binds_only_that_pane_store() {
+        let local_dir = scratch("ssh-home-local");
+        let remote_dir = scratch("ssh-home-remote");
+        let project = local_dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let local_sessions = local_dir.join("sessions");
+        let remote_sessions = remote_dir.join("sessions");
+        write_grok(
+            &local_sessions.join(encode_grok_path(&project)),
+            "local",
+            "local reply",
+        );
+        write_grok(
+            &remote_sessions.join(encode_grok_path(&project)),
+            "remote",
+            "remote reply",
+        );
+        let local = roots(&local_dir, local_sessions, local_dir.join("no-claude"));
+        let remote = roots(&remote_dir, remote_sessions, remote_dir.join("no-claude"));
+        let pid = 424_242;
+        crate::ssh_bind::stage_remote_roots(pid, remote_of(&remote));
+        let cwd = project.to_string_lossy();
+        let feed = load_artifacts("ssh", &cwd, "dev - grok", pid, &local);
+        let untitled = resolve_pane_transcript("ssh", &cwd, "zsh", pid, &local);
+        crate::ssh_bind::clear_remote_roots(pid);
+        let untitled = untitled.expect("untitled ssh follows the remote store");
+        assert_eq!(untitled.0, CliKind::Grok);
+        let remote_sessions = remote.grok_sessions.canonicalize().unwrap();
+        let local_sessions = local.grok_sessions.canonicalize().unwrap();
+        assert!(
+            untitled.1.starts_with(&remote_sessions),
+            "untitled path left the remote store: {}",
+            untitled.1.display()
+        );
+        assert!(
+            !untitled.1.starts_with(&local_sessions),
+            "untitled path used the local home: {}",
+            untitled.1.display()
+        );
+        let path = PathBuf::from(feed.transcript_path.clone().unwrap_or_default());
+        let path = path.canonicalize().unwrap_or(path);
+        assert!(
+            path.starts_with(&remote_sessions) && path.ends_with("remote/chat_history.jsonl"),
+            "bound the wrong store: {}",
+            path.display()
+        );
+        assert!(
+            !path.starts_with(&local_sessions),
+            "bound the local home: {}",
+            path.display()
+        );
+        assert!(
+            feed.entries
+                .iter()
+                .any(|entry| entry.body == "remote reply"),
+            "{feed:?}"
+        );
+        assert!(
+            feed.entries.iter().all(|entry| entry.body != "local reply"),
+            "{feed:?}"
+        );
+        let _ = fs::remove_dir_all(&local_dir);
+        let _ = fs::remove_dir_all(&remote_dir);
     }
 
     #[test]

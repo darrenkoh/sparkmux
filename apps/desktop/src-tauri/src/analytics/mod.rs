@@ -19,7 +19,7 @@ use self::storage::{
     resume_cursor, save_meta, set_enabled, AnalyticsConfig, TabMeta,
 };
 use self::subagents::{apply_child_totals, ingest_session};
-use crate::artifacts::{default_roots, detect_cli, pane_family, select_transcript};
+use crate::artifacts::default_roots;
 
 #[derive(Default)]
 struct LiveAnalytics {
@@ -55,11 +55,26 @@ pub async fn tab_analytics(
     pid: u32,
 ) -> Result<TabAnalyticsResponse, String> {
     tokio::task::spawn_blocking(move || {
-        let roots = default_roots();
-        let family = pane_family(pid);
-        let kind = detect_cli(&command, &title, &family);
-
-        let transcript = kind.and_then(|k| select_transcript(k, &cwd, &title, &family, &roots));
+        let Some((resolved_kind, resolved_path, roots)) = crate::artifacts::resolve_pane_transcript(
+            &command,
+            &cwd,
+            &title,
+            pid,
+            &default_roots(),
+        ) else {
+            return Ok(TabAnalyticsResponse {
+                enabled: is_enabled(),
+                session_name,
+                tab_id,
+                cli: None,
+                transcript_path: None,
+                stats: crate::analytics::stats::TabAnalyticsStats::default(),
+                lifetime_stats: Some(crate::analytics::stats::TabAnalyticsStats::default()),
+                storage: get_storage_stats(),
+            });
+        };
+        let kind = Some(resolved_kind);
+        let transcript = Some(resolved_path);
         let active_src = match (kind, transcript.as_ref()) {
             (Some(k), Some(p)) => Some(source_id(k, p)),
             _ => None,

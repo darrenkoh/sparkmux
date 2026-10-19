@@ -123,6 +123,18 @@ struct UsagePaths {
 
 #[tauri::command]
 pub async fn llm_usage(command: String, title: String, cwd: String, pid: u32) -> LlmUsage {
+    if crate::ssh_bind::ssh_foreground(&command) {
+        return tokio::task::spawn_blocking(move || {
+            if crate::ssh_bind::remote_roots(pid).is_none() {
+                return LlmUsage::empty();
+            }
+            let mut usage = LlmUsage::empty();
+            usage.cost = crate::bedrock_cost::cost_for(&command, &cwd, &title, pid, now_ms());
+            usage
+        })
+        .await
+        .unwrap_or_else(|_| LlmUsage::empty());
+    }
     let now = now_ms();
     let family = crate::artifacts::pane_family(pid);
     let detected_kind = crate::artifacts::detect_cli(&command, &title, &family);
@@ -378,7 +390,7 @@ fn run_agy_print(now: i64) -> Option<LlmUsage> {
     Some(usage)
 }
 
-fn agy_binary() -> Option<PathBuf> {
+pub(crate) fn agy_binary() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join("agy");

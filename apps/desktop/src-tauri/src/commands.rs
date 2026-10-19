@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use sparkmux_core::{
-    attach_target, parse_window_layout, LayoutNode, Pane, Snapshot, Window, SOCKET_NAME,
+    attach_target, parse_window_layout, LayoutNode, Pane, Snapshot, TmuxClient, Window, SOCKET_NAME,
 };
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -12,6 +12,7 @@ use crate::attention::{self, AttentionLabel, LabelToken};
 use crate::control;
 use crate::error::{map_error, too_old};
 use crate::state::{persist_last_session, ActiveTarget, AppState};
+use crate::window_label;
 
 /// A stuck tmux server must not pin the UI. Blocking `TmuxClient::run` calls
 /// happen off the `AppState` lock and fail closed after this bound.
@@ -112,10 +113,56 @@ pub async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
         let mut inner = state.inner.lock().await;
         inner.ensure_client()?.clone()
     };
-    match off_lock(move || client.snapshot().map_err(|e| map_error(&e))).await {
-        Ok(snap) => annotate_attention(&state, snap).await,
+    let listed = client.clone();
+    match off_lock(move || listed.snapshot().map_err(|e| map_error(&e))).await {
+        Ok(mut snap) => {
+            apply_auto_labels(client, &mut snap).await;
+            annotate_attention(&state, snap).await
+        }
         Err(msg) if msg.starts_with("server-down") => Ok(sparkmux_core::Snapshot::empty()),
         Err(msg) => Err(msg),
+    }
+}
+
+/// Rename default `shell` tabs to the running CLI, off the app-state lock.
+async fn apply_auto_labels(client: TmuxClient, snap: &mut Snapshot) {
+    let versions = window_label::cached_versions();
+    let (changes, need_probe) = window_label::plan(snap, &versions);
+    if need_probe {
+        window_label::start_agy_probe();
+    }
+    if changes.is_empty() {
+        return;
+    }
+    let renamed = match off_lock(move || {
+        let mut done = Vec::new();
+        for change in changes {
+            match client.rename_window(&change.window_id, &change.name) {
+                Ok(()) => done.push(change),
+                Err(err) => tracing::warn!("auto label {} failed: {err}", change.window_id),
+            }
+        }
+        Ok(done)
+    })
+    .await
+    {
+        Ok(done) => done,
+        Err(err) => {
+            tracing::warn!("auto label rename did not finish: {err}");
+            Vec::new()
+        }
+    };
+    for change in renamed {
+        for session in &mut snap.sessions {
+            if let Some(window) = session
+                .windows
+                .iter_mut()
+                .find(|window| window.id == change.window_id)
+            {
+                window.name = change.name;
+                break;
+            }
+        }
     }
 }
 
@@ -128,9 +175,10 @@ pub async fn ensure_ready(state: State<'_, AppState>) -> Result<Snapshot, String
         let client = inner.ensure_client()?.clone();
         (client, spawn, default_session)
     };
-    let snap = off_lock(move || {
-        check_version(&client)?;
-        client
+    let ready = client.clone();
+    let mut snap = off_lock(move || {
+        check_version(&ready)?;
+        ready
             .ensure_ready(&spawn, &default_session)
             .map_err(|e| map_error(&e))
     })
@@ -139,6 +187,7 @@ pub async fn ensure_ready(state: State<'_, AppState>) -> Result<Snapshot, String
         let mut inner = state.inner.lock().await;
         inner.stopped = false;
     }
+    apply_auto_labels(client, &mut snap).await;
     annotate_attention(&state, snap).await
 }
 
@@ -147,6 +196,12 @@ struct AttentionRead {
     command: String,
     cwd: String,
     title: String,
+}
+
+struct AttentionHit {
+    token: Option<LabelToken>,
+    label: Option<AttentionLabel>,
+    question: Option<String>,
 }
 
 fn attention_pane(window: &Window) -> Option<&Pane> {
@@ -207,7 +262,16 @@ async fn annotate_attention(state: &AppState, mut snap: Snapshot) -> Result<Snap
             // pid 0 skips the process-family walk. Snapshot polling must not touch /proc.
             let feed =
                 crate::artifacts::load_artifacts(&read.command, &read.cwd, &read.title, 0, &roots);
-            out.push((read.id, attention::label_from_feed(&feed)));
+            let (token, label) = attention::label_from_feed(&feed);
+            let question = attention::pending_question(&feed.entries);
+            out.push((
+                read.id,
+                AttentionHit {
+                    token,
+                    label,
+                    question,
+                },
+            ));
         }
         out
     })
@@ -216,22 +280,52 @@ async fn annotate_attention(state: &AppState, mut snap: Snapshot) -> Result<Snap
         tracing::warn!("attention transcripts were not read: {err}");
         Vec::new()
     });
-    let mut fresh: HashMap<String, (Option<LabelToken>, Option<AttentionLabel>)> =
-        loaded.into_iter().collect();
+    let mut fresh: HashMap<String, AttentionHit> = loaded.into_iter().collect();
 
     let mut inner = state.inner.lock().await;
     for session in &mut snap.sessions {
         let on_screen = attached.as_deref() == Some(session.name.as_str());
         for window in &mut session.windows {
             let visible = on_screen && window.active;
-            let agent = attention_pane(window).is_some_and(pane_is_agent);
-            let label = if visible {
-                None
-            } else if let Some((token, label)) = fresh.remove(&window.id) {
-                inner.attention.store_label(&window.id, token, label, now)
+            let (agent, ssh) = match attention_pane(window) {
+                Some(pane) => (
+                    pane_is_agent(pane),
+                    attention::command_is_ssh(&pane.command),
+                ),
+                None => (false, false),
+            };
+            let mut same_token = false;
+            let mut question = None;
+            let mut read_now = false;
+            let classified = if let Some(hit) = fresh.remove(&window.id) {
+                read_now = true;
+                same_token = inner
+                    .attention
+                    .has_same_token(&window.id, hit.token.as_ref());
+                question = hit.question;
+                inner
+                    .attention
+                    .store_label(&window.id, hit.token, hit.label, now)
             } else {
-                // A skipped read is not "no classifier result". Keep the last label.
+                // A skipped read is not "no classifier result". Keep the last label,
+                // including while this window is the active one.
                 inner.attention.cached_label(&window.id)
+            };
+            // Unread, the pending question, and the finished mark stay blank on
+            // the visible window. The durable classifier label does not.
+            let label = if visible { None } else { classified };
+            window.attention_label = attention::attention_label_wire(classified);
+            let ask = if visible {
+                inner.attention.clear_ask(&window.id);
+                String::new()
+            } else if read_now {
+                inner
+                    .attention
+                    .note_question(&window.id, label, question, same_token)
+            } else if label == Some(AttentionLabel::NeedsUser) {
+                inner.attention.cached_ask(&window.id)
+            } else {
+                String::new()
             };
             window.unread = inner.attention.unread(
                 &attention::WindowAttention {
@@ -243,6 +337,23 @@ async fn annotate_attention(state: &AppState, mut snap: Snapshot) -> Result<Snap
                     label,
                 },
                 now,
+            );
+            // Failed and bell-only rows stay blank. The question is only for needs-user.
+            window.pending_ask = if window.unread && label == Some(AttentionLabel::NeedsUser) {
+                ask
+            } else {
+                String::new()
+            };
+            window.finished = inner.attention.finished(
+                &attention::WindowAttention {
+                    id: window.id.clone(),
+                    bell: window.bell,
+                    activity_epoch: window.activity_epoch,
+                    visible,
+                    agent: agent && !ssh,
+                    label,
+                },
+                same_token,
             );
         }
     }
@@ -721,6 +832,9 @@ mod tests {
             activity,
             activity_epoch: epoch,
             unread: false,
+            pending_ask: String::new(),
+            finished: false,
+            attention_label: None,
             panes: vec![pane(id, command)],
         }
     }
@@ -900,5 +1014,53 @@ mod tests {
             !held.unread,
             "a running agent past the 8-read cap must not be treated as unlabeled"
         );
+    }
+
+    #[tokio::test]
+    async fn annotate_visible_fetch_keeps_needs_user_when_unread_is_clear() {
+        let state = attached("Sparkmux").await;
+        {
+            let mut inner = state.inner.lock().await;
+            inner.attention.store_label(
+                "grok",
+                Some(LabelToken {
+                    transcript_path: "/tmp/chat.jsonl".into(),
+                    file_len: 8,
+                    last_entry_id: "ask".into(),
+                }),
+                Some(AttentionLabel::NeedsUser),
+                Instant::now(),
+            );
+        }
+        let visible = annotate_attention(
+            &state,
+            tree(vec![session(
+                "Sparkmux",
+                true,
+                vec![window("grok", "grok", 0, true, false, true, 40, "grok")],
+            )]),
+        )
+        .await
+        .expect("visible");
+        let on_screen = &visible.sessions[0].windows[0];
+        assert!(!on_screen.unread);
+        assert!(on_screen.pending_ask.is_empty());
+        assert_eq!(on_screen.attention_label.as_deref(), Some("needs_user"));
+
+        let left = annotate_attention(
+            &state,
+            tree(vec![session(
+                "Sparkmux",
+                true,
+                vec![window("grok", "grok", 0, false, false, true, 40, "grok")],
+            )]),
+        )
+        .await
+        .expect("left");
+        let hidden = &left.sessions[0].windows[0];
+        assert!(!hidden.unread);
+        assert!(hidden.pending_ask.is_empty());
+        assert!(!hidden.active);
+        assert_eq!(hidden.attention_label.as_deref(), Some("needs_user"));
     }
 }

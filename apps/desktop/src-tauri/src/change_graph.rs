@@ -111,12 +111,9 @@ pub async fn change_graph(
     title: String,
     pid: u32,
 ) -> Result<ChangeGraph, String> {
-    tokio::task::spawn_blocking(move || {
-        let edits = session_edits(&command, &cwd, &title, pid);
-        build_change_graph(Path::new(&cwd), &edits)
-    })
-    .await
-    .map_err(|err| err.to_string())
+    tokio::task::spawn_blocking(move || graph_for_pane(&command, &cwd, &title, pid))
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -439,13 +436,30 @@ fn fetch_file_diff(repo_id: &str, path: &str, cwd: &str) -> Result<FileDiff, Str
     })
 }
 
+/// Gits for one pane. An `ssh` pane with no readable remote store is empty,
+/// even when the local cwd is a dirty git repo. A readable remote store
+/// contributes only that transcript's edits, not the Mac worktree status.
+fn graph_for_pane(command: &str, cwd: &str, title: &str, pid: u32) -> ChangeGraph {
+    let ssh = crate::ssh_bind::ssh_foreground(command);
+    if ssh
+        && artifacts::resolve_pane_transcript(command, cwd, title, pid, &artifacts::default_roots())
+            .is_none()
+    {
+        return ChangeGraph {
+            repos: Vec::new(),
+            edges: Vec::new(),
+            truncated: false,
+            error: None,
+        };
+    }
+    let edits = session_edits(command, cwd, title, pid);
+    build_change_graph(Path::new(cwd), &edits, !ssh)
+}
+
 fn session_edits(command: &str, cwd: &str, title: &str, pid: u32) -> Vec<AgentEdit> {
-    let roots = artifacts::default_roots();
-    let family = artifacts::pane_family(pid);
-    let Some(kind) = artifacts::detect_cli(command, title, &family) else {
-        return Vec::new();
-    };
-    let Some(path) = artifacts::select_transcript(kind, cwd, title, &family, &roots) else {
+    let Some((_kind, path, _roots)) =
+        artifacts::resolve_pane_transcript(command, cwd, title, pid, &artifacts::default_roots())
+    else {
         return Vec::new();
     };
     // If transcript_full.jsonl exists, it contains the untruncated entries.
@@ -459,7 +473,7 @@ fn session_edits(command: &str, cwd: &str, title: &str, pid: u32) -> Vec<AgentEd
     dedupe_edits(edits)
 }
 
-fn build_change_graph(cwd: &Path, edits: &[AgentEdit]) -> ChangeGraph {
+fn build_change_graph(cwd: &Path, edits: &[AgentEdit], worktree: bool) -> ChangeGraph {
     if cwd.as_os_str().is_empty() {
         return ChangeGraph {
             repos: Vec::new(),
@@ -479,35 +493,37 @@ fn build_change_graph(cwd: &Path, edits: &[AgentEdit]) -> ChangeGraph {
     let mut rows: BTreeMap<(String, String), ChangedFile> = BTreeMap::new();
     let mut names: BTreeMap<String, String> = BTreeMap::new();
 
-    if let Some(root) = &primary {
-        let id = root_id(root);
-        names.insert(id.clone(), repo_name(root));
-        match dirty_files(root) {
-            Ok(files) => {
-                for (index, dirty) in files.into_iter().enumerate() {
-                    if index >= MAX_FILES_PER_REPO || rows.len() >= MAX_FILES {
-                        truncated = true;
-                        break;
+    if worktree {
+        if let Some(root) = &primary {
+            let id = root_id(root);
+            names.insert(id.clone(), repo_name(root));
+            match dirty_files(root) {
+                Ok(files) => {
+                    for (index, dirty) in files.into_iter().enumerate() {
+                        if index >= MAX_FILES_PER_REPO || rows.len() >= MAX_FILES {
+                            truncated = true;
+                            break;
+                        }
+                        rows.insert(
+                            (id.clone(), dirty.path.clone()),
+                            ChangedFile {
+                                path: dirty.path,
+                                status: dirty.status.to_string(),
+                                agent_edited: false,
+                                lines_added: dirty.added,
+                                lines_removed: dirty.removed,
+                            },
+                        );
                     }
-                    rows.insert(
-                        (id.clone(), dirty.path.clone()),
-                        ChangedFile {
-                            path: dirty.path,
-                            status: dirty.status.to_string(),
-                            agent_edited: false,
-                            lines_added: dirty.added,
-                            lines_removed: dirty.removed,
-                        },
-                    );
                 }
-            }
-            Err(message) => {
-                return ChangeGraph {
-                    repos: Vec::new(),
-                    edges: Vec::new(),
-                    truncated: false,
-                    error: Some(message),
-                };
+                Err(message) => {
+                    return ChangeGraph {
+                        repos: Vec::new(),
+                        edges: Vec::new(),
+                        truncated: false,
+                        error: Some(message),
+                    };
+                }
             }
         }
     }
@@ -2488,7 +2504,7 @@ mod tests {
             removed: 1,
             deleted: false,
         }];
-        let graph = build_change_graph(&app, &edits);
+        let graph = build_change_graph(&app, &edits, true);
         assert!(graph.error.is_none(), "{graph:?}");
         assert_eq!(graph.repos.len(), 2, "{graph:?}");
         let primary = graph.repos.iter().find(|repo| repo.primary).unwrap();
@@ -2543,7 +2559,7 @@ mod tests {
             "import { value } from \"../../ui/src/api\";\nexport const a = 2;\n",
         )
         .unwrap();
-        let graph = build_change_graph(&app, &[]);
+        let graph = build_change_graph(&app, &[], true);
         assert!(graph.error.is_none(), "{graph:?}");
         let primary = graph
             .repos
@@ -2613,7 +2629,7 @@ mod tests {
             "pub fn core() { let _x = 1; }\n",
         )
         .unwrap();
-        let graph = build_change_graph(&app, &[]);
+        let graph = build_change_graph(&app, &[], true);
         assert_eq!(graph.repos.len(), 1, "{graph:?}");
         assert!(graph.edges.is_empty(), "{graph:?}");
         let _ = fs::remove_dir_all(&root);
@@ -2676,6 +2692,27 @@ mod tests {
         assert_eq!(case_matches.len(), 1);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ssh_without_a_remote_store_returns_no_repos_for_a_dirty_local_cwd() {
+        let dir = scratch("ssh-dirty");
+        fs::write(dir.join("kept.txt"), "kept\n").unwrap();
+        git_init(&dir);
+        fs::write(dir.join("dirty.txt"), "local change\n").unwrap();
+        let cwd = dir.to_string_lossy();
+        let graph = graph_for_pane("ssh", &cwd, "dev - grok", 0);
+        assert!(graph.error.is_none(), "{graph:?}");
+        assert!(graph.repos.is_empty(), "{graph:?}");
+        let local = graph_for_pane("zsh", &cwd, "zsh", 0);
+        assert!(
+            local
+                .repos
+                .iter()
+                .any(|repo| { repo.files.iter().any(|file| file.path == "dirty.txt") }),
+            "a local pane still sees the dirty file: {local:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn scratch(name: &str) -> PathBuf {

@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  agentBoard,
   attachTargetName,
   clipboardWrite,
   appTelemetry,
@@ -39,6 +40,12 @@ import {
   windowResize,
   type ActiveTarget,
 } from "./api";
+import type { AgentBoardRow } from "./chrome/agentBoard";
+import {
+  postAttentionNotification,
+  trackAttention,
+  type NoteLabel,
+} from "./chrome/attentionNotify";
 import ArtifactPanel from "./chrome/ArtifactPanel";
 import AnalyticsHud from "./chrome/AnalyticsHud";
 import ChangeGraph from "./chrome/ChangeGraph";
@@ -133,6 +140,8 @@ const FONT_DEFAULT = 13;
 export default function App() {
   const [status, setStatus] = useState<TmuxStatus | null>(null);
   const [snap, setSnap] = useState<Snapshot>({ sessions: [] });
+  const [agentRows, setAgentRows] = useState<AgentBoardRow[]>([]);
+  const attentionLabels = useRef(new Map<string, NoteLabel>());
   const [error, setError] = useState<GuiError>(null);
   const [empty, setEmpty] = useState(false);
   const [attachedSession, setAttachedSession] = useState<string | null>(null);
@@ -1031,6 +1040,66 @@ export default function App() {
       window.clearInterval(id);
     };
   }, [attachedSession, allowanceKey, usagePaneId]);
+
+  useEffect(() => {
+    const panes = snap.sessions.flatMap((session) =>
+      session.windows.flatMap((win) =>
+        win.panes.map((pane) => ({
+          session: session.name,
+          window_id: win.id,
+          window_name: win.name,
+          pane_id: pane.id,
+          command: pane.command,
+          cwd: pane.path,
+          title: pane.title,
+          pid: pane.pid,
+        })),
+      ),
+    );
+    let cancel = false;
+    void agentBoard(panes)
+      .then((rows) => {
+        if (!cancel) setAgentRows(rows);
+      })
+      .catch(() => {
+        if (!cancel) setAgentRows([]);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [snap]);
+
+  useEffect(() => {
+    const seen = attentionLabels.current;
+    const liveIds = new Set<string>();
+    for (const session of snap.sessions) {
+      const onScreen = attachedSession === session.name;
+      for (const win of session.windows) {
+        liveIds.add(win.id);
+        const hidden = !(onScreen && win.id === visibleWindowId);
+        const previous = seen.get(win.id) ?? null;
+        const step = trackAttention(previous, hidden, {
+          active: win.active,
+          attention_label: win.attention_label,
+          unread: win.unread,
+          pending_ask: win.pending_ask,
+        });
+        if (step.notify) {
+          void postAttentionNotification({
+            hidden: true,
+            previous,
+            next: step.label,
+            body: win.pending_ask || `${session.name} ${win.name}`,
+          });
+        }
+        if (step.label === null) seen.delete(win.id);
+        else seen.set(win.id, step.label);
+      }
+    }
+    for (const id of seen.keys()) {
+      if (!liveIds.has(id)) seen.delete(id);
+    }
+  }, [snap, attachedSession, visibleWindowId]);
   const shellReady = shellEligible(shellNow?.command ?? "", shellNow?.alternate ?? true);
   const offerAsk = helperOn;
   const showTiles = !error && !empty && layout && attachedSession;
@@ -1186,6 +1255,22 @@ export default function App() {
               })();
             }}
             onCollapse={() => setSidebarCollapsed(true)}
+            agentRows={agentRows}
+            onSelectAgent={(sessionName, windowId, paneId) => {
+              chromeFocus.current = "sidebar";
+              setSelection({ kind: "pane", id: paneId, sessionName, windowId });
+              setFocusedPane(paneId);
+              void (async () => {
+                if (attachedRef.current !== sessionName) {
+                  await connectTo(sessionName, windowId);
+                } else if (visibleRef.current !== windowId) {
+                  const sess = snapRef.current.sessions.find((s) => s.name === sessionName);
+                  await applyWindow(sess?.windows.find((w) => w.id === windowId));
+                }
+                void focusPane(paneId);
+                getTerm(paneId)?.focus();
+              })();
+            }}
             onRenameSession={(name) => {
               setSelection({
                 kind: "session",

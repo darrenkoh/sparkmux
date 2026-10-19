@@ -119,6 +119,19 @@ pub(crate) fn cost_for(
     pid: u32,
     now_ms: i64,
 ) -> Option<BedrockCost> {
+    if crate::ssh_bind::ssh_foreground(command) {
+        // Remote transcript only. Do not read the Mac's Claude settings or the ssh process env.
+        let (kind, path, roots) =
+            crate::artifacts::resolve_pane_transcript(command, cwd, title, pid, &default_roots())?;
+        if kind != CliKind::Claude || !is_bedrock_transcript(&path) {
+            return None;
+        }
+        return Some(rollup_dir(
+            &roots.claude_projects,
+            Some(&path),
+            local_midnight_ms(now_ms),
+        ));
+    }
     let roots = default_roots();
     let family = pane_family(pid);
     let focused = select_transcript(CliKind::Claude, cwd, title, &family, &roots);
@@ -128,11 +141,9 @@ pub(crate) fn cost_for(
             .as_deref()
             .map(is_bedrock_transcript)
             .unwrap_or(false);
-
     if !is_bedrock {
         return None;
     }
-
     Some(rollup_dir(
         &roots.claude_projects,
         focused.as_deref(),

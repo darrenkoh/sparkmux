@@ -2,6 +2,7 @@
 //!
 //! Bell is immediate. A shell burst counts only after its activity epoch has
 //! been quiet. Agent panes use the transcript label instead of the repaint.
+//! The same book records a quiet finished mark and the pending question.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -40,6 +41,17 @@ pub enum AttentionLabel {
     Running,
 }
 
+pub(crate) fn attention_label_wire(label: Option<AttentionLabel>) -> Option<String> {
+    let name = match label? {
+        AttentionLabel::NeedsUser => "needs_user",
+        AttentionLabel::Failed => "failed",
+        AttentionLabel::Succeeded => "succeeded",
+        AttentionLabel::Running => "running",
+        AttentionLabel::Noise => return None,
+    };
+    Some(name.to_string())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LabelToken {
     pub transcript_path: String,
@@ -55,6 +67,11 @@ struct Track {
     label: Option<AttentionLabel>,
     token: Option<LabelToken>,
     last_read: Option<Instant>,
+    /// Needs-user question kept across polls that do not re-read the transcript.
+    ask: String,
+    /// Label last applied to the finished transition. Not the cached transcript label.
+    finish_label: Option<AttentionLabel>,
+    finished: bool,
 }
 
 #[derive(Debug, Default)]
@@ -79,9 +96,9 @@ impl AttentionBook {
             track.seen = Some(view.activity_epoch);
             track.last_epoch = view.activity_epoch;
             track.last_move = None;
-            track.label = None;
-            track.token = None;
-            track.last_read = None;
+            // The unread dot clears while the window is on screen. The
+            // classifier label stays so a fetch that started on this visit
+            // cannot look like a new running-to-waiting edge.
             return false;
         }
         if view.bell {
@@ -114,6 +131,36 @@ impl AttentionBook {
             }
             None => quiet,
         }
+    }
+
+    /// Quiet mark when a hidden agent moves from Running to Succeeded on a new
+    /// transcript token. A same-token repaint does not set it. The mark stays
+    /// until the window is visible, which clears it.
+    pub fn finished(&mut self, view: &WindowAttention, same_token: bool) -> bool {
+        if view.visible {
+            if let Some(track) = self.windows.get_mut(&view.id) {
+                track.finished = false;
+                track.finish_label = None;
+            }
+            return false;
+        }
+        if !view.agent {
+            return self
+                .windows
+                .get(&view.id)
+                .is_some_and(|track| track.finished);
+        }
+        let track = self.track_mut(&view.id);
+        if same_token {
+            return track.finished;
+        }
+        if track.finish_label == Some(AttentionLabel::Running)
+            && view.label == Some(AttentionLabel::Succeeded)
+        {
+            track.finished = true;
+        }
+        track.finish_label = view.label;
+        track.finished
     }
 
     /// Hidden agent window whose epoch is past the baseline, and whose transcript
@@ -160,6 +207,48 @@ impl AttentionBook {
 
     pub(crate) fn cached_label(&self, id: &str) -> Option<AttentionLabel> {
         self.windows.get(id).and_then(|track| track.label)
+    }
+
+    pub(crate) fn has_same_token(&self, id: &str, token: Option<&LabelToken>) -> bool {
+        match (
+            token,
+            self.windows.get(id).and_then(|track| track.token.as_ref()),
+        ) {
+            (Some(next), Some(prev)) => next == prev,
+            _ => false,
+        }
+    }
+
+    /// Keep the question that matches the stored label. A same-token read does not replace it.
+    pub(crate) fn note_question(
+        &mut self,
+        id: &str,
+        label: Option<AttentionLabel>,
+        question: Option<String>,
+        same_token: bool,
+    ) -> String {
+        let track = self.track_mut(id);
+        if label != Some(AttentionLabel::NeedsUser) {
+            track.ask.clear();
+            return String::new();
+        }
+        if !same_token {
+            track.ask = question.unwrap_or_default();
+        }
+        track.ask.clone()
+    }
+
+    pub(crate) fn cached_ask(&self, id: &str) -> String {
+        self.windows
+            .get(id)
+            .map(|track| track.ask.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn clear_ask(&mut self, id: &str) {
+        if let Some(track) = self.windows.get_mut(id) {
+            track.ask.clear();
+        }
     }
 
     fn track_mut(&mut self, id: &str) -> &mut Track {
@@ -283,6 +372,162 @@ fn has_ask_marker(text: &str) -> bool {
     ASK_MARKERS.iter().any(|marker| lower.contains(marker))
 }
 
+/// Foreground `ssh`, including a path such as `/usr/bin/ssh`. Not an agent row.
+pub(crate) fn command_is_ssh(command: &str) -> bool {
+    let base = command.rsplit(['/', '\\']).next().unwrap_or(command).trim();
+    let name = base.strip_suffix(".exe").unwrap_or(base);
+    name.eq_ignore_ascii_case("ssh")
+}
+
+fn cli_label(kind: crate::artifacts::CliKind) -> &'static str {
+    match kind {
+        crate::artifacts::CliKind::Grok => "Grok",
+        crate::artifacts::CliKind::Claude => "Claude",
+        crate::artifacts::CliKind::Antigravity => "Antigravity",
+    }
+}
+
+fn state_label(label: Option<AttentionLabel>) -> &'static str {
+    match label {
+        Some(AttentionLabel::NeedsUser) => "Waiting on you",
+        Some(AttentionLabel::Failed) => "Failed",
+        Some(AttentionLabel::Succeeded) => "Finished",
+        Some(AttentionLabel::Running | AttentionLabel::Noise) | None => "Running",
+    }
+}
+
+fn one_line(text: &str, cap: usize) -> String {
+    let mut out = String::new();
+    let mut count = 0usize;
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if count > 0 {
+                pending_space = true;
+            }
+            continue;
+        }
+        if pending_space {
+            if count >= cap {
+                break;
+            }
+            out.push(' ');
+            count += 1;
+            pending_space = false;
+        }
+        if count >= cap {
+            break;
+        }
+        out.push(ch);
+        count += 1;
+    }
+    out
+}
+
+/// One-line ask for a needs-user transcript, capped at 120 characters.
+/// Failed, running, and finished transcripts return nothing.
+pub fn pending_question(entries: &[ArtifactEntry]) -> Option<String> {
+    if classify_entries(entries) != Some(AttentionLabel::NeedsUser) {
+        return None;
+    }
+    let text = ask_source(entries)?;
+    let line = one_line(&text, 120);
+    if line.is_empty() {
+        None
+    } else {
+        Some(line)
+    }
+}
+
+fn ask_source(entries: &[ArtifactEntry]) -> Option<String> {
+    let range = tail_range(entries);
+    if let Some(entry) = entries[range].iter().rev().find(|entry| {
+        entry.kind != "reasoning" && (has_ask_marker(&entry.label) || has_ask_marker(&entry.body))
+    }) {
+        let body = entry.body.trim();
+        if !body.is_empty() {
+            return Some(body.to_string());
+        }
+        let label = entry.label.trim();
+        if !label.is_empty() {
+            return Some(label.to_string());
+        }
+    }
+    let assistant = entries.iter().rev().find(|entry| {
+        entry.kind == "assistant" && !entry.body.is_empty() && prompts_user(&entry.body)
+    })?;
+    Some(assistant.body.clone())
+}
+
+/// Last non-empty assistant body, one line, capped at 160 characters.
+pub fn last_assistant_line(entries: &[ArtifactEntry]) -> Option<String> {
+    let assistant = entries
+        .iter()
+        .rev()
+        .find(|entry| entry.kind == "assistant" && !entry.body.trim().is_empty())?;
+    let line = one_line(&assistant.body, 160);
+    if line.is_empty() {
+        None
+    } else {
+        Some(line)
+    }
+}
+
+/// Fields already taken off the pane and its transcript. `board_row` does not read files.
+#[derive(Debug, Clone, Copy)]
+pub struct BoardFields<'a> {
+    pub session: &'a str,
+    pub window_id: &'a str,
+    pub window_name: &'a str,
+    pub pane_id: &'a str,
+    pub command: &'a str,
+    pub title: &'a str,
+    pub label: Option<AttentionLabel>,
+    pub model: Option<&'a str>,
+    pub ask: Option<&'a str>,
+    pub assistant: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct BoardRow {
+    pub session: String,
+    pub window_id: String,
+    pub window_name: String,
+    pub pane_id: String,
+    pub state: String,
+    pub model: String,
+    pub detail: String,
+}
+
+/// One agent-board row, or nothing for a shell or `ssh` pane.
+pub fn board_row(fields: &BoardFields<'_>) -> Option<BoardRow> {
+    if command_is_ssh(fields.command) {
+        return None;
+    }
+    let kind = crate::artifacts::detect_cli(fields.command, fields.title, &[])?;
+    let model = fields
+        .model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| cli_label(kind).to_string());
+    let waiting = fields.label == Some(AttentionLabel::NeedsUser);
+    let raw = if waiting {
+        fields.ask.unwrap_or("")
+    } else {
+        fields.assistant.unwrap_or("")
+    };
+    Some(BoardRow {
+        session: fields.session.to_string(),
+        window_id: fields.window_id.to_string(),
+        window_name: fields.window_name.to_string(),
+        pane_id: fields.pane_id.to_string(),
+        state: state_label(fields.label).to_string(),
+        model,
+        detail: one_line(raw, 160),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +539,7 @@ mod tests {
             kind: kind.to_string(),
             label: label.to_string(),
             body: body.to_string(),
+            model: String::new(),
         }
     }
 
@@ -750,6 +996,34 @@ mod tests {
     }
 
     #[test]
+    fn visible_visit_keeps_the_cached_label_and_is_not_unread() {
+        let mut book = AttentionBook::default();
+        let now = Instant::now();
+        let token = LabelToken {
+            transcript_path: "/tmp/chat.jsonl".into(),
+            file_len: 4,
+            last_entry_id: "ask".into(),
+        };
+        assert_eq!(
+            book.store_label(
+                "w",
+                Some(token.clone()),
+                Some(AttentionLabel::NeedsUser),
+                now
+            ),
+            Some(AttentionLabel::NeedsUser)
+        );
+        let unread = book.unread(
+            &view("w", 3, true, false, true, Some(AttentionLabel::NeedsUser)),
+            now,
+        );
+        assert!(!unread);
+        assert_eq!(book.cached_label("w"), Some(AttentionLabel::NeedsUser));
+        assert!(book.has_same_token("w", Some(&token)));
+        assert!(!book.wants_transcript("w", 9, now));
+    }
+
+    #[test]
     fn classify_entries_table() {
         let cases: Vec<(&str, Vec<ArtifactEntry>, Option<AttentionLabel>)> = vec![
             ("no entries", vec![], None),
@@ -966,5 +1240,233 @@ mod tests {
         assert_eq!(token.transcript_path, "/tmp/chat.jsonl");
         assert_eq!(token.file_len, 20);
         assert_eq!(token.last_entry_id, "assistant:Assistant");
+    }
+
+    fn hidden(label: Option<AttentionLabel>) -> WindowAttention {
+        view("w", 2, false, false, true, label)
+    }
+
+    #[test]
+    fn finished_mark_from_a_fresh_book() {
+        let mut book = AttentionBook::default();
+        assert!(!book.finished(&hidden(Some(AttentionLabel::Running)), false));
+        assert!(book.finished(&hidden(Some(AttentionLabel::Succeeded)), false));
+        assert!(
+            book.finished(&hidden(Some(AttentionLabel::Succeeded)), false),
+            "a later succeeded poll keeps the mark"
+        );
+        assert!(
+            book.finished(&hidden(Some(AttentionLabel::Succeeded)), true),
+            "a same-token poll after the mark keeps it"
+        );
+        assert!(!book.finished(
+            &view("w", 2, true, false, true, Some(AttentionLabel::Succeeded)),
+            false
+        ));
+        assert!(
+            !book.finished(&hidden(Some(AttentionLabel::Succeeded)), false),
+            "opening the window clears it, and a later succeeded poll does not set it again"
+        );
+
+        let mut book = AttentionBook::default();
+        assert!(!book.finished(&hidden(Some(AttentionLabel::Running)), false));
+        assert!(!book.finished(&hidden(Some(AttentionLabel::Running)), false));
+        assert!(
+            !book.finished(&hidden(Some(AttentionLabel::Succeeded)), true),
+            "same-token repaint does not set the mark"
+        );
+
+        let mut book = AttentionBook::default();
+        assert!(!book.finished(
+            &view(
+                "need",
+                2,
+                false,
+                false,
+                true,
+                Some(AttentionLabel::NeedsUser)
+            ),
+            false
+        ));
+        assert!(!book.finished(
+            &view("fail", 2, false, false, true, Some(AttentionLabel::Failed)),
+            false
+        ));
+        assert!(!book.finished(
+            &view("run", 2, false, false, true, Some(AttentionLabel::Running)),
+            false
+        ));
+        assert!(!book.finished(
+            &view(
+                "seen",
+                2,
+                false,
+                false,
+                true,
+                Some(AttentionLabel::Succeeded)
+            ),
+            false
+        ));
+        assert!(!book.finished(
+            &view(
+                "shell",
+                2,
+                false,
+                false,
+                false,
+                Some(AttentionLabel::Running)
+            ),
+            false
+        ));
+        assert!(!book.finished(
+            &view(
+                "shell",
+                3,
+                false,
+                false,
+                false,
+                Some(AttentionLabel::Succeeded),
+            ),
+            false
+        ));
+    }
+
+    #[test]
+    fn pending_question_is_the_one_line_ask() {
+        assert_eq!(pending_question(&[]), None);
+        assert_eq!(
+            pending_question(&[ent("assistant", "Assistant", "The build failed.")]),
+            None
+        );
+        assert_eq!(
+            pending_question(&[ent("assistant", "Assistant", "All done.")]),
+            None
+        );
+        assert_eq!(
+            pending_question(&[ent("assistant", "Assistant", "Ship it?\nplease")]),
+            Some("Ship it? please".into())
+        );
+        assert_eq!(
+            pending_question(&[ent("tool", "AskUserQuestion", "which file")]),
+            Some("which file".into())
+        );
+        assert_eq!(
+            pending_question(&[
+                ent("assistant", "Assistant", "I should check."),
+                ent("tool", "AskUserQuestion", "which file"),
+                ent("assistant", "Assistant", "ok"),
+            ]),
+            Some("which file".into())
+        );
+        let mut long = "é".repeat(119);
+        long.push('?');
+        long.push('x');
+        let got = pending_question(&[ent("assistant", "Assistant", &long)]).expect("ask");
+        assert_eq!(got.chars().count(), 120);
+        assert!(got.ends_with('?'));
+    }
+
+    #[test]
+    fn last_assistant_line_is_the_latest_reply() {
+        assert_eq!(last_assistant_line(&[]), None);
+        assert_eq!(
+            last_assistant_line(&[
+                ent("assistant", "Assistant", "first"),
+                ent("tool", "bash", "ls"),
+                ent("assistant", "Assistant", "second\nline"),
+            ])
+            .as_deref(),
+            Some("second line")
+        );
+    }
+
+    fn sample_fields<'a>(
+        command: &'a str,
+        title: &'a str,
+        label: Option<AttentionLabel>,
+    ) -> BoardFields<'a> {
+        BoardFields {
+            session: "spark",
+            window_id: "@1",
+            window_name: "agent",
+            pane_id: "%7",
+            command,
+            title,
+            label,
+            model: None,
+            ask: None,
+            assistant: None,
+        }
+    }
+
+    #[test]
+    fn board_row_lists_only_the_three_clis() {
+        assert!(board_row(&sample_fields("zsh", "zsh", None)).is_none());
+        assert!(board_row(&sample_fields("/usr/bin/ssh", "fix - grok", None)).is_none());
+        assert!(board_row(&sample_fields(
+            "ssh",
+            "Claude Code",
+            Some(AttentionLabel::Running)
+        ))
+        .is_none());
+
+        let grok =
+            board_row(&sample_fields("grok", "", Some(AttentionLabel::Running))).expect("grok");
+        assert_eq!(grok.session, "spark");
+        assert_eq!(grok.window_id, "@1");
+        assert_eq!(grok.window_name, "agent");
+        assert_eq!(grok.pane_id, "%7");
+        assert_eq!(grok.state, "Running");
+        assert_eq!(grok.model, "Grok");
+        assert!(grok.detail.is_empty());
+
+        let claude = board_row(&sample_fields(
+            "zsh",
+            "Claude Code",
+            Some(AttentionLabel::Failed),
+        ))
+        .expect("claude title");
+        assert_eq!(claude.state, "Failed");
+        assert_eq!(claude.model, "Claude");
+
+        let agy =
+            board_row(&sample_fields("agy", "", Some(AttentionLabel::Succeeded))).expect("agy");
+        assert_eq!(agy.state, "Finished");
+        assert_eq!(agy.model, "Antigravity");
+
+        let mut waiting = sample_fields("claude", "", Some(AttentionLabel::NeedsUser));
+        waiting.model = Some("  ");
+        waiting.ask = Some("Continue?\nnow");
+        waiting.assistant = Some("ignored while waiting");
+        let waiting = board_row(&waiting).expect("waiting");
+        assert_eq!(waiting.state, "Waiting on you");
+        assert_eq!(waiting.model, "Claude");
+        assert_eq!(waiting.detail, "Continue? now");
+
+        let mut named = sample_fields("grok-1.0.50", "", None);
+        named.model = Some(" grok-4 ");
+        named.ask = Some("a question");
+        named.assistant = Some("  last reply \n stays ");
+        let named = board_row(&named).expect("versioned grok");
+        assert_eq!(named.state, "Running");
+        assert_eq!(named.model, "grok-4");
+        assert_eq!(named.detail, "last reply stays");
+
+        let ask = "q".repeat(180);
+        let long = board_row(&BoardFields {
+            session: "spark",
+            window_id: "@1",
+            window_name: "agent",
+            pane_id: "%7",
+            command: "/opt/homebrew/bin/grok",
+            title: "",
+            label: Some(AttentionLabel::NeedsUser),
+            model: None,
+            ask: Some(&ask),
+            assistant: None,
+        })
+        .expect("capped");
+        assert_eq!(long.detail.chars().count(), 160);
+        assert_eq!(long.model, "Grok");
     }
 }

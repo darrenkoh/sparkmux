@@ -4,7 +4,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { Channel } from "@tauri-apps/api/core";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import {
@@ -19,6 +19,7 @@ import {
   toBytes,
 } from "../api";
 import { cursorCup } from "./cursorCup";
+import { findNext, findPrevious, matchLineColumn } from "./scrollbackSearch";
 import { isEmulatorReport } from "./emulatorReports";
 import { applyPaneSeed } from "./paneSeed";
 import {
@@ -74,6 +75,12 @@ export default function XtermView({
   const redrawCaretRef = useRef<() => void>(() => {});
   const syncTmuxCursorRef = useRef<() => void>(() => {});
   const restoreMouseRef = useRef<() => void>(() => {});
+  const findOpenRef = useRef(false);
+  const findRef = useRef<HTMLInputElement>(null);
+  const findNextFromRef = useRef(0);
+  const findPrevFromRef = useRef(0);
+  const [findOpen, setFindOpen] = useState(false);
+  findOpenRef.current = findOpen;
   onFocusRef.current = onFocus;
   onCellSizeRef.current = onCellSize;
   fontSizeRef.current = fontSize;
@@ -304,6 +311,13 @@ export default function XtermView({
 
     term.attachCustomKeyEventHandler((ev) => {
       if (ev.type !== "keydown") return true;
+      if (findOpenRef.current) return false;
+      if (isFindChord(ev) && !foreignField(ev, host)) {
+        findNextFromRef.current = 0;
+        findPrevFromRef.current = 0;
+        setFindOpen(true);
+        return false;
+      }
       if (isMac && ev.metaKey && ev.key === "c") {
         if (term.hasSelection()) {
           void clipboardWrite(term.getSelection());
@@ -420,18 +434,132 @@ export default function XtermView({
   }, [fontSize]);
 
   useEffect(() => {
-    if (focused) {
+    if (!focused) setFindOpen(false);
+  }, [focused]);
+
+  useEffect(() => {
+    if (!findOpen) return;
+    findRef.current?.focus();
+    findRef.current?.select();
+  }, [findOpen]);
+
+  useEffect(() => {
+    if (focused && !findOpen) {
       termRef.current?.focus();
       redrawCaretRef.current();
       syncTmuxCursorRef.current();
     }
-  }, [focused]);
+  }, [focused, findOpen]);
+
+  function reveal(backward: boolean) {
+    const term = termRef.current;
+    const needle = findRef.current?.value ?? "";
+    if (!term) return;
+    if (needle.length === 0) {
+      term.clearSelection();
+      return;
+    }
+    const buf = term.buffer.active;
+    const lines: string[] = [];
+    for (let row = 0; row < buf.length; row += 1) {
+      lines.push(buf.getLine(row)?.translateToString(true) ?? "");
+    }
+    const text = lines.join("\n");
+    const hit = backward
+      ? findPrevious(text, needle, findPrevFromRef.current)
+      : findNext(text, needle, findNextFromRef.current);
+    if (!hit) {
+      term.clearSelection();
+      return;
+    }
+    const pos = matchLineColumn(text, hit.index);
+    term.scrollToLine(pos.line);
+    term.select(pos.column, pos.line, hit.length);
+    findNextFromRef.current = hit.index + hit.length;
+    findPrevFromRef.current = hit.index;
+  }
+
+  function closeFind() {
+    setFindOpen(false);
+    termRef.current?.focus();
+  }
 
   useEffect(() => {
     restoreMouseRef.current();
   }, [inputMode?.mouse, inputMode?.mouseAny, inputMode?.mouseDrag, inputMode?.mouseSgr]);
 
-  return <div ref={hostRef} className="xterm-host" />;
+  return (
+    <>
+      <div ref={hostRef} className="xterm-host" />
+      {findOpen && (
+        <form
+          className="pane-find"
+          role="search"
+          onSubmit={(event) => {
+            event.preventDefault();
+            reveal(false);
+          }}
+        >
+          <input
+            ref={findRef}
+            className="pane-find-input"
+            aria-label="Find in pane"
+            placeholder="Find"
+            onChange={() => {
+              findNextFromRef.current = 0;
+              findPrevFromRef.current = 0;
+              reveal(false);
+            }}
+            onKeyDown={(event) => {
+              if (isFindChord(event)) {
+                event.preventDefault();
+                event.currentTarget.select();
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                closeFind();
+                return;
+              }
+              if (event.key === "Enter" && event.shiftKey) {
+                event.preventDefault();
+                event.stopPropagation();
+                reveal(true);
+                return;
+              }
+              event.stopPropagation();
+            }}
+          />
+          <button type="submit">Next</button>
+          <button
+            type="button"
+            onClick={() => reveal(true)}
+          >
+            Previous
+          </button>
+          <button type="button" aria-label="Close find" onClick={closeFind}>
+            ×
+          </button>
+        </form>
+      )}
+    </>
+  );
+}
+
+function isFindChord(ev: { metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; key: string }): boolean {
+  if (ev.altKey || ev.shiftKey) return false;
+  if (ev.key !== "f" && ev.key !== "F") return false;
+  if (isMac) return ev.metaKey && !ev.ctrlKey;
+  return ev.ctrlKey && !ev.metaKey;
+}
+
+function foreignField(ev: KeyboardEvent, host: HTMLElement): boolean {
+  const target = ev.target;
+  if (!(target instanceof HTMLElement)) return false;
+  if (host.contains(target)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
 }
 
 function wheelContext(term: Terminal, ev: WheelEvent, input: PaneInputMode): WheelContext {

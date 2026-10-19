@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import type { AgentBoardRow } from "./chrome/agentBoard";
 import type {
   AppTelemetry,
   LayoutChangePayload,
@@ -121,12 +122,33 @@ export function openHttpUrl(url: string): Promise<void> {
   return invoke("open_http_url", { url });
 }
 
+export function openEditorPath(path: string, cwd: string): Promise<void> {
+  return invoke("open_editor_path", { path, cwd });
+}
+
+export interface AgentBoardPane {
+  session: string;
+  window_id: string;
+  window_name: string;
+  pane_id: string;
+  command: string;
+  cwd: string;
+  title: string;
+  pid: number;
+}
+
+export function agentBoard(panes: AgentBoardPane[]): Promise<AgentBoardRow[]> {
+  return invoke("agent_board", { panes });
+}
+
 export interface ArtifactEntry {
   id: string;
   offset: number;
   kind: string;
   label: string;
   body: string;
+  /** Model copied from the transcript. Empty when the record has none. */
+  model?: string;
 }
 
 export interface ArtifactFeed {
