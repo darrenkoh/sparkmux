@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.47
+
+### Improvements
+
+- Clicking a session name in the sidebar expands or collapses its windows and still attaches the session.
+- The Globe area map draws USER, THINK, ASSISTANT, and TOOL on four inner rings. Time runs around the rings, and a radar ping expands outward. Rect mode stays as it is.
+
 ## 0.1.46
 
 ### Improvements
