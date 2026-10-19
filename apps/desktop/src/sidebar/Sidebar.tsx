@@ -126,6 +126,7 @@ export default function Sidebar({
                 </button>
                 <button
                   className="row-main"
+                  aria-expanded={!sessCollapsed}
                   aria-label={
                     sessAttn
                       ? `${session.name}, unread`
@@ -133,7 +134,10 @@ export default function Sidebar({
                         ? `${session.name}, finished`
                         : session.name
                   }
-                  onClick={() => onSelectSession(session.name)}
+                  onClick={() => {
+                    toggle(session.id);
+                    onSelectSession(session.name);
+                  }}
                   onDoubleClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
