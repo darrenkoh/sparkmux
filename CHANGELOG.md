@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.45
+
+### Improvements
+
+- Area Map and Token Spectrum fold quiet time with a threshold that grows with the session: five minutes up to an hour, ten up to six hours, fifteen up to a day, and thirty after that. A burst shorter than thirty seconds between two gaps becomes one seam, and a crowded timeline draws each seam narrower.
+- Folded time shows as a scrubber mark and a seams summary. Hover a mark for the clock range. The map and the spectrum no longer print a duration on every gap.
+- The Stats header keeps the session, tab, engine, and model on one line, with the window controls grouped at the end.
+- The Gits toolbar stays on one row.
+
+### Bug Fixes
+
+- The terminal column count no longer reserves a scrollbar gutter, so the pane uses the full width.
+
 ## 0.1.44
 
 ### Improvements
