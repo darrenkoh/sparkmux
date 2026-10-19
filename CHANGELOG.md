@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.46
+
+### Improvements
+
+- A tab named shell takes the foreground CLI and its version: Grok v1.0.62, Claude v2.1.296, or AGY v1.4.2. A name you typed stays. When the CLI exits, the tab returns to shell.
+- The sidebar Agents board lists Grok, Claude, and Antigravity panes. Choosing a row opens that pane.
+- A hidden window shows the question an agent is waiting on, and a quiet finished mark after it completes.
+- When Sparkmux is not the front window, a system notification fires the first time a hidden agent starts waiting.
+- Command-F finds text in the pane scrollback.
+- A recorded file path on an agent tool row opens in the default editor.
+
+### Bug Fixes
+
+- An ssh pane does not read the local Grok, Claude, or Antigravity transcripts.
+
 ## 0.1.45
 
 ### Improvements
