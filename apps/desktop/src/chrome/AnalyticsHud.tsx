@@ -8,6 +8,7 @@ import {
   type TabAnalyticsStats,
 } from "../api";
 import { cliLabel, previewLine } from "./artifactModel";
+import { shortModelName } from "./miniStatModel";
 import {
   formatBytes,
   formatNum,
@@ -809,6 +810,8 @@ export default function AnalyticsHud({
     (sum, row) => sum + (row.input_tokens ?? 0) + (row.output_tokens ?? 0),
     0,
   );
+  const engineLabel = (cliLabel(data?.cli ?? null) || "Standby").toUpperCase();
+  const modelLabel = shortModelName(st?.active_model);
 
   return (
     <div
@@ -829,51 +832,22 @@ export default function AnalyticsHud({
               <path d="M5 21 L11 9 L15 16 L18 12 L23 21 Z" />
               <path d="M6 23 L22 5" strokeDasharray="1 2" />
             </svg>
-            <div>
-              <b>SPARKMUX // STATS</b>
-              <small>SESSION TELEMETRY · QUANTUM CORE</small>
-            </div>
+            <b>STATS</b>
           </div>
 
-          <div className="scifi-ticker">
-            <span>
-              SESSION: <strong>{sessionName}</strong>
+          <div
+            className="scifi-ticker"
+            title={`${sessionName} / ${tabName} (${tabId}) · ${engineLabel}${modelLabel ? ` · ${modelLabel}` : ""}`}
+          >
+            <span className="scifi-id">
+              <strong>{sessionName}</strong>
+              <span className="scifi-id-sep" aria-hidden="true">/</span>
+              <strong>{tabName}</strong>
             </span>
-            <span>
-              TAB: <strong>{tabName}</strong> ({tabId})
+            <span className="scifi-meta">
+              {engineLabel}
+              {modelLabel ? ` · ${modelLabel}` : ""}
             </span>
-            <span>
-              ENGINE:{" "}
-              <strong>{cliLabel(data?.cli ?? null) || "STANDBY"}</strong>
-            </span>
-            {st?.active_model && (
-              <span>
-                MODEL: <strong>{st.active_model}</strong>
-              </span>
-            )}
-            <span
-              className="scifi-badge-pill events"
-              title="Total raw telemetry events captured across this session"
-            >
-              <span className="scifi-pill-dot" />
-              TOTAL EVENTS: <strong>{st?.total_events ?? 0}</strong>
-            </span>
-            <span
-              className="scifi-badge-pill calls"
-              title="Total tool executions registered"
-            >
-              <span className="scifi-pill-dot" />
-              TOTAL CALLS: <strong>{st?.tool_calls ?? 0}</strong>
-            </span>
-            {subagents.length > 0 && (
-              <span
-                className="scifi-badge-pill agents"
-                title="Child agents whose tokens and tools are included in these totals"
-              >
-                <span className="scifi-pill-dot" />
-                SUBAGENTS: <strong>{subagents.length}</strong>
-              </span>
-            )}
           </div>
 
           <div className="scifi-controls">
@@ -935,48 +909,50 @@ export default function AnalyticsHud({
               </button>
             )}
 
-            {isStandaloneWindow && onTogglePin && (
-              <button
-                type="button"
-                className={`scifi-btn ${pinned ? "on" : "off"}`}
-                onClick={onTogglePin}
-                aria-pressed={pinned}
-                title={
-                  pinned
-                    ? `Pinned to ${sessionName}:${tabName} — click to follow active tab in main window`
-                    : "Following active tab in main window — click to pin to this tab"
-                }
-              >
-                {pinned ? "📌 PINNED" : "◎ FOLLOWING"}
-              </button>
-            )}
+            <div className="scifi-controls-window">
+              {isStandaloneWindow && onTogglePin && (
+                <button
+                  type="button"
+                  className={`scifi-btn ${pinned ? "on" : "off"}`}
+                  onClick={onTogglePin}
+                  aria-pressed={pinned}
+                  title={
+                    pinned
+                      ? `Pinned to ${sessionName}:${tabName} — click to follow active tab in main window`
+                      : "Following active tab in main window — click to pin to this tab"
+                  }
+                >
+                  {pinned ? "📌 PINNED" : "◎ FOLLOWING"}
+                </button>
+              )}
 
-            {onDock && !isStandaloneWindow && (
-              <button
-                type="button"
-                className="scifi-btn"
-                onClick={onDock}
-                title="Dock area map to the bottom right panel"
-              >
-                ⇲ DOCK
-              </button>
-            )}
+              {onDock && !isStandaloneWindow && (
+                <button
+                  type="button"
+                  className="scifi-btn"
+                  onClick={onDock}
+                  title="Dock area map to the bottom right panel"
+                >
+                  ⇲ DOCK
+                </button>
+              )}
 
-            {onPopOut && !isStandaloneWindow && (
-              <button
-                type="button"
-                className="scifi-btn"
-                onClick={onPopOut}
-                title="Open Stats in a separate desktop window"
-                aria-label="Open Stats in a separate window"
-              >
-                ⧉ POP OUT
-              </button>
-            )}
+              {onPopOut && !isStandaloneWindow && (
+                <button
+                  type="button"
+                  className="scifi-btn"
+                  onClick={onPopOut}
+                  title="Open Stats in a separate desktop window"
+                  aria-label="Open Stats in a separate window"
+                >
+                  ⧉ POP OUT
+                </button>
+              )}
 
-            <button type="button" className="scifi-close" onClick={onClose}>
-              ✕
-            </button>
+              <button type="button" className="scifi-close" onClick={onClose} aria-label="Close Stats">
+                ✕
+              </button>
+            </div>
           </div>
         </header>
 

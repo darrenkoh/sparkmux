@@ -3,7 +3,9 @@ import type { ActivityPoint, TabAnalyticsStats } from "../api";
 import {
   activityAxis,
   compressedToWall,
+  formatGap,
   mapWindow,
+  seamIdleText,
   wallToCompressed,
   windowStartFromFraction,
   windowTrack,
@@ -551,6 +553,8 @@ export default function TerrainViewport({
   // already folded, so dragging moves across activity instead of empty terrain.
   const [followLive, setFollowLive] = useState(true);
   const [windowStart, setWindowStart] = useState(0);
+  const [seamsOpen, setSeamsOpen] = useState(false);
+  const [seamsHot, setSeamsHot] = useState(false);
 
   // A new tmux tab or a new agent transcript must not keep the previous
   // slice, replay head, or drag offset.
@@ -561,6 +565,8 @@ export default function TerrainViewport({
     scrubProgressRef.current = 1;
     setIsPlaying(false);
     isPlayingRef.current = false;
+    setSeamsOpen(false);
+    setSeamsHot(false);
   }, [mapKey]);
   const windowTrackRef = useRef<HTMLDivElement>(null);
   const axis = activityAxis(timeline ?? [], stats);
@@ -661,7 +667,7 @@ export default function TerrainViewport({
     const compSpan = compEnd - compStart;
 
     // Columns sit on the compressed axis. A quiet minute inside a burst stays
-    // flat. A gap longer than five minutes is a short seam, not a plain.
+    // flat. A long idle stretch is a short seam, not a plain.
     const dataPoints: Array<{
       tNorm: number;
       user: number;
@@ -1517,15 +1523,15 @@ export default function TerrainViewport({
           const xSeam = -tStartX + seam.fraction * (tStartX * 2);
           const ptSeam = project([xSeam, 0, tStartZ]);
           if (!ptSeam) continue;
-          hud.strokeStyle = "rgba(255, 196, 96, 0.9)";
+          // Small // notch on the axis. The duration lives on the scrubber.
+          hud.strokeStyle = "rgba(255, 154, 60, 0.4)";
           hud.lineWidth = 1;
           hud.beginPath();
-          hud.moveTo(ptSeam[0], ptSeam[1]);
-          hud.lineTo(ptSeam[0], ptSeam[1] - 10);
+          hud.moveTo(ptSeam[0] - 3, ptSeam[1] + 2);
+          hud.lineTo(ptSeam[0] - 1, ptSeam[1] - 2);
+          hud.moveTo(ptSeam[0] + 1, ptSeam[1] + 2);
+          hud.lineTo(ptSeam[0] + 3, ptSeam[1] - 2);
           hud.stroke();
-          hud.fillStyle = "#ff9a3c";
-          hud.textAlign = "center";
-          hud.fillText(seam.label, ptSeam[0], ptSeam[1] - 14);
         }
       }
 
@@ -1818,6 +1824,22 @@ export default function TerrainViewport({
     );
   }
 
+  const seamTicks = axis.seams.map((seam) => {
+    const spanMs = Math.max(1, axis.spanMs);
+    const at = ((seam.compStart + seam.compEnd) / 2 / spanMs) * 100;
+    const tip = seamIdleText(seam);
+    const tipSide = at < 22 ? " tip-start" : at > 78 ? " tip-end" : "";
+    return (
+      <span
+        key={`${seam.wallStart}-${seam.wallEnd}`}
+        className={`scifi-window-seam${tipSide}`}
+        style={{ left: `${at}%` }}
+        title={tip}
+        data-tip={tip}
+      />
+    );
+  });
+
   return (
     <section className="scifi-panel viewport">
       <canvas ref={glCanvasRef} id="terrain" className="scifi-terrain-canvas" />
@@ -1908,12 +1930,22 @@ export default function TerrainViewport({
 
       {/* Chronological Timeline Playback Scrubber */}
       <div className="scifi-viewport-bottombar">
+        {!view.slidable && axis.seams.length > 0 && (
+          <div className="scifi-window-row">
+            <div
+              className={`scifi-window-track${seamsHot ? " seams-hot" : ""}`}
+              aria-label="Folded idle gaps"
+            >
+              {seamTicks}
+            </div>
+          </div>
+        )}
         {view.slidable && (
           <div className="scifi-window-row">
             <span className="scifi-scrubber-time">+{formatElapsed(view.start - view.spanStart)}</span>
             <div
               ref={windowTrackRef}
-              className="scifi-window-track"
+              className={`scifi-window-track${seamsHot ? " seams-hot" : ""}`}
               role="slider"
               aria-label="Area map time window"
               aria-valuemin={0}
@@ -1921,7 +1953,7 @@ export default function TerrainViewport({
               aria-valuenow={Math.max(0, (view.compStart ?? 0) - (view.compSpanStart ?? 0))}
               aria-valuetext={`+${formatElapsed(view.start - view.spanStart)} to +${formatElapsed(view.end - view.spanStart)}${(view.seams ?? []).length > 0 ? `, quiet ${(view.seams ?? []).map((seam) => seam.label).join(" ")}` : ""}`}
               tabIndex={0}
-              title="Drag across activity. Quiet stretches longer than 5 minutes shrink to a labeled seam. Arrow keys move one minute."
+              title="Drag across activity. Quiet stretches shrink to a short seam. Arrow keys move one minute."
               onKeyDown={(event) => {
                 if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                 event.preventDefault();
@@ -1947,18 +1979,7 @@ export default function TerrainViewport({
                 setWindowStart(next);
               }}
             >
-              {axis.seams.map((seam) => {
-                const spanMs = Math.max(1, axis.spanMs);
-                const at = ((seam.compStart + seam.compEnd) / 2 / spanMs) * 100;
-                return (
-                  <span
-                    key={`${seam.wallStart}-${seam.wallEnd}`}
-                    className="scifi-window-seam"
-                    style={{ left: `${at}%` }}
-                    title={`Quiet ${seam.label}`}
-                  />
-                );
-              })}
+              {seamTicks}
               <div
                 className="scifi-window-thumb"
                 style={{ left: `${windowTrack(view).leftPct}%`, width: `${windowTrack(view).widthPct}%` }}
@@ -2054,6 +2075,29 @@ export default function TerrainViewport({
             {scrubProgress >= 0.98 ? "NOW (LATEST)" : `${Math.round(scrubProgress * 100)}%`}
           </span>
         </div>
+        {axis.seams.length > 0 && (
+          <div
+            className="scifi-seam-summary"
+            onMouseEnter={() => setSeamsHot(true)}
+            onMouseLeave={() => setSeamsHot(false)}
+          >
+            <button
+              type="button"
+              className="scifi-scrubber-play-btn"
+              aria-expanded={seamsOpen}
+              onClick={() => setSeamsOpen((open) => !open)}
+            >
+              [SEAMS: {axis.seamCount} · {formatGap(axis.totalFoldedMs)} FOLDED]
+            </button>
+            {seamsOpen && (
+              <ul className="scifi-seam-summary-list">
+                {axis.seams.map((seam) => (
+                  <li key={`${seam.wallStart}-${seam.wallEnd}`}>{seamIdleText(seam)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         </div>
       </div>
 

@@ -9,6 +9,7 @@ import {
   type SpectrumSeam,
   CHANNELS,
   processTimelineData,
+  seamBeforeBucket,
   perspective,
   lookAt,
   multiply,
@@ -50,6 +51,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
   const startTimeRef = useRef<number>(performance.now());
+  const pointerXRef = useRef<number | null>(null);
 
   // 45° Perspective Camera State (matching Area Map Orbit)
   const cam3dRef = useRef({
@@ -67,6 +69,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 
   const clearHover = useCallback(() => {
     cam3dRef.current.isDragging = false;
+    pointerXRef.current = null;
     setHoverIndex(null);
     setHoverChannel(null);
   }, []);
@@ -114,7 +117,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
       if (mode === "gauge") {
         drawGaugeMode(ctx, w, h, stats, activeChannel);
       } else if (mode === "burst") {
-        drawBurstMode(ctx, w, h, processedData, seams, activeChannel, hoverIndex);
+        drawBurstMode(ctx, w, h, processedData, seams, activeChannel, hoverIndex, pointerXRef.current);
       } else {
         draw3DContourMode(
           ctx,
@@ -167,6 +170,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
       }
 
       if (mode === "gauge" || processedData.length === 0) {
+        pointerXRef.current = null;
         setHoverIndex(null);
         setHoverChannel(null);
         return;
@@ -178,10 +182,13 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 
       // Clear immediately if cursor is outside viewport boundaries
       if (clientX < 0 || clientX > rect.width || clientY < 0 || clientY > rect.height) {
+        pointerXRef.current = null;
         setHoverIndex(null);
         setHoverChannel(null);
         return;
       }
+
+      pointerXRef.current = clientX;
 
       if (mode === "contour") {
         const projector = getCameraProjector(rect.width, rect.height, cam3dRef.current);
@@ -263,6 +270,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
   }, [mode]);
 
   const hoveredBucket = hoverIndex !== null && processedData[hoverIndex] ? processedData[hoverIndex] : null;
+  const gappedSeam = hoverIndex === null ? null : seamBeforeBucket(processedData, seams, hoverIndex);
 
   return (
     <div className="token-spectrum-root" ref={containerRef} onPointerLeave={clearHover}>
@@ -296,7 +304,6 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         </div>
 
         <div className="token-chart-telemetry-tag">
-          <span className="spec-label">[0x04-SPEC]</span>
           <span className="status-blink">● LIVE</span>
         </div>
       </div>
@@ -316,10 +323,14 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         {/* Hover Holographic Tooltip HUD */}
         {hoveredBucket && mode !== "gauge" && (
           <div
-            className="token-hud-tooltip"
-            style={{
-              left: `${Math.min(82, Math.max(18, hoveredBucket.xFraction * 100))}%`,
-            }}
+            className={`token-hud-tooltip${
+              hoveredBucket.xFraction < 0.28 ? " tip-start" : hoveredBucket.xFraction > 0.72 ? " tip-end" : ""
+            }`}
+            style={
+              hoveredBucket.xFraction >= 0.28 && hoveredBucket.xFraction <= 0.72
+                ? { left: `${hoveredBucket.xFraction * 100}%` }
+                : undefined
+            }
           >
             <div className="hud-tooltip-header">
               <span className="time-tag">{hoveredBucket.timeLabel}</span>
@@ -362,6 +373,11 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
                 {hoveredBucket.cacheHitRate.toFixed(1)}%
               </b>
             </div>
+            {gappedSeam && (
+              <div className="hud-tooltip-gapped">
+                ⏳ GAPPED: {gappedSeam.label} idle folded prior to this turn
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -538,14 +554,18 @@ function draw3DContourMode(
     ctx.textAlign = "right";
     ctx.fillText("LATEST ►", tEnd[0], tEnd[1]);
   }
-  ctx.fillStyle = "#ff9a3c";
-  ctx.font = "9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.textAlign = "center";
+  ctx.strokeStyle = "rgba(255, 154, 60, 0.45)";
+  ctx.lineWidth = 1;
   for (const seam of seams) {
     const seamX = xMin + seam.fraction * xSpan;
     const pt = project([seamX, 0, 6.6]);
     if (!pt) continue;
-    ctx.fillText(seam.label, pt[0], pt[1] - 12);
+    ctx.beginPath();
+    ctx.moveTo(pt[0] - 3, pt[1] + 2);
+    ctx.lineTo(pt[0] - 1, pt[1] - 2);
+    ctx.moveTo(pt[0] + 1, pt[1] + 2);
+    ctx.lineTo(pt[0] + 3, pt[1] - 2);
+    ctx.stroke();
   }
   ctx.restore();
 
@@ -921,6 +941,7 @@ function drawBurstMode(
   seams: SpectrumSeam[],
   activeChannel: ChannelKey | null,
   hoverIndex: number | null,
+  pointerX: number | null,
 ) {
   const padL = 54;
   const padR = 16;
@@ -942,9 +963,7 @@ function drawBurstMode(
   drawGridAndContours(ctx, padL, padT, plotW, plotH, maxAltitude, data, seams);
 
   const n = data.length;
-  if (n === 0) return;
-
-  data.forEach((d, i) => {
+  if (n > 0) data.forEach((d, i) => {
     const prev = i > 0 ? data[i - 1].xFraction : d.xFraction;
     const next = i < n - 1 ? data[i + 1].xFraction : d.xFraction;
     const slot = Math.max(d.xFraction - prev, next - d.xFraction, 1 / n) * plotW;
@@ -980,12 +999,31 @@ function drawBurstMode(
     }
   });
 
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(padL, padT + plotH);
-  ctx.lineTo(padL + plotW, padT + plotH);
-  ctx.stroke();
+  if (n > 0) {
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, padT + plotH);
+    ctx.lineTo(padL + plotW, padT + plotH);
+    ctx.stroke();
+  }
+
+  if (pointerX === null) return;
+  ctx.save();
+  ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (const seam of seams) {
+    const x = padL + seam.fraction * plotW;
+    if (Math.abs(pointerX - x) > 8) continue;
+    const width = ctx.measureText(seam.label).width;
+    const y = padT + 11;
+    ctx.fillStyle = "rgba(10, 12, 16, 0.92)";
+    ctx.fillRect(x - width / 2 - 4, y - 7, width + 8, 14);
+    ctx.fillStyle = "#ff9a3c";
+    ctx.fillText(seam.label, x, y);
+  }
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,10 +1173,18 @@ function drawGridAndContours(
     }
   }
 
-  ctx.fillStyle = "#ff9a3c";
-  for (const seam of seams) {
-    const x = padL + seam.fraction * plotW;
-    ctx.fillText(seam.label, x, padT + plotH - 6);
+  if (seams.length > 0) {
+    ctx.setLineDash([2, 4]);
+    ctx.strokeStyle = "rgba(255, 154, 60, 0.25)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const seam of seams) {
+      const x = padL + seam.fraction * plotW;
+      ctx.moveTo(x, padT);
+      ctx.lineTo(x, padT + plotH);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   ctx.restore();

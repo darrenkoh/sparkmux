@@ -923,24 +923,14 @@ export default function ChangeGraph({
         {/* 1. TOP HEADER & FILTER TOOLBAR */}
         <div className="gits-toolbar">
           {/* Logo / Badge */}
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold", color: "#2dd4bf" }}>
-            <span style={{ fontSize: "14px" }}>⬡</span>
-            <span style={{ letterSpacing: "0.14em" }}>
+          <div className="gits-brand">
+            <span className="gits-brand-mark" aria-hidden="true">⬡</span>
+            <span className="gits-brand-title">
               {view === "chronicle" ? "GITS · CHRONICLE" : "GITS · CHAIN GRAPH"}
             </span>
             {sessionName && (
               <span
-                style={{
-                  fontSize: "9.5px",
-                  fontWeight: 500,
-                  letterSpacing: "0.06em",
-                  color: "rgba(255, 255, 255, 0.55)",
-                  padding: "2px 6px",
-                  borderRadius: "3px",
-                  background: "rgba(45, 212, 191, 0.08)",
-                  border: "1px solid rgba(45, 212, 191, 0.2)",
-                  whiteSpace: "nowrap",
-                }}
+                className="gits-session"
                 title={`Active target: ${sessionName}:${tabName ?? "shell"}${tabId ? ` (${tabId})` : ""}`}
               >
                 {sessionName}:{tabName ?? "shell"}
@@ -954,6 +944,7 @@ export default function ChangeGraph({
             <button
               type="button"
               onClick={() => setFilterRepo(null)}
+              title="Show every cluster"
               style={{
                 background: filterRepo === null ? "rgba(45, 212, 191, 0.22)" : "transparent",
                 color: filterRepo === null ? "#99f6e4" : "rgba(255, 255, 255, 0.5)",
@@ -966,7 +957,7 @@ export default function ChangeGraph({
                 fontFamily: "inherit",
               }}
             >
-              ALL CLUSTERS ({repos.length})
+              ALL ({repos.length})
             </button>
             {repos.map((r) => {
               const count = cards.filter((c) => c.repoId === r.id).length;
@@ -998,8 +989,8 @@ export default function ChangeGraph({
 
           {/* Search Box & Quick Scope Toggle */}
           {view === "canvas" && (
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "5px", maxWidth: "100%", minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
+          <div className="gits-search-row">
+            <div style={{ display: "flex", alignItems: "center", position: "relative", flex: "1 1 auto", minWidth: 0 }}>
               <input
                 type="text"
                 value={searchQuery}
@@ -1159,7 +1150,7 @@ export default function ChangeGraph({
                 whiteSpace: "nowrap",
               }}
             >
-              ⤢ AUTO FIT
+              ⤢ FIT
             </button>
             )}
           </div>
@@ -1167,15 +1158,15 @@ export default function ChangeGraph({
           {/* Summary Metric Counters */}
           <div className="gits-toolbar-end">
             {view === "canvas" && (
-            <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "10px" }}>
-              <span style={{ color: "rgba(255,255,255,0.4)" }}>Files:</span>
+            <div className="gits-metrics" title={`${totalFiles} files, +${totalAdded} -${totalRemoved}`}>
+              <span style={{ color: "rgba(255,255,255,0.4)" }}>Files</span>
               <strong style={{ color: "#fff" }}>{totalFiles}</strong>
-              <span style={{ color: "#2dd4bf", marginLeft: "4px" }}>+{totalAdded}</span>
+              <span style={{ color: "#2dd4bf" }}>+{totalAdded}</span>
               <span style={{ color: "#f87171" }}>-{totalRemoved}</span>
               {agentEditedCount > 0 && (
                 <span
+                  title={`${agentEditedCount} agent edits`}
                   style={{
-                    marginLeft: "6px",
                     padding: "1px 5px",
                     borderRadius: "2px",
                     background: "rgba(232, 168, 73, 0.2)",
@@ -1184,7 +1175,7 @@ export default function ChangeGraph({
                     fontSize: "9px",
                   }}
                 >
-                  ⚡ {agentEditedCount} agent edits
+                  ⚡ {agentEditedCount}
                 </span>
               )}
             </div>
@@ -1208,14 +1199,14 @@ export default function ChangeGraph({
                 fontFamily: "inherit",
               }}
             >
-              {animatePulses ? "⚡ CURRENT: ON" : "⚡ CURRENT: OFF"}
+              {animatePulses ? "⚡ ON" : "⚡ OFF"}
             </button>
 
             {/* Reset Zoom/Pan */}
             <button
               type="button"
               onClick={handleResetView}
-              title="Reset Zoom & Pan"
+              title={`Reset zoom and pan (currently ${(zoom * 100).toFixed(0)}%)`}
               style={{
                 background: "transparent",
                 color: "rgba(255, 255, 255, 0.6)",
@@ -1227,7 +1218,7 @@ export default function ChangeGraph({
                 fontFamily: "inherit",
               }}
             >
-              RESET VIEW ({(zoom * 100).toFixed(0)}%)
+              ↺ {(zoom * 100).toFixed(0)}%
             </button>
             </>
             )}

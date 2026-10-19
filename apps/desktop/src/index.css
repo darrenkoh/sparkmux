@@ -1044,9 +1044,18 @@ body.is-resizing * {
 }
 
 .xterm-host .xterm-viewport {
+  /* Wheel and scrollLines still move this element. The bar itself sits in the
+     seam beside Agent Logs, so keep the gutter at zero. */
   overflow-y: auto !important;
   overflow-anchor: none;
   background-color: transparent !important;
+  scrollbar-width: none;
+}
+
+.xterm-host .xterm-viewport::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none;
 }
 
 .xterm-host .xterm-screen {
@@ -1534,112 +1543,69 @@ code {
 .scifi-top {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
+  min-width: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  padding-bottom: 10px;
+  padding-bottom: 8px;
 }
 
 .scifi-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .scifi-brand svg {
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   color: #ff9a3c;
   flex-shrink: 0;
 }
 .scifi-brand b {
-  display: block;
-  font-size: 13.5px;
+  font-size: 12px;
   letter-spacing: 0.16em;
   font-weight: 600;
   color: #fff;
-  line-height: 1.25;
-}
-.scifi-brand small {
-  display: block;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  color: rgba(255, 255, 255, 0.45);
-  line-height: 1.2;
+  line-height: 1;
 }
 
 .scifi-ticker {
   display: flex;
-  align-items: center;
-  gap: 18px;
-  margin-left: 14px;
-  font-size: 11.5px;
-  color: rgba(255, 255, 255, 0.6);
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
   letter-spacing: 0.04em;
 }
-.scifi-ticker strong {
+.scifi-ticker .scifi-id {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.scifi-ticker .scifi-id strong {
   color: #ff9a3c;
   font-weight: 600;
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 18ch;
 }
-
-.scifi-badge-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 12px;
-  font-size: 10.5px;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.78);
-  font-weight: 500;
-}
-.scifi-badge-pill strong {
-  font-weight: 700;
-  font-size: 11.5px;
-}
-.scifi-badge-pill.events {
-  border-color: rgba(255, 154, 60, 0.45);
-  background: rgba(255, 154, 60, 0.09);
-  color: rgba(255, 255, 255, 0.9);
-}
-.scifi-badge-pill.events strong {
-  color: #ff9a3c;
-}
-.scifi-badge-pill.events .scifi-pill-dot {
-  background: #ff9a3c;
-  box-shadow: 0 0 6px #ff9a3c;
-}
-.scifi-badge-pill.calls {
-  border-color: rgba(45, 212, 191, 0.45);
-  background: rgba(45, 212, 191, 0.09);
-  color: rgba(255, 255, 255, 0.9);
-}
-.scifi-badge-pill.calls strong {
-  color: #2dd4bf;
-}
-.scifi-badge-pill.calls .scifi-pill-dot {
-  background: #2dd4bf;
-  box-shadow: 0 0 6px #2dd4bf;
-}
-.scifi-badge-pill.agents {
-  border-color: rgba(165, 180, 252, 0.5);
-  background: rgba(165, 180, 252, 0.1);
-  color: rgba(255, 255, 255, 0.9);
-}
-.scifi-badge-pill.agents strong {
-  color: #a5b4fc;
-}
-.scifi-badge-pill.agents .scifi-pill-dot {
-  background: #a5b4fc;
-  box-shadow: 0 0 6px #a5b4fc;
-}
-.scifi-pill-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  display: inline-block;
+.scifi-id-sep {
+  color: rgba(255, 255, 255, 0.28);
   flex-shrink: 0;
+}
+.scifi-meta {
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .scifi-mode-group {
@@ -1654,8 +1620,6 @@ code {
   border: none;
   border-radius: 0;
   padding: 5px 11px;
-  font-size: 10px;
-  letter-spacing: 0.1em;
 }
 .scifi-mode-group .scifi-mode-btn:not(:last-child) {
   border-right: 1px solid rgba(255, 255, 255, 0.15);
@@ -1665,7 +1629,17 @@ code {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.scifi-controls-window {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 2px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .scifi-btn {
@@ -2203,11 +2177,63 @@ code {
   position: absolute;
   top: 0;
   z-index: 0;
+  width: 8px;
+  height: 100%;
+  margin-left: -4px;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.scifi-window-seam::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 3px;
   width: 2px;
   height: 100%;
-  margin-left: -1px;
-  background: rgba(255, 220, 140, 0.95);
+  background: rgba(255, 154, 60, 0.9);
   pointer-events: none;
+}
+
+.scifi-window-seam:hover::before,
+.scifi-window-track.seams-hot .scifi-window-seam::before {
+  background: #ff9a3c;
+  box-shadow: 0 0 6px rgba(255, 154, 60, 0.85);
+}
+
+.scifi-window-seam::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  transform: translateX(-50%);
+  padding: 4px 6px;
+  background: rgba(10, 13, 18, 0.94);
+  border: 1px solid rgba(255, 154, 60, 0.6);
+  border-radius: 2px;
+  color: #ff9a3c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.scifi-window-seam:hover::after {
+  opacity: 1;
+}
+
+.scifi-window-seam.tip-start::after {
+  left: 0;
+  transform: none;
+}
+
+.scifi-window-seam.tip-end::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 
 .scifi-window-thumb {
@@ -2287,6 +2313,35 @@ code {
   white-space: nowrap;
 }
 
+.scifi-seam-summary {
+  flex: 0 0 auto;
+}
+
+.scifi-seam-summary-list {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 4px);
+  z-index: 8;
+  margin: 0;
+  padding: 6px 8px;
+  list-style: none;
+  max-height: 64px;
+  overflow-y: auto;
+  background: rgba(10, 12, 16, 0.94);
+  border: 1px solid rgba(255, 154, 60, 0.55);
+  border-radius: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: #ff9a3c;
+  white-space: normal;
+}
+
+.scifi-seam-summary-list li + li {
+  margin-top: 3px;
+}
+
 .scifi-milestone-tooltip {
   position: absolute;
   z-index: 20;
@@ -2340,12 +2395,12 @@ code {
 .token-chart-modes button {
   position: relative;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-size: 11px;
+  letter-spacing: 0.14em;
   color: rgba(255, 255, 255, 0.55);
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  padding: 3px 8px;
+  padding: 4px 10px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -2373,16 +2428,12 @@ code {
   align-items: center;
   gap: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-}
-
-.token-chart-telemetry-tag .spec-label {
-  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
+  letter-spacing: 0.14em;
 }
 
 .token-chart-telemetry-tag .status-blink {
   color: #3dd68c;
-  letter-spacing: 0.1em;
   font-weight: 600;
 }
 
@@ -2409,6 +2460,8 @@ code {
   transform: translateX(-50%);
   pointer-events: none;
   z-index: 10;
+  box-sizing: border-box;
+  max-width: calc(100% - 16px);
   background: rgba(8, 10, 14, 0.95);
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 154, 60, 0.5);
@@ -2417,6 +2470,20 @@ code {
   min-width: 160px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   border-radius: 2px;
+}
+
+.token-hud-tooltip.tip-start,
+.token-hud-tooltip.tip-end {
+  transform: none;
+}
+
+.token-hud-tooltip.tip-start {
+  left: 8px;
+}
+
+.token-hud-tooltip.tip-end {
+  left: auto;
+  right: 8px;
 }
 
 .hud-tooltip-header {
@@ -2470,6 +2537,15 @@ code {
   font-size: 10px;
   color: rgba(255, 255, 255, 0.65);
   letter-spacing: 0.08em;
+}
+
+.hud-tooltip-gapped {
+  margin-top: 4px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  line-height: 1.35;
+  color: #ff9a3c;
+  white-space: normal;
 }
 
 .token-legend-pills {
@@ -3566,16 +3642,18 @@ div.mini-subagents-head {
 .gits-toolbar {
   flex: 0 0 auto;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 8px 12px;
+  gap: 8px;
   width: 100%;
   min-width: 0;
-  min-height: 46px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
   box-sizing: border-box;
   background: #080b11;
   border-bottom: 1px solid rgba(45, 212, 191, 0.18);
-  padding: 8px 14px;
+  padding: 0 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   z-index: 10;
@@ -3583,49 +3661,131 @@ div.mini-subagents-head {
 }
 
 .gits-toolbar > * {
-  flex-shrink: 0;
   min-width: 0;
-  max-width: 100%;
+}
+
+.gits-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 164px;
+  max-width: 340px;
+  overflow: hidden;
+  font-weight: bold;
+  color: #2dd4bf;
+  white-space: nowrap;
+}
+
+.gits-brand-mark {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.gits-brand-title {
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.gits-session {
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.55);
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(45, 212, 191, 0.08);
+  border: 1px solid rgba(45, 212, 191, 0.2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 18ch;
 }
 
 .gits-clusters,
 .gits-toolbar-modes,
 .gits-toolbar-end {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  max-width: 100%;
   min-width: 0;
 }
 
 .gits-clusters {
   gap: 4px;
+  flex: 0 1 auto;
+  min-width: 88px;
+  max-width: min(34%, 420px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.gits-clusters::-webkit-scrollbar {
+  display: none;
 }
 
 .gits-clusters > button {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .gits-toolbar-modes {
   gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .gits-toolbar-end {
-  margin-left: auto;
   justify-content: flex-end;
-  gap: 8px 14px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .gits-toolbar .graph-mode-group {
-  flex-wrap: wrap;
-  max-width: 100%;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  max-width: none;
+}
+
+.gits-toolbar .graph-mode-btn {
+  padding: 3px 7px;
+  letter-spacing: 0.08em;
+}
+
+.gits-search-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 5px;
+  flex: 0 1 180px;
+  width: 180px;
+  min-width: 104px;
+  max-width: 200px;
+}
+
+.gits-search-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.gits-search-row > button {
+  flex-shrink: 0;
+}
+
+.gits-metrics {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .gits-search {
-  width: min(185px, 100%);
-  max-width: 100%;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
   box-sizing: border-box;
 }
 

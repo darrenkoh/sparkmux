@@ -4,9 +4,11 @@ import {
   formatTimeOffset,
   computeLocalCacheHitRate,
   processTimelineData,
+  seamBeforeBucket,
   CHANNELS,
 } from "./tokenSpectrumMath.ts";
 import type { ActivityPoint } from "../api.ts";
+import { COMPRESSED_GAP_MS } from "./terrainWindow.ts";
 
 test("formatTimeOffset formats seconds, minutes and hours correctly", () => {
   assert.equal(formatTimeOffset(0), "+00:00");
@@ -146,8 +148,50 @@ test("a token spike with no map events stays an anchor on the spectrum axis", ()
   const { buckets, seams } = processTimelineData(timeline);
   const spike = buckets.find((bucket) => bucket.timestamp === spikeAt);
   assert.ok(spike);
-  assert.equal(seams.length, 2);
-  assert.ok(Math.abs(spike.xFraction - 0.5) < 0.001);
+  // Span is about 126 minutes, so the idle threshold is 10 minutes.
+  // The 6-minute lead-in stays real; the 2-hour quiet folds to 2 minutes.
+  assert.equal(seams.length, 1);
+  assert.equal(seams[0].label, "+2h");
+  assert.ok(Math.abs(spike.xFraction - 6 / 8) < 0.001);
+});
+
+test("seamBeforeBucket is only the first turn after the fold", () => {
+  const start = 1_000_000;
+  const minute = 60_000;
+  const burst = 10 * minute;
+  const gap = 2 * 60 * minute;
+  const timeline: ActivityPoint[] = [];
+  for (let t = 0; t <= burst; t += minute) timeline.push(tokenPoint(start + t, 20));
+  for (let t = 0; t <= burst; t += minute) timeline.push(tokenPoint(start + burst + gap + t, 20));
+
+  const { buckets, seams } = processTimelineData(timeline);
+  assert.equal(seams.length, 1);
+  const open = buckets.findIndex((bucket) => bucket.timestamp >= seams[0].wallEnd - 1);
+  assert.ok(open > 0);
+  assert.equal(seamBeforeBucket(buckets, seams, open)?.label, "+2h");
+  assert.equal(seamBeforeBucket(buckets, seams, open + 1), null);
+  assert.equal(seamBeforeBucket(buckets, seams, open - 1), null);
+});
+
+test("totalFoldedMs is zero without seams and the remainder of one seam", () => {
+  assert.equal(processTimelineData([]).totalFoldedMs, 0);
+
+  const start = 1_000_000;
+  const minute = 60_000;
+  const plain = processTimelineData([
+    tokenPoint(start, 20),
+    tokenPoint(start + minute, 20),
+  ]);
+  assert.equal(plain.seams.length, 0);
+  assert.equal(plain.totalFoldedMs, 0);
+
+  const gap = 2 * 60 * minute;
+  const folded = processTimelineData([
+    tokenPoint(start, 20),
+    tokenPoint(start + gap, 20),
+  ]);
+  assert.equal(folded.seams.length, 1);
+  assert.equal(folded.totalFoldedMs, folded.seams[0].gapMs - COMPRESSED_GAP_MS);
 });
 
 test("CHANNELS definitions contain all 4 channels with colors", () => {

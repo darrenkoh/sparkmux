@@ -70,11 +70,17 @@ export interface SpectrumSeam {
   fraction: number;
   /** Real duration, such as `+2h`. */
   label: string;
+  /** Wall-clock duration that was folded. */
+  gapMs: number;
+  wallStart: number;
+  wallEnd: number;
 }
 
 export interface ProcessedTimeline {
   buckets: ProcessedBucket[];
   seams: SpectrumSeam[];
+  /** Sum over seams of wall duration minus compressed width. */
+  totalFoldedMs: number;
 }
 
 /** A spectrum column is active when it has tokens or a map event. */
@@ -144,7 +150,7 @@ export function processTimelineData(
         cacheHitRate: 0,
       });
     }
-    return { buckets, seams: [] };
+    return { buckets, seams: [], totalFoldedMs: 0 };
   }
 
   const startT = points[0].timestamp;
@@ -155,6 +161,9 @@ export function processTimelineData(
     : axis.seams.map((seam) => ({
         fraction: ((seam.compStart + seam.compEnd) / 2) / span,
         label: seam.label,
+        gapMs: seam.gapMs,
+        wallStart: seam.wallStart,
+        wallEnd: seam.wallEnd,
       }));
 
   const buckets = points.map((p, idx) => {
@@ -207,7 +216,27 @@ export function processTimelineData(
     };
   });
 
-  return { buckets, seams };
+  return { buckets, seams, totalFoldedMs: axis.totalFoldedMs };
+}
+
+/**
+ * The seam this bucket opens: the first bucket at or after `wallEnd`
+ * (1 ms tolerance). A later bucket in that burst returns null.
+ */
+export function seamBeforeBucket(
+  buckets: ProcessedBucket[],
+  seams: SpectrumSeam[],
+  index: number,
+): SpectrumSeam | null {
+  if (index < 0 || index >= buckets.length) return null;
+  const bucket = buckets[index].timestamp;
+  const prev = index > 0 ? buckets[index - 1].timestamp : Number.NEGATIVE_INFINITY;
+  let found: SpectrumSeam | null = null;
+  for (const seam of seams) {
+    const end = seam.wallEnd - 1;
+    if (bucket >= end && prev < end) found = seam;
+  }
+  return found;
 }
 
 // ---------------------------------------------------------------------------

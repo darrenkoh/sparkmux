@@ -4,16 +4,35 @@ import type { ActivityPoint, TabAnalyticsStats } from "../api";
 export const AREA_MAP_WINDOW_MS = 30 * 60 * 1000;
 
 /**
- * Quiet stretch longer than this collapses. Five minutes of silence between
- * buckets is still real spacing; anything longer is idle.
+ * Base quiet stretch for a session of an hour or less. Longer sessions raise
+ * this through `effectiveIdleGapMs`. Comparison is strict `>`.
  */
 export const IDLE_GAP_MS = 5 * 60 * 1000;
 
 /**
- * Display width of a collapsed gap, in compressed time. Two minutes is a
- * short seam on the 30-minute window, wide enough to label.
+ * Base display width of a collapsed gap, in compressed time. Two minutes is a
+ * short seam on the 30-minute window. Denser timelines use a shorter seam.
  */
 export const COMPRESSED_GAP_MS = 2 * 60 * 1000;
+
+/** Activity shorter than this between two idle stretches folds into one seam. */
+const SEAM_BLIP_MS = 30_000;
+
+/** Idle threshold for a session of this wall-clock length. Exact hour edges stay in the lower band. */
+export function effectiveIdleGapMs(totalSpan: number): number {
+  const hour = 60 * 60 * 1000;
+  if (totalSpan <= hour) return IDLE_GAP_MS;
+  if (totalSpan <= 6 * hour) return 10 * 60 * 1000;
+  if (totalSpan <= 24 * hour) return 15 * 60 * 1000;
+  return 30 * 60 * 1000;
+}
+
+/** Compressed width after seams have been counted. A crowded axis gets a shorter seam. */
+export function effectiveCompressedGapMs(seamCount: number): number {
+  if (seamCount > 16) return 45_000;
+  if (seamCount > 8) return 60_000;
+  return COMPRESSED_GAP_MS;
+}
 
 export interface SessionSpan {
   start: number;
@@ -50,6 +69,10 @@ export interface CompressedAxis {
   spanMs: number;
   pieces: TimePiece[];
   seams: TimeSeam[];
+  /** Sum over seams of wall duration minus compressed width. */
+  totalFoldedMs: number;
+  /** Seam count after neighboring gaps have been coalesced. */
+  seamCount: number;
 }
 
 export interface TimeWindow {
@@ -104,8 +127,63 @@ export function formatGap(ms: number): string {
   return `+${hours}h ${minutes}m`;
 }
 
+/** `Idle: +42m (14:10 → 14:52)`, local hours and minutes. */
+export function seamIdleText(seam: Pick<TimeSeam, "label" | "wallStart" | "wallEnd">): string {
+  const clock = (ms: number) => {
+    const date = new Date(ms);
+    const hours = date.getHours().toString().padStart(2, "0");
+    const minutes = date.getMinutes().toString().padStart(2, "0");
+    return `${hours}:${minutes}`;
+  };
+  return `Idle: ${seam.label} (${clock(seam.wallStart)} → ${clock(seam.wallEnd)})`;
+}
+
+interface RawPiece {
+  wallStart: number;
+  wallEnd: number;
+  seam: boolean;
+}
+
 /**
- * Fold quiet stretches longer than five minutes down to a two-minute seam.
+ * Fold a chain of seams that are split only by a blip shorter than 30s.
+ * A single activity timestamp is the boundary between gaps, not a blip, so
+ * each turn keeps its own seam.
+ */
+function coalesceSeams(raw: readonly RawPiece[]): RawPiece[] {
+  const merged: RawPiece[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    const piece = raw[i];
+    if (!piece.seam) {
+      merged.push({ wallStart: piece.wallStart, wallEnd: piece.wallEnd, seam: false });
+      i += 1;
+      continue;
+    }
+    let wallEnd = piece.wallEnd;
+    let j = i + 1;
+    while (j < raw.length) {
+      let k = j;
+      let blip = 0;
+      while (k < raw.length && !raw[k].seam) {
+        blip += raw[k].wallEnd - raw[k].wallStart;
+        k += 1;
+      }
+      if (k < raw.length && raw[k].seam && blip > 0 && blip < SEAM_BLIP_MS) {
+        wallEnd = raw[k].wallEnd;
+        j = k + 1;
+        continue;
+      }
+      break;
+    }
+    merged.push({ wallStart: piece.wallStart, wallEnd, seam: true });
+    i = j;
+  }
+  return merged;
+}
+
+/**
+ * Fold quiet stretches into short seams. The idle threshold grows with the
+ * session, and a blip under 30s between seams is swallowed.
  * Activity on either side keeps its real spacing.
  */
 export function activityAxis<T extends { timestamp: number }>(
@@ -115,6 +193,7 @@ export function activityAxis<T extends { timestamp: number }>(
 ): CompressedAxis {
   const activeCheck = isActive ?? ((point: T) => isMapActivity(point as unknown as ActivityStamp));
   const span = sessionSpan(timeline, stats);
+  const idleMs = effectiveIdleGapMs(span.end - span.start);
   const active: number[] = [];
   for (const point of timeline) {
     if (typeof point.timestamp !== "number" || !activeCheck(point)) continue;
@@ -129,37 +208,54 @@ export function activityAxis<T extends { timestamp: number }>(
   }
   if (anchors[anchors.length - 1] !== span.end) anchors.push(span.end);
 
-  const pieces: TimePiece[] = [];
-  const seams: TimeSeam[] = [];
-  let comp = 0;
+  const raw: RawPiece[] = [];
   for (let i = 0; i < anchors.length - 1; i++) {
     const wallStart = anchors[i];
     const wallEnd = anchors[i + 1];
     const delta = wallEnd - wallStart;
     if (delta <= 0) continue;
-    const seam = delta > IDLE_GAP_MS;
-    const width = seam ? COMPRESSED_GAP_MS : delta;
+    raw.push({ wallStart, wallEnd, seam: delta > idleMs });
+  }
+  const coalesced = coalesceSeams(raw);
+  const seamWidth = effectiveCompressedGapMs(coalesced.filter((piece) => piece.seam).length);
+
+  const pieces: TimePiece[] = [];
+  const seams: TimeSeam[] = [];
+  let comp = 0;
+  let totalFoldedMs = 0;
+  for (const piece of coalesced) {
+    const gapMs = piece.wallEnd - piece.wallStart;
+    const width = piece.seam ? seamWidth : gapMs;
     pieces.push({
-      wallStart,
-      wallEnd,
+      wallStart: piece.wallStart,
+      wallEnd: piece.wallEnd,
       compStart: comp,
       compEnd: comp + width,
-      seam,
+      seam: piece.seam,
     });
-    if (seam) {
+    if (piece.seam) {
       seams.push({
-        wallStart,
-        wallEnd,
-        gapMs: delta,
+        wallStart: piece.wallStart,
+        wallEnd: piece.wallEnd,
+        gapMs,
         compStart: comp,
         compEnd: comp + width,
-        label: formatGap(delta),
+        label: formatGap(gapMs),
       });
+      totalFoldedMs += Math.max(0, gapMs - width);
     }
     comp += width;
   }
 
-  return { wallStart: span.start, wallEnd: span.end, spanMs: comp, pieces, seams };
+  return {
+    wallStart: span.start,
+    wallEnd: span.end,
+    spanMs: comp,
+    pieces,
+    seams,
+    totalFoldedMs,
+    seamCount: seams.length,
+  };
 }
 
 export function wallToCompressed(axis: CompressedAxis, wall: number): number {

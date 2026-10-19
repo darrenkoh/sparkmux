@@ -299,7 +299,6 @@ export default function App() {
     const cw = cellRef.current.w || 8.4;
     const ch = cellRef.current.h || 17;
     const pad = 16;
-    const scrollbar = 15;
     const el = hostRef.current;
     const w =
       el && el.clientWidth > 40
@@ -310,7 +309,7 @@ export default function App() {
         ? el.clientHeight
         : Math.max(120, window.innerHeight - 96);
     return {
-      cols: Math.max(2, Math.floor(Math.max(0, w - pad - scrollbar) / cw)),
+      cols: Math.max(2, Math.floor(Math.max(0, w - pad) / cw)),
       rows: Math.max(1, Math.floor(Math.max(0, h - pad) / ch)),
     };
   }, [sidebarDisplay]);
