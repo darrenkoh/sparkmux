@@ -978,6 +978,153 @@ body.is-resizing * {
   font-weight: 400;
 }
 
+.artifact-turn {
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.artifact-turn summary {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.artifact-turn summary::-webkit-details-marker {
+  display: none;
+}
+
+.artifact-turn summary::before {
+  content: "▸";
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.artifact-turn[open] summary::before {
+  content: "▾";
+}
+
+.artifact-turn-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.artifact-turn-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.artifact-turn-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.artifact-turn[open] .artifact-preview,
+.artifact-turn[open] .artifact-turn-extra {
+  display: none;
+}
+
+.artifact-turn summary .artifact-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex: 0 0 auto;
+}
+
+.artifact-turn-line.user .artifact-label {
+  color: #e8a849;
+}
+
+.artifact-turn-extra .artifact-label {
+  color: #9ec1ff;
+}
+
+.artifact-turn summary .artifact-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: #f6edd8;
+}
+
+.artifact-turn summary:hover .artifact-turn-line {
+  align-items: flex-start;
+}
+
+.artifact-turn summary:hover .artifact-preview {
+  overflow: visible;
+  text-overflow: unset;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.artifact-turn-extra .artifact-preview {
+  color: #e7eeff;
+}
+
+.artifact-steps,
+.artifact-pending-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.artifact-steps {
+  color: var(--muted);
+}
+
+.artifact-pending-label,
+.artifact-pending {
+  color: #e8a849;
+}
+
+.artifact-turn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.artifact-turn-body .artifact-item {
+  margin: 0;
+}
+
+.artifact-block-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.artifact-item.assistant.final {
+  box-shadow: inset 0 0 0 1px rgba(91, 141, 239, 0.45);
+}
+
+.artifact-pending {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid #e8a849;
+  background: rgba(232, 168, 73, 0.1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .tile-split {
   display: flex;
   width: 100%;

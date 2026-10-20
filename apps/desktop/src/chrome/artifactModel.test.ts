@@ -6,6 +6,7 @@ import {
   clearedThrough,
   cliLabel,
   emptyOutputText,
+  groupArtifactTurns,
   hasNewTopContent,
   markCleared,
   nearOutputBottom,
@@ -14,9 +15,96 @@ import {
   parseAutoScroll,
   previewLine,
   visibleEntries,
+  type ArtifactEntry,
   type ArtifactFeed,
 } from "./artifactModel.ts";
 import type { Pane } from "../types.ts";
+
+function entry(id: string, kind: string, body: string, label = kind): ArtifactEntry {
+  return { id, offset: Number(id) || 0, kind, label, body };
+}
+
+test("a turn keeps the span from a prompt through its closing reply", () => {
+  const turns = groupArtifactTurns([
+    entry("1", "user", "Fix the sidebar", "You"),
+    entry("2", "reasoning", "check the cells", "Thinking"),
+    entry("3", "assistant", "I'll look.", "Assistant"),
+    entry("4", "tool", "target_file: src/App.tsx", "search_replace"),
+    entry("5", "tool_result", "updated", "Result"),
+    entry("6", "assistant", "The grid is fixed.", "Assistant"),
+    entry("7", "user", "Also hide the empty state", "You"),
+    entry("8", "reasoning", "still looking", "Thinking"),
+  ]);
+
+  assert.equal(turns.length, 2);
+  assert.equal(turns[0].id, "turn:7");
+  assert.equal(turns[0].pending, true);
+  assert.equal(turns[0].reply, null);
+  assert.deepEqual(
+    turns[0].steps.map((step) => step.id),
+    ["8"],
+  );
+  assert.equal(turns[1].pending, false);
+  assert.equal(turns[1].reply?.body, "The grid is fixed.");
+  assert.equal(turns[1].steps[turns[1].steps.length - 1], turns[1].reply);
+  assert.deepEqual(
+    turns[1].steps.map((step) => step.kind),
+    ["reasoning", "assistant", "tool", "tool_result", "assistant"],
+  );
+});
+
+test("assistant text that ends the span is the reply, and an older unfinished span is not pending", () => {
+  const turns = groupArtifactTurns([
+    entry("1", "user", "first", "You"),
+    entry("2", "tool", "read", "read_file"),
+    entry("3", "user", "second", "You"),
+    entry("4", "assistant", "Done.", "Assistant"),
+  ]);
+
+  assert.equal(turns[0].user?.body, "second");
+  assert.equal(turns[0].reply?.body, "Done.");
+  assert.equal(turns[0].pending, false);
+  assert.equal(turns[0].steps[0], turns[0].reply);
+  assert.equal(turns[1].reply, null);
+  assert.equal(turns[1].pending, false);
+  assert.deepEqual(
+    turns[1].steps.map((step) => step.kind),
+    ["tool"],
+  );
+});
+
+test("an earlier turn marks its last assistant text when a tool follows it", () => {
+  const turns = groupArtifactTurns([
+    entry("1", "user", "first", "You"),
+    entry("2", "assistant", "I'll look.", "Assistant"),
+    entry("3", "tool", "read", "read_file"),
+    entry("4", "user", "second", "You"),
+  ]);
+
+  assert.equal(turns[0].pending, true);
+  assert.equal(turns[0].reply, null);
+  assert.equal(turns[1].reply?.body, "I'll look.");
+  assert.equal(turns[1].pending, false);
+  assert.deepEqual(
+    turns[1].steps.map((step) => step.kind),
+    ["assistant", "tool"],
+  );
+});
+
+test("records before the first prompt stay in their own group", () => {
+  const turns = groupArtifactTurns([
+    entry("1", "tool_result", "earlier result", "Result"),
+    entry("2", "user", "continue", "You"),
+    entry("3", "assistant", "Continued.", "Assistant"),
+  ]);
+
+  assert.equal(turns[0].user?.body, "continue");
+  assert.equal(turns[0].reply?.body, "Continued.");
+  assert.equal(turns[1].id, "turn:preamble:1");
+  assert.equal(turns[1].user, null);
+  assert.equal(turns[1].pending, false);
+  assert.equal(turns[1].steps[0].body, "earlier result");
+});
 
 test("previewLine folds newlines and caps a long row", () => {
   assert.equal(previewLine("file starts here\nrest of the file"), "file starts here rest of the file");

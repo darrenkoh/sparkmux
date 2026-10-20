@@ -5,10 +5,13 @@ import { toolRowPath } from "./openPath";
 import {
   calculatePreservedScrollTop,
   emptyOutputText,
+  groupArtifactTurns,
   hasNewTopContent,
-  previewLine,
+  TURN_PENDING_LABEL,
+  TURN_REPLY_LABEL,
   type ArtifactEntry,
   type ArtifactFeed,
+  type ArtifactTurn,
 } from "./artifactModel";
 
 export default function ArtifactPanel({
@@ -31,7 +34,7 @@ export default function ArtifactPanel({
   isDocked?: boolean;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+  const [turnOpen, setTurnOpen] = useState<Record<string, boolean>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const unmountedRef = useRef(false);
   const paramsRef = useRef({ command, cwd, title, pid });
@@ -97,9 +100,8 @@ export default function ArtifactPanel({
   }, [tick]);
 
   const rawEntries = feed?.entries ?? [];
+  const turns = groupArtifactTurns(rawEntries);
   const empty = emptyOutputText(feed, rawEntries.length, 0);
-  // Latest logs on top
-  const displayed = [...rawEntries].reverse();
 
   useLayoutEffect(() => {
     const el = listRef.current;
@@ -127,19 +129,7 @@ export default function ArtifactPanel({
       scrollTop: el.scrollTop,
       scrollHeight: el.scrollHeight,
     };
-  }, [feed, expandedIds]);
-
-  const handleToggle = (id: string, open: boolean) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (open) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
-  };
+  }, [feed, turnOpen]);
 
   return (
     <aside
@@ -195,13 +185,15 @@ export default function ArtifactPanel({
         {empty ? (
           <p className="artifact-empty">{empty}</p>
         ) : (
-          displayed.map((entry) => (
-            <Entry
-              key={entry.id}
-              entry={entry}
+          turns.map((turn) => (
+            <Turn
+              key={turn.id}
+              turn={turn}
               cwd={cwd}
-              expanded={expandedIds.has(entry.id)}
-              onToggle={(open) => handleToggle(entry.id, open)}
+              open={turnOpen[turn.id] === true}
+              onToggle={(open) => {
+                setTurnOpen((prev) => ({ ...prev, [turn.id]: open }));
+              }}
             />
           ))
         )}
@@ -210,30 +202,89 @@ export default function ArtifactPanel({
   );
 }
 
-function Entry({
-  entry,
+function Turn({
+  turn,
   cwd,
-  expanded,
+  open,
   onToggle,
 }: {
-  entry: ArtifactEntry;
+  turn: ArtifactTurn;
   cwd: string;
-  expanded: boolean;
+  open: boolean;
   onToggle: (open: boolean) => void;
 }) {
-  const preview = previewLine(entry.body);
-  const recordedPath = entry.kind === "tool" ? toolRowPath(entry.body) : null;
+  const prompt = turn.user?.body ?? "";
+  const reply = turn.reply?.body ?? "";
+  const stepCount = turn.steps.reduce((count, step) => count + (step === turn.reply ? 0 : 1), 0);
   return (
     <details
-      className={`artifact-item ${entry.kind}`}
-      open={expanded}
+      className="artifact-turn"
+      open={open}
       onToggle={(event) => {
-        onToggle(event.currentTarget.open);
+        if (event.target !== event.currentTarget) return;
+        const next = event.currentTarget.open;
+        if (next === open) return;
+        onToggle(next);
       }}
     >
       <summary>
-        <span className="artifact-label">{entry.label}</span>
-        {preview && <span className="artifact-preview">{preview}</span>}
+        <span className="artifact-turn-lines">
+          <span className={`artifact-turn-line${turn.user ? " user" : ""}`}>
+            <span className="artifact-label">{turn.user ? "You" : "Earlier"}</span>
+            {prompt && <span className="artifact-preview">{prompt}</span>}
+            {!prompt && turn.steps[0] && (
+              <span className="artifact-preview">{turn.steps[0].body}</span>
+            )}
+          </span>
+          <span className="artifact-turn-extra">
+            {turn.reply && (
+              <span className="artifact-turn-line">
+                <span className="artifact-label">{TURN_REPLY_LABEL}</span>
+                {reply && <span className="artifact-preview">{reply}</span>}
+              </span>
+            )}
+            {turn.pending && <span className="artifact-pending-label">{TURN_PENDING_LABEL}</span>}
+            {stepCount > 0 && (
+              <span className="artifact-steps">
+                {stepCount === 1 ? "1 step" : `${stepCount} steps`}
+              </span>
+            )}
+          </span>
+        </span>
+      </summary>
+      <div className="artifact-turn-body">
+        {turn.user && <Block entry={turn.user} cwd={cwd} />}
+        {turn.steps.map((step) => (
+          <Block
+            key={step.id}
+            entry={step}
+            cwd={cwd}
+            label={step === turn.reply ? TURN_REPLY_LABEL : undefined}
+            final={step === turn.reply}
+          />
+        ))}
+        {turn.pending && <p className="artifact-pending">{TURN_PENDING_LABEL}</p>}
+      </div>
+    </details>
+  );
+}
+
+function Block({
+  entry,
+  cwd,
+  label,
+  final = false,
+}: {
+  entry: ArtifactEntry;
+  cwd: string;
+  label?: string;
+  final?: boolean;
+}) {
+  const recordedPath = entry.kind === "tool" ? toolRowPath(entry.body) : null;
+  return (
+    <div className={`artifact-item ${entry.kind}${final ? " final" : ""}`}>
+      <div className="artifact-block-head">
+        <span className="artifact-label">{label ?? entry.label}</span>
         {recordedPath && (
           <button
             type="button"
@@ -247,8 +298,8 @@ function Entry({
             Open in editor
           </button>
         )}
-      </summary>
+      </div>
       {entry.body && <div className="artifact-body">{entry.body}</div>}
-    </details>
+    </div>
   );
 }

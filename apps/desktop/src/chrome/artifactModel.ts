@@ -39,6 +39,71 @@ export function nearOutputBottom(
   return scrollHeight - scrollTop - clientHeight < 48;
 }
 
+/** Label on the assistant text that ends a user turn. */
+export const TURN_REPLY_LABEL = "LLM Output";
+
+/** Shown on the newest turn until that closing assistant text is stored. */
+export const TURN_PENDING_LABEL = "Still working";
+
+export type ArtifactTurn = {
+  id: string;
+  /** The user prompt that opens the span. Null for a tail that starts mid-turn. */
+  user: ArtifactEntry | null;
+  /** Records after the prompt, in transcript order. Includes the reply when it exists. */
+  steps: ArtifactEntry[];
+  /** Assistant text that closes the span. The same object is also in `steps`. */
+  reply: ArtifactEntry | null;
+  /** Newest span has a prompt and the assistant has not closed it yet. */
+  pending: boolean;
+};
+
+function assistantText(entry: ArtifactEntry | undefined): entry is ArtifactEntry {
+  return entry?.kind === "assistant" && entry.body.trim() !== "";
+}
+
+/**
+ * Groups a chronological transcript into turns, newest first.
+ * A turn runs from a user prompt up to, but not including, the next one.
+ * On the newest turn the reply is only the assistant text that is the last
+ * record. Anything after that text keeps the turn open. On an earlier turn
+ * the reply is the last assistant text in the span.
+ */
+export function groupArtifactTurns(entries: ArtifactEntry[]): ArtifactTurn[] {
+  const groups: ArtifactEntry[][] = [];
+  let current: ArtifactEntry[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "user" && current.length > 0) {
+      groups.push(current);
+      current = [];
+    }
+    current.push(entry);
+  }
+  if (current.length > 0) groups.push(current);
+
+  const lastIndex = groups.length - 1;
+  const turns = groups.map((group, index) => {
+    const head = group[0];
+    const user = head?.kind === "user" ? head : null;
+    const newest = index === lastIndex;
+    const reply = newest
+      ? assistantText(group[group.length - 1])
+        ? group[group.length - 1]
+        : null
+      : [...group].reverse().find(assistantText) ?? null;
+    const steps = user ? group.slice(1) : group;
+    const id = user && head ? `turn:${head.id}` : `turn:preamble:${head?.id ?? index}`;
+    return {
+      id,
+      user,
+      steps,
+      reply,
+      pending: newest && user !== null && reply === null,
+    };
+  });
+  turns.reverse();
+  return turns;
+}
+
 /** One line for a collapsed log row. Newlines fold into spaces. */
 export function previewLine(text: string, max = 180): string {
   const flat = text.replace(/\s+/g, " ").trim();
