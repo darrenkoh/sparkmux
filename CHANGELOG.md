@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.48
+
+### Improvements
+
+- Agent Logs groups each user prompt with the thinking, tools, and closing reply that follow it. The newest turn is first. A turn still in progress shows Still working until the reply is stored.
+- Hovering a collapsed Agent Logs row shows the full prompt and reply.
+
 ## 0.1.47
 
 ### Improvements
