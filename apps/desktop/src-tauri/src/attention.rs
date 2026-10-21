@@ -332,36 +332,111 @@ fn prompts_user(body: &str) -> bool {
     USER_PHRASES.iter().any(|phrase| lower.contains(phrase))
 }
 
+fn clean_line_start(mut s: &str) -> &str {
+    s = s.trim_start();
+    while let Some(rest) = s
+        .strip_prefix('#')
+        .or_else(|| s.strip_prefix('*'))
+        .or_else(|| s.strip_prefix('-'))
+        .or_else(|| s.strip_prefix('>'))
+        .or_else(|| s.strip_prefix('•'))
+        .or_else(|| s.strip_prefix('`'))
+    {
+        s = rest.trim_start();
+    }
+    if let Some(pos) = s.find(|c: char| !c.is_ascii_digit()) {
+        if pos > 0 && (s[pos..].starts_with(". ") || s[pos..].starts_with(") ")) {
+            s = s[pos + 2..].trim_start();
+        }
+    }
+    s
+}
+
+fn has_error_header(line: &str) -> bool {
+    let trimmed = clean_line_start(line);
+    let lower = trimmed.to_ascii_lowercase();
+    let lower = lower.trim();
+    if lower == "failed"
+        || lower == "failed."
+        || lower == "failure"
+        || lower == "failure."
+        || lower == "error"
+        || lower == "error."
+    {
+        return true;
+    }
+    lower.starts_with("error:")
+        || lower.starts_with("error [")
+        || lower.starts_with("[error]")
+        || lower.starts_with("fatal:")
+        || lower.starts_with("fatal error:")
+        || lower.starts_with("panic:")
+        || lower.starts_with("failure:")
+        || lower.starts_with("failed:")
+        || lower.starts_with("traceback (most recent call last):")
+}
+
+const SUCCESS_PHRASES: &[&str] = &[
+    "committed and pushed",
+    "has been committed",
+    "have been committed",
+    "pushed to",
+    "successfully",
+    "all tests pass",
+    "all tests passed",
+    "tests pass",
+    "tests passed",
+    "working tree clean",
+    "0 failed",
+    "zero failed",
+    "no errors remain",
+    "without error",
+    "fixed the error",
+    "fixed the failure",
+    "resolved the error",
+    "resolved the failure",
+    "fixed the issue",
+    "error has been resolved",
+    "error has been fixed",
+];
+
+const FAILURE_PHRASES: &[&str] = &[
+    "the build failed",
+    "build failed",
+    "there was a failure",
+    "failure while",
+    "task failed",
+    "command failed",
+    "execution failed",
+    "operation failed",
+    "failed to execute",
+    "failed to build",
+    "failed to compile",
+    "failed to run",
+    "failed to connect",
+    "failed to push",
+    "failed with exit code",
+    "failed with error",
+    "an error occurred while",
+    "encountered an error while",
+    "unexpected error occurred",
+];
+
+fn has_success_marker(lower: &str) -> bool {
+    SUCCESS_PHRASES.iter().any(|phrase| lower.contains(phrase))
+}
+
 fn reports_failure(body: &str) -> bool {
     let lower = body.to_ascii_lowercase();
-    ["error", "failed", "failure"]
-        .into_iter()
-        .any(|word| has_word(&lower, word))
-}
-
-fn has_word(hay: &str, word: &str) -> bool {
-    let bytes = hay.as_bytes();
-    let needle = word.as_bytes();
-    if needle.is_empty() || needle.len() > bytes.len() {
+    if has_success_marker(&lower) {
         return false;
     }
-    let mut index = 0;
-    while index + needle.len() <= bytes.len() {
-        if &bytes[index..index + needle.len()] == needle {
-            let before = index == 0 || !is_word(bytes[index - 1]);
-            let after_at = index + needle.len();
-            let after = after_at == bytes.len() || !is_word(bytes[after_at]);
-            if before && after {
-                return true;
-            }
+    for line in body.lines() {
+        if has_error_header(line) {
+            return true;
         }
-        index += 1;
     }
-    false
-}
-
-fn is_word(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+    FAILURE_PHRASES.iter().any(|phrase| lower.contains(phrase))
 }
 
 fn has_ask_marker(text: &str) -> bool {
@@ -1186,6 +1261,42 @@ mod tests {
                 "failure is case insensitive",
                 vec![ent("assistant", "Assistant", "FAILURE while writing")],
                 Some(AttentionLabel::Failed),
+            ),
+            (
+                "commit message with syntax error is succeeded",
+                vec![ent(
+                    "assistant",
+                    "Assistant",
+                    "Both repositories have been committed and pushed:\n\n1. Local Mac Repo (https://github.com/darrenkoh/imagine.git):\n• Commit: b687a7c (Fix iPhone Safari auth and page loading on local LAN)\n• Files: app.py, static/app.js\n• Pushed: main -> origin/main\n2. DGX Spark Repo (https://github.com/darrenkoh/inference.git):\n• Commit: 093dc57 (Fix Safari auth and syntax error, add prompt history and gallery tools)\n• Files: imagine/app.py\n• Pushed: main -> origin/main",
+                )],
+                Some(AttentionLabel::Succeeded),
+            ),
+            (
+                "removed syntax error block is succeeded",
+                vec![ent(
+                    "assistant",
+                    "Assistant",
+                    "Removed the broken unused_old_load syntax-error block (validated with JavaScript AST parser). All 107 unit tests pass.",
+                )],
+                Some(AttentionLabel::Succeeded),
+            ),
+            (
+                "added error handling is succeeded",
+                vec![ent(
+                    "assistant",
+                    "Assistant",
+                    "Added error handling to prevent runtime errors.",
+                )],
+                Some(AttentionLabel::Succeeded),
+            ),
+            (
+                "syntax error explanation is succeeded",
+                vec![ent(
+                    "assistant",
+                    "Assistant",
+                    "The syntax error was caused by a missing bracket in index.js.",
+                )],
+                Some(AttentionLabel::Succeeded),
             ),
         ];
         for (name, entries, expect) in cases {
