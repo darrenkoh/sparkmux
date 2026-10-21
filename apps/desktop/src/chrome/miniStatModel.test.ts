@@ -370,6 +370,17 @@ test("docked panel keeps the action labels and the decluttered map", () => {
   const pins = terrain.indexOf("(C) Waypoint Target Pins");
   const ruler = terrain.indexOf("(D) Left Y-Axis Altitude Ruler");
   assert.ok(guard !== -1 && guard < pins && pins < ruler);
+  assert.match(
+    terrain,
+    /if \(!dockedRef\.current\) \{\n\s*\/\/ \(C\) Waypoint Target Pins[\s\S]*?\n {6}\}\n\n {6}\/\/ \(D\) Left Y-Axis Altitude Ruler/,
+  );
+  assert.match(terrain.slice(ruler), /valueAxisFrame\(/);
+  assert.match(terrain, /aria-label="Area map base shape"/);
+  assert.match(terrain, /aria-label="Auto-rotation"/);
+  assert.match(terrain, /ROT ON/);
+  assert.match(terrain, /ROT OFF/);
+  assert.match(terrain, /persistentAutoRotate/);
+  assert.doesNotMatch(terrain, /autoRotateRef\.current = true/);
   assert.match(terrain, /CHANNEL_TAGS/);
   assert.match(terrain, /"USR", "THK", "RPL", "TOL"/);
   assert.match(terrain, /CHRONO TIME: 00:00 \(START\)/);

@@ -22,8 +22,8 @@ use std::path::{Component, Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
-const MAX_TAIL: u64 = 512 * 1024;
-const MAX_ENTRIES: usize = 60;
+const MAX_TAIL: u64 = 64 * 1024 * 1024;
+const MAX_ENTRIES: usize = 10_000;
 const ASSISTANT_CAP: usize = 12_000;
 const USER_CAP: usize = 12_000;
 const REASON_CAP: usize = 12_000;
@@ -1273,8 +1273,20 @@ fn read_transcript(
         }
     }
     if entries.len() > MAX_ENTRIES {
-        let drop_n = entries.len() - MAX_ENTRIES;
-        entries.drain(0..drop_n);
+        let excess = entries.len() - MAX_ENTRIES;
+        let mut dropped = 0;
+        entries.retain(|entry| {
+            if dropped < excess && entry.kind != "user" {
+                dropped += 1;
+                false
+            } else {
+                true
+            }
+        });
+        if entries.len() > MAX_ENTRIES {
+            let drop_n = entries.len() - MAX_ENTRIES;
+            entries.drain(0..drop_n);
+        }
     }
     Ok((file_len, entries))
 }
@@ -1650,6 +1662,10 @@ pub(crate) fn extract_user_query(text: &str) -> String {
     if let Some(query) = last_tag(text, "USER_REQUEST") {
         return query;
     }
+    let stripped = strip_metadata_tags(text);
+    if !stripped.is_empty() {
+        return stripped;
+    }
     if text.contains("<user_info>")
         || text.contains("<system_reminder>")
         || text.contains("<ADDITIONAL_METADATA>")
@@ -1658,6 +1674,33 @@ pub(crate) fn extract_user_query(text: &str) -> String {
         return String::new();
     }
     text.trim().to_string()
+}
+
+fn strip_metadata_tags(text: &str) -> String {
+    let mut s = strip_tag(text, "ADDITIONAL_METADATA");
+    s = strip_tag(&s, "USER_SETTINGS_CHANGE");
+    s = strip_tag(&s, "user_info");
+    s = strip_tag(&s, "system_reminder");
+    s.trim().to_string()
+}
+
+fn strip_tag(text: &str, tag: &str) -> String {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut result = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(&open) {
+        result.push_str(&rest[..start]);
+        let after = &rest[start + open.len()..];
+        if let Some(end) = after.find(&close) {
+            rest = &after[end + close.len()..];
+        } else {
+            rest = "";
+            break;
+        }
+    }
+    result.push_str(rest);
+    result.trim().to_string()
 }
 
 fn last_tag(text: &str, tag: &str) -> Option<String> {
@@ -2611,5 +2654,77 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn user_prompts_are_all_preserved_across_many_tool_steps() {
+        let dir = scratch("many-turns");
+        let path = dir.join("transcript.jsonl");
+        let mut content = String::new();
+
+        // Turn 1
+        content.push_str(
+            "{\"type\":\"USER_INPUT\",\"content\":\"<USER_REQUEST>First prompt</USER_REQUEST>\"}\n",
+        );
+        for i in 0..40 {
+            content.push_str(&format!(
+                "{{\"type\":\"PLANNER_RESPONSE\",\"thinking\":\"thinking {i}\",\"content\":\"reply {i}\",\"tool_calls\":[{{\"name\":\"run\",\"arguments\":{{\"cmd\":\"ls {i}\"}}}}]}}\n"
+            ));
+            content.push_str(&format!(
+                "{{\"type\":\"RUN_COMMAND\",\"content\":\"result {i}\"}}\n"
+            ));
+        }
+
+        // Turn 2
+        content.push_str("{\"type\":\"USER_INPUT\",\"content\":\"<USER_REQUEST>Second prompt</USER_REQUEST>\"}\n");
+        for i in 40..80 {
+            content.push_str(&format!(
+                "{{\"type\":\"PLANNER_RESPONSE\",\"thinking\":\"thinking {i}\",\"content\":\"reply {i}\",\"tool_calls\":[{{\"name\":\"run\",\"arguments\":{{\"cmd\":\"ls {i}\"}}}}]}}\n"
+            ));
+            content.push_str(&format!(
+                "{{\"type\":\"RUN_COMMAND\",\"content\":\"result {i}\"}}\n"
+            ));
+        }
+
+        // Turn 3
+        content.push_str(
+            "{\"type\":\"USER_INPUT\",\"content\":\"<USER_REQUEST>Third prompt</USER_REQUEST>\"}\n",
+        );
+        content.push_str("{\"type\":\"PLANNER_RESPONSE\",\"content\":\"Final reply\"}\n");
+
+        fs::write(&path, content).unwrap();
+
+        let (_len, entries) = read_transcript(CliKind::Antigravity, &path, MAX_TAIL).unwrap();
+        let user_prompts: Vec<&str> = entries
+            .iter()
+            .filter(|e| e.kind == "user")
+            .map(|e| e.body.as_str())
+            .collect();
+
+        assert_eq!(
+            user_prompts,
+            vec!["First prompt", "Second prompt", "Third prompt"],
+            "All user prompts must be preserved regardless of intermediate tool steps"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_user_query_handles_metadata_and_raw_requests() {
+        // Tagged user request with metadata
+        let tagged = "<USER_REQUEST>\nFix the bug\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime=now\n</ADDITIONAL_METADATA>";
+        assert_eq!(extract_user_query(tagged), "Fix the bug");
+
+        // Untagged request with metadata stripped
+        let untagged = "Fix the bug\n<ADDITIONAL_METADATA>\ntime=now\n</ADDITIONAL_METADATA>";
+        assert_eq!(extract_user_query(untagged), "Fix the bug");
+
+        // Plain prompt
+        assert_eq!(extract_user_query("Plain prompt"), "Plain prompt");
+
+        // Pure metadata returns empty
+        let pure_meta = "<ADDITIONAL_METADATA>\ntime=now\n</ADDITIONAL_METADATA>";
+        assert_eq!(extract_user_query(pure_meta), "");
     }
 }

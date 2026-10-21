@@ -18,6 +18,7 @@ import {
   type ElevField,
   type RingPeak,
 } from "./globeSensor";
+import { valueAxisFrame, valueAxisStep } from "./terrainHud";
 import {
   activityAxis,
   compressedToWall,
@@ -298,6 +299,7 @@ function getInitialShowTrace(): boolean {
 let persistentBaseShape: BaseShape = getInitialBaseShape();
 let persistentScanSpeed: ScanSpeed = getInitialScanSpeed();
 let persistentShowTrace: boolean = getInitialShowTrace();
+let persistentAutoRotate = true;
 
 // Persistent camera viewing angle across re-renders and view switches
 const persistentCam = {
@@ -517,8 +519,13 @@ export default function TerrainViewport({
   const showTraceRef = useRef<boolean>(persistentShowTrace);
   showTraceRef.current = showTrace;
 
-  const [autoRotate, setAutoRotate] = useState<boolean>(true);
-  const autoRotateRef = useRef<boolean>(true);
+  const [autoRotate, setAutoRotateState] = useState<boolean>(persistentAutoRotate);
+  const autoRotateRef = useRef<boolean>(persistentAutoRotate);
+  const setAutoRotate = (next: boolean) => {
+    persistentAutoRotate = next;
+    autoRotateRef.current = next;
+    setAutoRotateState(next);
+  };
 
   // Chronological Scrubber & Playback state (1.0 = Latest / Full Terrain)
   const [scrubProgress, setScrubProgress] = useState<number>(1.0);
@@ -658,15 +665,6 @@ export default function TerrainViewport({
 
   const uTRef = useRef<Record<string, WebGLUniformLocation | null>>({});
   const uCRef = useRef<Record<string, WebGLUniformLocation | null>>({});
-
-  useEffect(() => {
-    if (docked) {
-      autoRotateRef.current = true;
-      setAutoRotate(true);
-    } else {
-      autoRotateRef.current = autoRotate;
-    }
-  }, [autoRotate, docked]);
 
   // Compute and update terrain geometry in WebGL buffers without freezing or restarting the render loop
   const updateGeometry = () => {
@@ -1816,7 +1814,7 @@ export default function TerrainViewport({
       }
       hud.restore();
 
-      // Waypoint pins and the altitude ruler cover a short docked canvas.
+      // Waypoint pins cover a short docked canvas. The VALUE ruler still draws.
       if (!dockedRef.current) {
       // (C) Waypoint Target Pins with Leader Lines
       for (const node of meta.channelWaypoints) {
@@ -1878,45 +1876,66 @@ export default function TerrainViewport({
         hud.fillStyle = "rgba(255, 255, 255, 0.85)";
         hud.fillText(valText, badgeX + 6, badgeY + 21);
       }
+      }
 
       // (D) Left Y-Axis Altitude Ruler (VALUE AXIS)
-      const rulerTop = 70;
-      const rulerBottom = rect.height - 50;
-      const rY = (val: number) => rulerBottom - (val / maxAltitude) * (rulerBottom - rulerTop);
-
-      hud.strokeStyle = "rgba(255, 255, 255, 0.3)";
-      hud.fillStyle = "rgba(255, 255, 255, 0.35)";
-      hud.lineWidth = 1;
-      hud.beginPath();
-      hud.moveTo(14, rulerTop);
-      hud.lineTo(14, rulerBottom);
-
-      const rStep = maxAltitude <= 5.0 ? 1.0 : 2.0;
-      for (let v = 0; v <= maxAltitude + 0.1; v += rStep / 2) {
-        const y = rY(v);
-        hud.moveTo(14, y);
-        hud.lineTo(Math.abs(v % rStep) < 0.1 ? 24 : 18, y);
-      }
-      hud.stroke();
-
-      hud.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace';
-      hud.textAlign = 'left';
-      hud.fillText("VALUE ▲", 14, rulerTop - 8);
-
-      const topMetricVal = Math.round(meta.maxMetric);
-      for (let v = 0; v <= maxAltitude + 0.1; v += rStep) {
-        const metricEquivalent = Math.round((v / maxAltitude) * topMetricVal);
-        hud.fillText(`${metricEquivalent}`, 28, rY(v));
+      hud.globalAlpha = 1;
+      const valueFrame = valueAxisFrame(rect.height, mini);
+      const paintValueText = (text: string, x: number, y: number) => {
+        if (!mini) {
+          hud.fillStyle = "rgba(255, 255, 255, 0.35)";
+          hud.fillText(text, x, y);
+          return;
+        }
+        hud.save();
+        hud.shadowColor = "rgba(0, 0, 0, 0.9)";
+        hud.shadowBlur = 3;
+        hud.shadowOffsetX = 0;
+        hud.shadowOffsetY = 0;
+        hud.fillStyle = "rgba(255, 255, 255, 0.95)";
+        hud.fillText(text, x, y);
+        hud.restore();
+      };
+      hud.font = "8px ui-monospace, SFMono-Regular, Menlo, monospace";
+      hud.textAlign = "left";
+      hud.textBaseline = "alphabetic";
+      if (valueFrame.labelY > 4 && valueFrame.labelY < rect.height - 2) {
+        paintValueText("VALUE ▲", 14, valueFrame.labelY);
       }
 
-      const cursorY = rY(clamp(scanPhase * maxAltitude, 0, maxAltitude));
-      hud.fillStyle = `rgba(255, 255, 255, ${0.40 + 0.60 * scanFade})`;
-      hud.beginPath();
-      hud.moveTo(14, cursorY);
-      hud.lineTo(8, cursorY - 4);
-      hud.lineTo(8, cursorY + 4);
-      hud.closePath();
-      hud.fill();
+      if (valueFrame.showTicks && maxAltitude > 0) {
+        const rulerTop = valueFrame.top;
+        const rulerBottom = valueFrame.bottom;
+        const rY = (val: number) => rulerBottom - (val / maxAltitude) * (rulerBottom - rulerTop);
+
+        hud.strokeStyle = "rgba(255, 255, 255, 0.3)";
+        hud.lineWidth = 1;
+        hud.beginPath();
+        hud.moveTo(14, rulerTop);
+        hud.lineTo(14, rulerBottom);
+
+        const rStep = valueAxisStep(maxAltitude, rulerBottom - rulerTop, mini);
+        for (let v = 0; v <= maxAltitude + 0.1; v += rStep / 2) {
+          const y = rY(v);
+          hud.moveTo(14, y);
+          hud.lineTo(Math.abs(v % rStep) < 0.1 ? 24 : 18, y);
+        }
+        hud.stroke();
+
+        const topMetricVal = Math.round(meta.maxMetric);
+        for (let v = 0; v <= maxAltitude + 0.1; v += rStep) {
+          const metricEquivalent = Math.round((v / maxAltitude) * topMetricVal);
+          paintValueText(`${metricEquivalent}`, 28, rY(v));
+        }
+
+        const cursorY = rY(clamp(scanPhase * maxAltitude, 0, maxAltitude));
+        hud.fillStyle = `rgba(255, 255, 255, ${0.40 + 0.60 * scanFade})`;
+        hud.beginPath();
+        hud.moveTo(14, cursorY);
+        hud.lineTo(8, cursorY - 4);
+        hud.lineTo(8, cursorY + 4);
+        hud.closePath();
+        hud.fill();
       }
 
       // (F) Bottom Right Telemetry Readout
@@ -2064,14 +2083,45 @@ export default function TerrainViewport({
 
   if (docked) {
     return (
-      <section className="scifi-panel viewport docked" aria-label="Auto-rotating area map">
+      <section className="scifi-panel viewport docked" aria-label="Docked area map">
         <canvas ref={glCanvasRef} id="terrain" className="scifi-terrain-canvas" />
         <canvas ref={hudCanvasRef} id="terrain-hud" className="scifi-hud-canvas" />
         <div className="docked-terrain-badge">
           ◈ AREA MAP
         </div>
-        {!hideDockedControls && (
         <div className="docked-terrain-controls">
+          <div className="docked-terrain-mode" role="group" aria-label="Area map base shape">
+            <button
+              type="button"
+              className={baseShape === "rect" ? "on" : ""}
+              aria-pressed={baseShape === "rect"}
+              onClick={() => setBaseShape("rect")}
+              title="Rectangular Cartesian matrix base"
+            >
+              RECT
+            </button>
+            <button
+              type="button"
+              className={baseShape === "globe" ? "on" : ""}
+              aria-pressed={baseShape === "globe"}
+              onClick={() => setBaseShape("globe")}
+              title="Channel rings, outward ping"
+            >
+              GLOBE
+            </button>
+          </div>
+          <button
+            type="button"
+            className={`docked-terrain-tool${autoRotate ? " on" : ""}`}
+            aria-pressed={autoRotate}
+            aria-label="Auto-rotation"
+            onClick={() => setAutoRotate(!autoRotate)}
+            title={autoRotate ? "Pause auto-rotation" : "Turn auto-rotation on"}
+          >
+            {autoRotate ? "ROT ON" : "ROT OFF"}
+          </button>
+        {!hideDockedControls && (
+        <>
           {onExpand && (
             <button
               type="button"
@@ -2105,8 +2155,9 @@ export default function TerrainViewport({
               ✕
             </button>
           )}
-        </div>
+        </>
         )}
+        </div>
       </section>
     );
   }
@@ -2195,11 +2246,7 @@ export default function TerrainViewport({
         <button
           type="button"
           className={`scifi-btn-toggle ${autoRotate ? "on" : ""}`}
-          onClick={() => {
-            const next = !autoRotate;
-            setAutoRotate(next);
-            autoRotateRef.current = next;
-          }}
+          onClick={() => setAutoRotate(!autoRotate)}
           title={autoRotate ? "Click to pause auto-rotation" : "Click to enable auto-rotation"}
         >
           {autoRotate ? "AUTO-ROTATE: ON" : "AUTO-ROTATE: OFF"}
