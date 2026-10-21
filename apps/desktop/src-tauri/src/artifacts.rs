@@ -508,19 +508,29 @@ fn claude_active_transcript(found: &[PathBuf]) -> Option<PathBuf> {
 /// transcript is the tie-break, and anything still ambiguous stays unread.
 /// A nearer directory wins over a parent, so another workspace cannot leak in.
 fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Option<PathBuf> {
+    let open = opened_transcripts(CliKind::Antigravity, family, &roots.agy_root);
+    if open.len() == 1 {
+        return open.into_iter().next();
+    }
     let found = agy_for_cwd(cwd, roots);
+    if !open.is_empty() {
+        let hits: Vec<PathBuf> = open
+            .iter()
+            .filter(|path| found.contains(path))
+            .cloned()
+            .collect();
+        if hits.len() == 1 {
+            return hits.into_iter().next();
+        }
+        let pool = if !hits.is_empty() { hits } else { open };
+        return pool
+            .into_iter()
+            .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
+    }
     if found.len() == 1 {
         return found.into_iter().next();
     }
     if found.len() > 1 {
-        let open = opened_transcripts(CliKind::Antigravity, family, &roots.agy_root);
-        let mut hits: Vec<PathBuf> = open
-            .into_iter()
-            .filter(|path| found.contains(path))
-            .collect();
-        if hits.len() == 1 {
-            return hits.pop();
-        }
         return found
             .into_iter()
             .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
@@ -916,10 +926,20 @@ fn transcript_from_open(kind: CliKind, path: &Path, jail: &Path) -> Option<PathB
         }
         CliKind::Antigravity => {
             let name = path.file_name()?.to_str()?;
-            if name != "transcript.jsonl" && name != "transcript_full.jsonl" {
-                return None;
+            if name == "transcript.jsonl" || name == "transcript_full.jsonl" {
+                return under_jail(jail, &path.parent()?.join("transcript.jsonl"));
             }
-            under_jail(jail, &path.parent()?.join("transcript.jsonl"))
+            if path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                == Some("presence")
+                && path.extension().and_then(|e| e.to_str()) == Some("lock")
+            {
+                let id = path.file_stem()?.to_str()?;
+                return agy_transcript(jail, id);
+            }
+            None
         }
     }
 }
@@ -2579,6 +2599,145 @@ mod tests {
         assert_eq!(feed.cli.as_deref(), Some("antigravity"));
         assert!(feed.transcript_path.is_none(), "{feed:?}");
         assert!(feed.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_presence_lock_resolves_to_transcript() {
+        let dir = scratch("agy-presence");
+        let root = dir.join("antigravity-cli");
+        let id = "11111111-2222-3333-4444-555555555555";
+        let logs = root
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let transcript = logs.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"hello from agy\"}\n",
+        )
+        .unwrap();
+
+        let presence_dir = root.join("presence");
+        fs::create_dir_all(&presence_dir).unwrap();
+        let lock_path = presence_dir.join(format!("{id}.lock"));
+        fs::write(&lock_path, "").unwrap();
+
+        let resolved = transcript_from_open(CliKind::Antigravity, &lock_path, &root);
+        assert_eq!(
+            resolved.and_then(|p| p.canonicalize().ok()),
+            Some(transcript.canonicalize().unwrap())
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_opened_transcripts_finds_held_presence_lock() {
+        let dir = scratch("agy-opened-lock");
+        let root = dir.join("antigravity-cli");
+        let id = "22222222-3333-4444-5555-666666666666";
+        let logs = root
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let transcript = logs.join("transcript.jsonl");
+        fs::write(
+            &transcript,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"active session\"}\n",
+        )
+        .unwrap();
+
+        let presence_dir = root.join("presence");
+        fs::create_dir_all(&presence_dir).unwrap();
+        let lock_path = presence_dir.join(format!("{id}.lock"));
+        fs::write(&lock_path, "").unwrap();
+
+        let _held_file = File::open(&lock_path).unwrap();
+        let family = [(std::process::id(), 0u8)];
+        let hits = opened_transcripts(CliKind::Antigravity, &family, &root);
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected 1 hit from held presence lock: {hits:?}"
+        );
+        assert_eq!(
+            hits[0].canonicalize().unwrap(),
+            transcript.canonicalize().unwrap()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_multiple_tabs_same_cwd_bind_to_their_own_process() {
+        let dir = scratch("agy-multi-tabs");
+        let root = dir.join("antigravity-cli");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+
+        let id1 = "aaaaaaaa-1111-2222-3333-444444444444";
+        let logs1 = root
+            .join("brain")
+            .join(id1)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs1).unwrap();
+        let transcript1 = logs1.join("transcript.jsonl");
+        fs::write(
+            &transcript1,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"tab 1 reply\"}\n",
+        )
+        .unwrap();
+
+        let id2 = "bbbbbbbb-1111-2222-3333-444444444444";
+        let logs2 = root
+            .join("brain")
+            .join(id2)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs2).unwrap();
+        let transcript2 = logs2.join("transcript.jsonl");
+        fs::write(
+            &transcript2,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"tab 2 reply\"}\n",
+        )
+        .unwrap();
+
+        let presence_dir = root.join("presence");
+        fs::create_dir_all(&presence_dir).unwrap();
+        let lock1_path = presence_dir.join(format!("{id1}.lock"));
+        fs::write(&lock1_path, "").unwrap();
+        let lock2_path = presence_dir.join(format!("{id2}.lock"));
+        fs::write(&lock2_path, "").unwrap();
+
+        // last_conversations.json was overwritten by tab 2
+        fs::create_dir_all(root.join("cache")).unwrap();
+        let cwd = project.to_string_lossy();
+        fs::write(
+            root.join("cache").join("last_conversations.json"),
+            format!("{{\"{cwd}\":\"{id2}\"}}"),
+        )
+        .unwrap();
+
+        let mut roots = roots(&dir, dir.join("no-grok"), dir.join("no-claude"));
+        roots.agy_root = root;
+
+        // Process for Tab 1 holds lock1
+        let _held_file = File::open(&lock1_path).unwrap();
+        let family_tab1 = [(std::process::id(), 0u8)];
+
+        let selected = select_agy(&cwd, &family_tab1, &roots);
+        assert_eq!(
+            selected.and_then(|p| p.canonicalize().ok()),
+            Some(transcript1.canonicalize().unwrap()),
+            "tab 1 must resolve to transcript 1 via held presence lock, not overwritten last_conversations"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 
