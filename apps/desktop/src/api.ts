@@ -240,6 +240,73 @@ export function searchChangedFiles(
   return invoke("search_changed_files", { targets, query, scope, cwd });
 }
 
+export interface GitCommitItem {
+  hash: string;
+  short_hash: string;
+  author_name: string;
+  author_email: string;
+  timestamp: number;
+  summary: string;
+  body: string;
+  parents: string[];
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface GitHistoryResponse {
+  repo_id: string;
+  repo_name: string;
+  commits: GitCommitItem[];
+  file_filter: string | null;
+  total_count: number;
+}
+
+export interface GitCommitFile {
+  path: string;
+  status: string;
+  added: number;
+  removed: number;
+}
+
+export interface GitCommitDetail {
+  hash: string;
+  short_hash: string;
+  author_name: string;
+  author_email: string;
+  timestamp: number;
+  summary: string;
+  body: string;
+  parents: string[];
+  files: GitCommitFile[];
+}
+
+export function gitHistory(
+  repoId: string,
+  cwd: string,
+  path?: string | null,
+  maxCount?: number | null,
+): Promise<GitHistoryResponse> {
+  return invoke("git_history", { repoId, cwd, path, maxCount });
+}
+
+export function gitCommitDetail(
+  repoId: string,
+  cwd: string,
+  commitHash: string,
+): Promise<GitCommitDetail> {
+  return invoke("git_commit_detail", { repoId, cwd, commitHash });
+}
+
+export function gitCommitDiff(
+  repoId: string,
+  cwd: string,
+  commitHash: string,
+  path: string,
+): Promise<FileDiffResponse> {
+  return invoke("git_commit_diff", { repoId, cwd, commitHash, path });
+}
+
 export interface ChronicleFile {
   lane: number;
   path: string;

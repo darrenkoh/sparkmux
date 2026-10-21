@@ -150,6 +150,90 @@ pub async fn search_changed_files(
     .map_err(|err| err.to_string())
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitCommitItem {
+    pub hash: String,
+    pub short_hash: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub timestamp: i64,
+    pub summary: String,
+    pub body: String,
+    pub parents: Vec<String>,
+    pub files_changed: u64,
+    pub insertions: u64,
+    pub deletions: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitHistoryResponse {
+    pub repo_id: String,
+    pub repo_name: String,
+    pub commits: Vec<GitCommitItem>,
+    pub file_filter: Option<String>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitCommitFile {
+    pub path: String,
+    pub status: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GitCommitDetail {
+    pub hash: String,
+    pub short_hash: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub timestamp: i64,
+    pub summary: String,
+    pub body: String,
+    pub parents: Vec<String>,
+    pub files: Vec<GitCommitFile>,
+}
+
+#[tauri::command]
+pub async fn git_history(
+    repo_id: String,
+    cwd: String,
+    path: Option<String>,
+    max_count: Option<usize>,
+) -> Result<GitHistoryResponse, String> {
+    tokio::task::spawn_blocking(move || {
+        execute_git_history(&repo_id, &cwd, path.as_deref(), max_count)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_commit_detail(
+    repo_id: String,
+    cwd: String,
+    commit_hash: String,
+) -> Result<GitCommitDetail, String> {
+    tokio::task::spawn_blocking(move || execute_git_commit_detail(&repo_id, &cwd, &commit_hash))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_commit_diff(
+    repo_id: String,
+    cwd: String,
+    commit_hash: String,
+    path: String,
+) -> Result<FileDiff, String> {
+    tokio::task::spawn_blocking(move || {
+        execute_git_commit_diff(&repo_id, &cwd, &commit_hash, &path)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
 fn execute_search_changed_files(
     targets: &[SearchFileTarget],
     query: &str,
@@ -434,6 +518,276 @@ fn fetch_file_diff(repo_id: &str, path: &str, cwd: &str) -> Result<FileDiff, Str
         diff: "No differences found between HEAD and working copy.".into(),
         is_binary: false,
     })
+}
+
+fn resolve_repo_dir(repo_id: &str, cwd: &str) -> Result<PathBuf, String> {
+    let repo_id_clean = repo_id.trim().trim_matches(['"', '\'', '`']);
+    if !repo_id_clean.is_empty() && Path::new(repo_id_clean).is_dir() {
+        return Ok(PathBuf::from(repo_id_clean));
+    }
+    if !cwd.is_empty() && Path::new(cwd).is_dir() {
+        match git_toplevel(Path::new(cwd)) {
+            GitTop::Root(root) => return Ok(root),
+            _ => return Ok(PathBuf::from(cwd)),
+        }
+    }
+    Err("invalid repository directory".into())
+}
+
+fn parse_shortstat(text: &str) -> (u64, u64, u64) {
+    let mut files = 0;
+    let mut insertions = 0;
+    let mut deletions = 0;
+
+    for part in text.split(',') {
+        let trimmed = part.trim();
+        let num = trimmed
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+        if trimmed.contains("file") {
+            files = num;
+        } else if trimmed.contains("insertion") {
+            insertions = num;
+        } else if trimmed.contains("deletion") {
+            deletions = num;
+        }
+    }
+
+    (files, insertions, deletions)
+}
+
+fn parse_git_log_records(raw: &str) -> Vec<GitCommitItem> {
+    let mut commits = Vec::new();
+    for block in raw.split('\x1e') {
+        if block.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = block.split('\x1f').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let hash = fields[0].trim().to_string();
+        let short_hash = fields[1].trim().to_string();
+        let author_name = fields[2].trim().to_string();
+        let author_email = fields[3].trim().to_string();
+        let timestamp = fields[4].trim().parse::<i64>().unwrap_or(0);
+        let summary = fields[5].trim().to_string();
+        let body = fields[6].trim().to_string();
+        let parents = if fields.len() > 7 && !fields[7].trim().is_empty() {
+            fields[7]
+                .split_whitespace()
+                .map(|p| p.trim().to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let remainder = if fields.len() > 8 { fields[8] } else { "" };
+        let (files_changed, insertions, deletions) = parse_shortstat(remainder);
+
+        commits.push(GitCommitItem {
+            hash,
+            short_hash,
+            author_name,
+            author_email,
+            timestamp,
+            summary,
+            body,
+            parents,
+            files_changed,
+            insertions,
+            deletions,
+        });
+    }
+    commits
+}
+
+fn execute_git_history(
+    repo_id: &str,
+    cwd: &str,
+    path: Option<&str>,
+    max_count: Option<usize>,
+) -> Result<GitHistoryResponse, String> {
+    let repo_dir = resolve_repo_dir(repo_id, cwd)?;
+    let count = max_count.unwrap_or(50).clamp(1, 200);
+    let count_str = count.to_string();
+
+    let clean_path = path.and_then(|p| {
+        let c = p.trim().trim_matches(['"', '\'', '`']).replace('\\', "/");
+        if c.is_empty() || c.starts_with('-') || c.contains('\0') {
+            None
+        } else {
+            Some(c)
+        }
+    });
+
+    let args: Vec<&str> = if let Some(ref p) = clean_path {
+        vec![
+            "log",
+            "-n",
+            &count_str,
+            "--shortstat",
+            GIT_LOG_FORMAT,
+            "--",
+            p,
+        ]
+    } else {
+        vec!["log", "-n", &count_str, "--shortstat", GIT_LOG_FORMAT]
+    };
+
+    let commits = match git(&repo_dir, &args) {
+        Ok(bytes) => {
+            let text = String::from_utf8_lossy(&bytes);
+            parse_git_log_records(&text)
+        }
+        Err(_) => Vec::new(),
+    };
+
+    let total = commits.len();
+    Ok(GitHistoryResponse {
+        repo_id: root_id(&repo_dir),
+        repo_name: repo_name(&repo_dir),
+        commits,
+        file_filter: clean_path,
+        total_count: total,
+    })
+}
+
+fn execute_git_commit_detail(
+    repo_id: &str,
+    cwd: &str,
+    commit_hash: &str,
+) -> Result<GitCommitDetail, String> {
+    let clean_hash = commit_hash.trim();
+    if !is_hex_sha(clean_hash) {
+        return Err("invalid commit hash".into());
+    }
+    let repo_dir = resolve_repo_dir(repo_id, cwd)?;
+
+    let meta_bytes = git(&repo_dir, &["show", "-s", GIT_SHOW_FORMAT, clean_hash])?;
+    let meta_text = String::from_utf8_lossy(&meta_bytes);
+    let fields: Vec<&str> = meta_text.split('\x1f').collect();
+    if fields.len() < 7 {
+        return Err("failed to parse commit metadata".into());
+    }
+
+    let hash = fields[0].trim().to_string();
+    let short_hash = fields[1].trim().to_string();
+    let author_name = fields[2].trim().to_string();
+    let author_email = fields[3].trim().to_string();
+    let timestamp = fields[4].trim().parse::<i64>().unwrap_or(0);
+    let summary = fields[5].trim().to_string();
+    let body = fields[6].trim().to_string();
+    let parents = if fields.len() > 7 && !fields[7].trim().is_empty() {
+        fields[7]
+            .split_whitespace()
+            .map(|p| p.trim().to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let name_status = git(
+        &repo_dir,
+        &[
+            "show",
+            "--name-status",
+            "-z",
+            "--format=format:",
+            clean_hash,
+        ],
+    )
+    .unwrap_or_default();
+    let numstat = git(
+        &repo_dir,
+        &["show", "--numstat", "-z", "--format=format:", clean_hash],
+    )
+    .unwrap_or_default();
+
+    let counts = parse_numstat(&numstat);
+    let files_dirty = parse_name_status(&name_status);
+    let files = files_dirty
+        .into_iter()
+        .map(|f| {
+            let (added, removed) = counts.get(&f.path).copied().unwrap_or((0, 0));
+            GitCommitFile {
+                path: f.path,
+                status: f.status.to_string(),
+                added,
+                removed,
+            }
+        })
+        .collect();
+
+    Ok(GitCommitDetail {
+        hash,
+        short_hash,
+        author_name,
+        author_email,
+        timestamp,
+        summary,
+        body,
+        parents,
+        files,
+    })
+}
+
+fn execute_git_commit_diff(
+    repo_id: &str,
+    cwd: &str,
+    commit_hash: &str,
+    path: &str,
+) -> Result<FileDiff, String> {
+    let clean_hash = commit_hash.trim();
+    if !is_hex_sha(clean_hash) {
+        return Err("invalid commit hash".into());
+    }
+    let clean_path = path
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .replace('\\', "/");
+    if clean_path.is_empty() || clean_path.starts_with('-') || clean_path.contains('\0') {
+        return Err("invalid file path".into());
+    }
+    let repo_dir = resolve_repo_dir(repo_id, cwd)?;
+
+    match git(
+        &repo_dir,
+        &[
+            "show",
+            "--format=",
+            "--no-ext-diff",
+            "-U3",
+            clean_hash,
+            "--",
+            &clean_path,
+        ],
+    ) {
+        Ok(bytes) => {
+            if bytes.contains(&0) {
+                return Ok(FileDiff {
+                    path: clean_path,
+                    diff: "Binary file diff cannot be displayed.".into(),
+                    is_binary: true,
+                });
+            }
+            if bytes.len() > 1024 * 1024 {
+                return Ok(FileDiff {
+                    path: clean_path,
+                    diff: "Diff suppressed: File diff exceeds 1MB.".into(),
+                    is_binary: true,
+                });
+            }
+            let diff_text = String::from_utf8_lossy(&bytes).into_owned();
+            Ok(FileDiff {
+                path: clean_path,
+                diff: diff_text,
+                is_binary: false,
+            })
+        }
+        Err(e) => Err(format!("git show diff failed: {e}")),
+    }
 }
 
 /// Gits for one pane. An `ssh` pane with no readable remote store is empty,
@@ -1152,6 +1506,15 @@ fn parse_count(text: &str) -> u64 {
     text.parse().unwrap_or(0)
 }
 
+const GIT_LOG_FORMAT: &str =
+    "--format=format:%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%b%x1f%P%x1f";
+const GIT_SHOW_FORMAT: &str = "--format=format:%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%s%x1f%b%x1f%P";
+
+fn is_hex_sha(s: &str) -> bool {
+    let len = s.len();
+    (4..=64).contains(&len) && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn git_args_allowed(args: &[&str]) -> bool {
     matches!(
         args,
@@ -1193,6 +1556,36 @@ fn git_args_allowed(args: &[&str]) -> bool {
             ["log", "-n", "1", "--format=", "--name-status", "-z"]
                 | ["log", "-n", "1", "--format=", "--numstat", "-z"]
         )
+        // Git history: log -n <limit> --shortstat <GIT_LOG_FORMAT> [-- <path>]
+        || ((args.len() == 5 || (args.len() == 7 && args[5] == "--" && !args[6].starts_with('-') && !args[6].contains('\0')))
+            && args[0] == "log"
+            && args[1] == "-n"
+            && args[2].parse::<usize>().map(|n| (1..=200).contains(&n)).unwrap_or(false)
+            && args[3] == "--shortstat"
+            && args[4] == GIT_LOG_FORMAT)
+        // Git show commit metadata: show -s <GIT_SHOW_FORMAT> <sha>
+        || (args.len() == 4
+            && args[0] == "show"
+            && args[1] == "-s"
+            && args[2] == GIT_SHOW_FORMAT
+            && is_hex_sha(args[3]))
+        // Git show name-status / numstat: show --name-status|-numstat -z --format=format: <sha>
+        || (args.len() == 5
+            && args[0] == "show"
+            && (args[1] == "--name-status" || args[1] == "--numstat")
+            && args[2] == "-z"
+            && args[3] == "--format=format:"
+            && is_hex_sha(args[4]))
+        // Git show file diff: show --format= --no-ext-diff -U3 <sha> -- <path>
+        || (args.len() == 7
+            && args[0] == "show"
+            && args[1] == "--format="
+            && args[2] == "--no-ext-diff"
+            && args[3] == "-U3"
+            && is_hex_sha(args[4])
+            && args[5] == "--"
+            && !args[6].starts_with('-')
+            && !args[6].contains('\0'))
 }
 
 fn latest_commit_files(root: &Path) -> Result<Vec<Dirty>, String> {
@@ -2493,6 +2886,64 @@ mod tests {
             "--numstat",
             "-z",
         ]));
+        assert!(git_args_allowed(&[
+            "log",
+            "-n",
+            "50",
+            "--shortstat",
+            GIT_LOG_FORMAT,
+        ]));
+        assert!(git_args_allowed(&[
+            "log",
+            "-n",
+            "20",
+            "--shortstat",
+            GIT_LOG_FORMAT,
+            "--",
+            "src/lib.rs",
+        ]));
+        assert!(git_args_allowed(&[
+            "show",
+            "-s",
+            GIT_SHOW_FORMAT,
+            "a78f5f294f0fd62f09917b6b32922b590b703544",
+        ]));
+        assert!(git_args_allowed(&[
+            "show",
+            "--name-status",
+            "-z",
+            "--format=format:",
+            "a78f5f294f0fd62f09917b6b32922b590b703544",
+        ]));
+        assert!(git_args_allowed(&[
+            "show",
+            "--numstat",
+            "-z",
+            "--format=format:",
+            "a78f5f294f0fd62f09917b6b32922b590b703544",
+        ]));
+        assert!(git_args_allowed(&[
+            "show",
+            "--format=",
+            "--no-ext-diff",
+            "-U3",
+            "a78f5f294f0fd62f09917b6b32922b590b703544",
+            "--",
+            "Cargo.toml",
+        ]));
+        assert!(!git_args_allowed(&[
+            "show",
+            "-s",
+            GIT_SHOW_FORMAT,
+            "not-a-valid-sha!",
+        ]));
+        assert!(!git_args_allowed(&[
+            "log",
+            "-n",
+            "9999",
+            "--shortstat",
+            GIT_LOG_FORMAT,
+        ]));
         assert!(!git_args_allowed(&[
             "diff",
             "--no-ext-diff",
@@ -2862,6 +3313,96 @@ mod tests {
                 .any(|repo| { repo.files.iter().any(|file| file.path == "dirty.txt") }),
             "a local pane still sees the dirty file: {local:?}"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_shortstat_handles_various_formats() {
+        assert_eq!(
+            parse_shortstat(" 7 files changed, 18 insertions(+), 9 deletions(-)"),
+            (7, 18, 9)
+        );
+        assert_eq!(
+            parse_shortstat(" 1 file changed, 5 insertions(+)"),
+            (1, 5, 0)
+        );
+        assert_eq!(
+            parse_shortstat(" 2 files changed, 10 deletions(-)"),
+            (2, 0, 10)
+        );
+        assert_eq!(parse_shortstat(""), (0, 0, 0));
+    }
+
+    #[test]
+    fn parse_git_log_records_extracts_commits() {
+        let raw = "\x1ea78f5f294f0fd62f09917b6b32922b590b703544\x1fa78f5f2\x1fDarren Koh\x1fdarrenkoh@gmail.com\x1f1792541866\x1fShip 0.1.49\x1fRelease notes body\x1f5e842b85c252de9fb0512ce1e3723950b43077df\x1f\n 2 files changed, 5 insertions(+), 1 deletion(-)\n";
+        let commits = parse_git_log_records(raw);
+        assert_eq!(commits.len(), 1);
+        let c = &commits[0];
+        assert_eq!(c.hash, "a78f5f294f0fd62f09917b6b32922b590b703544");
+        assert_eq!(c.short_hash, "a78f5f2");
+        assert_eq!(c.author_name, "Darren Koh");
+        assert_eq!(c.author_email, "darrenkoh@gmail.com");
+        assert_eq!(c.timestamp, 1792541866);
+        assert_eq!(c.summary, "Ship 0.1.49");
+        assert_eq!(c.body, "Release notes body");
+        assert_eq!(c.parents, vec!["5e842b85c252de9fb0512ce1e3723950b43077df"]);
+        assert_eq!(c.files_changed, 2);
+        assert_eq!(c.insertions, 5);
+        assert_eq!(c.deletions, 1);
+    }
+
+    #[test]
+    fn execute_git_history_and_commit_detail_on_repo() {
+        let dir = scratch("history-test");
+        fs::write(dir.join("file1.txt"), "hello world\n").unwrap();
+        git_init(&dir);
+
+        // Add a second commit
+        fs::write(dir.join("file1.txt"), "hello world\nsecond line\n").unwrap();
+        fs::write(dir.join("file2.txt"), "new file\n").unwrap();
+        let run = |args: &[&str]| {
+            let status = Proc::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "Sparkmux Test")
+                .env("GIT_AUTHOR_EMAIL", "test@sparkmux.local")
+                .env("GIT_COMMITTER_NAME", "Sparkmux Test")
+                .env("GIT_COMMITTER_EMAIL", "test@sparkmux.local")
+                .status()
+                .expect("git");
+            assert!(status.success());
+        };
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "second commit"]);
+
+        let cwd = dir.to_string_lossy();
+        let history = execute_git_history("", &cwd, None, Some(10)).expect("history");
+        assert_eq!(history.commits.len(), 2);
+        assert_eq!(history.commits[0].summary, "second commit");
+        assert_eq!(history.commits[1].summary, "init");
+
+        // Test file filter
+        let file2_hist =
+            execute_git_history("", &cwd, Some("file2.txt"), Some(10)).expect("file2 history");
+        assert_eq!(file2_hist.commits.len(), 1);
+        assert_eq!(file2_hist.commits[0].summary, "second commit");
+
+        // Test commit detail
+        let latest_hash = &history.commits[0].hash;
+        let detail = execute_git_commit_detail("", &cwd, latest_hash).expect("commit detail");
+        assert_eq!(detail.summary, "second commit");
+        assert_eq!(detail.files.len(), 2);
+        assert!(detail.files.iter().any(|f| f.path == "file1.txt"));
+        assert!(detail.files.iter().any(|f| f.path == "file2.txt"));
+
+        // Test commit diff
+        let diff =
+            execute_git_commit_diff("", &cwd, latest_hash, "file1.txt").expect("commit diff");
+        assert!(!diff.is_binary);
+        assert!(diff.diff.contains("+second line"));
+
         let _ = fs::remove_dir_all(&dir);
     }
 

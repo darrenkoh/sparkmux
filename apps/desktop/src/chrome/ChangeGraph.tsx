@@ -31,8 +31,11 @@ import {
 import VerticalZoomDial from "./VerticalZoomDial";
 
 const ChronicleView = lazy(() => import("./ChronicleView"));
+const GitHistoryView = lazy(() => import("./GitHistoryView"));
 
 const GITS_VIEW_KEY = "sparkmux.gitsView";
+
+export type GitsView = "canvas" | "chronicle" | "history";
 
 const ORG_MODES: { id: CardOrganizationMode; label: string; title: string }[] = [
   { id: "grid", label: "⊞ GRID", title: "Auto-Fit Grid: Balanced responsive matrix fitting screen" },
@@ -42,15 +45,17 @@ const ORG_MODES: { id: CardOrganizationMode; label: string; title: string }[] = 
   { id: "radial", label: "◎ RADIAL", title: "Radial: Orbit constellation radiating from primary hub" },
 ];
 
-function readGitsView(): "canvas" | "chronicle" {
+function readGitsView(): GitsView {
   try {
-    return sessionStorage.getItem(GITS_VIEW_KEY) === "chronicle" ? "chronicle" : "canvas";
+    const v = sessionStorage.getItem(GITS_VIEW_KEY);
+    if (v === "chronicle" || v === "history") return v;
+    return "canvas";
   } catch {
     return "canvas";
   }
 }
 
-function writeGitsView(view: "canvas" | "chronicle") {
+function writeGitsView(view: GitsView) {
   try {
     sessionStorage.setItem(GITS_VIEW_KEY, view);
   } catch {
@@ -228,7 +233,8 @@ export default function ChangeGraph({
   const [orgMode, setOrgMode] = useState<CardOrganizationMode>("grid");
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 900, height: 600 });
   const hasInitialFitRef = useRef(false);
-  const [view, setView] = useState<"canvas" | "chronicle">(readGitsView);
+  const [view, setView] = useState<GitsView>(readGitsView);
+  const [historyFileFilter, setHistoryFileFilter] = useState<string | null>(null);
   const chronicleApplyRef = useRef<(action: ChronicleKeyAction) => void>(() => {});
   const sceneSlotRef = useRef<HTMLDivElement>(null);
   const [chronicleKeys, setChronicleKeys] = useState<ChronicleKeyState>({
@@ -250,7 +256,7 @@ export default function ChangeGraph({
     });
     onClose();
   }, [onClose]);
-  const setGitsView = useCallback((next: "canvas" | "chronicle") => {
+  const setGitsView = useCallback((next: GitsView) => {
     writeGitsView(next);
     setView(next);
   }, []);
@@ -335,14 +341,14 @@ export default function ChangeGraph({
     hasMoved: false,
   });
 
-  // One capture listener. Canvas stays Escape-only; Chronicle swallows before xterm sees the key.
+  // One capture listener. Canvas and History stay Escape-only; Chronicle swallows before xterm sees the key.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (view === "canvas") {
+      if (view === "canvas" || view === "history") {
         if (event.key !== "Escape") return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        if (selectedCardId) {
+        if (view === "canvas" && selectedCardId) {
           setSelectedCardId(null);
         } else if (!isStandaloneWindow) {
           closeGraph();
@@ -545,6 +551,10 @@ export default function ChangeGraph({
 
     return { cards: cardList, links: linkList, repos: reposList };
   }, [data]);
+
+  const availableHistoryFiles = useMemo(() => {
+    return cards.map((c) => ({ path: c.path, repoId: c.repoId }));
+  }, [cards]);
 
   // Text search across changed files (diff changes or full content)
   useEffect(() => {
@@ -920,7 +930,13 @@ export default function ChangeGraph({
         }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label={view === "chronicle" ? "Gits Chronicle" : "File Change Card Chain Graph"}
+        aria-label={
+          view === "chronicle"
+            ? "Gits Chronicle"
+            : view === "history"
+            ? "Gits History"
+            : "File Change Card Chain Graph"
+        }
       >
         {/* 1. TOP HEADER & FILTER TOOLBAR */}
         <div className="gits-toolbar">
@@ -928,7 +944,11 @@ export default function ChangeGraph({
           <div className="gits-brand">
             <span className="gits-brand-mark" aria-hidden="true">⬡</span>
             <span className="gits-brand-title">
-              {view === "chronicle" ? "GITS · CHRONICLE" : "GITS · CHAIN GRAPH"}
+              {view === "chronicle"
+                ? "GITS · CHRONICLE"
+                : view === "history"
+                ? "GITS · HISTORY"
+                : "GITS · CHAIN GRAPH"}
             </span>
             {sessionName && (
               <span
@@ -1111,6 +1131,14 @@ export default function ChangeGraph({
               >
                 Chronicle
               </button>
+              <button
+                type="button"
+                className={`graph-mode-btn ${view === "history" ? "on" : ""}`}
+                aria-pressed={view === "history"}
+                onClick={() => setGitsView("history")}
+              >
+                History
+              </button>
             </div>
             {view === "canvas" ? (
             <select
@@ -1129,9 +1157,9 @@ export default function ChangeGraph({
                 </option>
               ))}
             </select>
-            ) : (
+            ) : view === "chronicle" ? (
             <div ref={sceneSlotRef} className="graph-mode-group" role="group" aria-label="Chronicle scene" />
-            )}
+            ) : null}
 
             {view === "canvas" && (
             <button
@@ -1330,6 +1358,32 @@ export default function ChangeGraph({
                 onKeyContext={onChronicleKeyContext}
                 applyRef={chronicleApplyRef}
                 sceneSlotRef={sceneSlotRef}
+              />
+            </Suspense>
+          ) : view === "history" ? (
+            <Suspense
+              fallback={
+                <div
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#2dd4bf",
+                    fontFamily: "ui-monospace, monospace",
+                    fontSize: "12px",
+                  }}
+                >
+                  <b>READING GIT HISTORY…</b>
+                </div>
+              }
+            >
+              <GitHistoryView
+                cwd={cwd}
+                repoId={filterRepo ?? undefined}
+                initialFileFilter={historyFileFilter}
+                availableFiles={availableHistoryFiles}
+                onOpenFileInEditor={(filePath) => void openEditorPath(filePath, cwd)}
               />
             </Suspense>
           ) : (
@@ -2096,6 +2150,29 @@ export default function ChangeGraph({
                       SIDE-BY-SIDE
                     </button>
                   </div>
+
+                  {/* View History Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHistoryFileFilter(selectedFile.path);
+                      setGitsView("history");
+                    }}
+                    style={{
+                      background: "rgba(45, 212, 191, 0.12)",
+                      color: "#2dd4bf",
+                      border: "1px solid rgba(45, 212, 191, 0.35)",
+                      padding: "2px 7px",
+                      fontSize: "8.5px",
+                      borderRadius: "2px",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      fontWeight: 600,
+                    }}
+                    title={`View commit history for ${selectedFile.path}`}
+                  >
+                    📜 HISTORY
+                  </button>
 
                   {/* Close button */}
                   <button
