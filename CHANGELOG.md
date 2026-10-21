@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.51
+
+### Improvements
+
+- Render docked channel node labels above terrain peaks in the 3D Area Map viewport.
+
+### Bug Fixes
+
+- Resolved transcript comingling and flip-flopping across tabs running Antigravity (`agy`) in the same workspace directory by prioritizing the pane's process-family open presence lock.
+- Prevented false positive failure states on completed agent turns in attention notification monitoring.
+
 ## 0.1.50
 
 ### Improvements
