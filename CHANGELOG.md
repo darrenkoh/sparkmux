@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.49
+
+### Bug Fixes
+
+- Gits retains and displays changed files from the latest commit when the working copy is clean after committing and pushing, showing commit diffs on card selection.
+- Gits change graph, chronicle, and telemetry ingest support Antigravity tool parameter keys (`Path`, `Target`, `Replacement`, `Content`).
+- Antigravity transcript resolution reliably falls back to the latest workspace conversation when multiple sessions exist.
+- Selecting a repository filter in Gits automatically clears if the filtered repo is no longer in the active change graph.
+
 ## 0.1.48
 
 ### Improvements
