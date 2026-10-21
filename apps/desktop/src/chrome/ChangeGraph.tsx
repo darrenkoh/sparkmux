@@ -593,14 +593,15 @@ export default function ChangeGraph({
   // Filtered Cards: unified matching (path, repoName, or text in diff/file)
   const visibleCards = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+    const effectiveFilter = filterRepo && repos.some((r) => r.id === filterRepo) ? filterRepo : null;
     return cards.filter((c) => {
-      if (filterRepo && c.repoId !== filterRepo) return false;
+      if (effectiveFilter && c.repoId !== effectiveFilter) return false;
       if (!q) return true;
       const pathMatch = c.path.toLowerCase().includes(q) || c.repoName.toLowerCase().includes(q);
       const textMatch = (searchMatches[c.id] ?? 0) > 0;
       return pathMatch || textMatch;
     });
-  }, [cards, filterRepo, searchQuery, searchMatches]);
+  }, [cards, repos, filterRepo, searchQuery, searchMatches]);
 
   // Dynamic Card Organization Layout fitting current viewport real-estate
   const arrangement = useMemo(() => {

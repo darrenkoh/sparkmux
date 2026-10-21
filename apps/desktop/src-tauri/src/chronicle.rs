@@ -36,6 +36,7 @@ const DIFF_CONTEXT: usize = 3;
 const EMPTY_REASON: &str = "No agent transcript for this pane.";
 
 const PATH_KEYS: &[&str] = &[
+    "Path",
     "file_path",
     "target_file",
     "path",
@@ -47,6 +48,8 @@ const PATH_KEYS: &[&str] = &[
     "targetFile",
 ];
 const OLD_KEYS: &[&str] = &[
+    "Target",
+    "target",
     "old_string",
     "old_str",
     "oldstr",
@@ -56,6 +59,8 @@ const OLD_KEYS: &[&str] = &[
     "targetContent",
 ];
 const NEW_KEYS: &[&str] = &[
+    "Replacement",
+    "replacement",
     "new_string",
     "new_str",
     "newstr",
@@ -65,6 +70,7 @@ const NEW_KEYS: &[&str] = &[
     "replacementContent",
 ];
 const WRITE_KEYS: &[&str] = &[
+    "Content",
     "content",
     "CodeContent",
     "code_content",

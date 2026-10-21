@@ -430,6 +430,8 @@ fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
             let old_str = str_of_any(
                 args,
                 &[
+                    "Target",
+                    "target",
                     "TargetContent",
                     "target_content",
                     "targetContent",
@@ -442,6 +444,8 @@ fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
             let new_str = str_of_any(
                 args,
                 &[
+                    "Replacement",
+                    "replacement",
                     "ReplacementContent",
                     "replacement_content",
                     "replacementContent",
@@ -462,6 +466,7 @@ fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
             let content = str_of_any(
                 args,
                 &[
+                    "Content",
                     "CodeContent",
                     "code_content",
                     "codeContent",

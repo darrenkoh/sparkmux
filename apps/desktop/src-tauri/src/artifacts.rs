@@ -521,6 +521,9 @@ fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Optio
         if hits.len() == 1 {
             return hits.pop();
         }
+        return found
+            .into_iter()
+            .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
     }
     None
 }

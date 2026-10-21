@@ -586,6 +586,31 @@ fn build_change_graph(cwd: &Path, edits: &[AgentEdit], worktree: bool) -> Change
         }
     }
 
+    if worktree && rows.is_empty() {
+        if let Some(root) = &primary {
+            let id = root_id(root);
+            names.insert(id.clone(), repo_name(root));
+            if let Ok(files) = latest_commit_files(root) {
+                for (index, committed) in files.into_iter().enumerate() {
+                    if index >= MAX_FILES_PER_REPO || rows.len() >= MAX_FILES {
+                        truncated = true;
+                        break;
+                    }
+                    rows.insert(
+                        (id.clone(), committed.path.clone()),
+                        ChangedFile {
+                            path: committed.path,
+                            status: committed.status.to_string(),
+                            agent_edited: false,
+                            lines_added: committed.added,
+                            lines_removed: committed.removed,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     let mut edges: Vec<RepoEdge> = Vec::new();
     let mut seen_edges: BTreeSet<(String, String, String)> = BTreeSet::new();
     let changed_roots: Vec<String> = names.keys().cloned().collect();
@@ -1163,6 +1188,69 @@ fn git_args_allowed(args: &[&str]) -> bool {
             && args[5] == "-z"
             && args[6] == "--"
             && !args[7].starts_with('-'))
+        || matches!(
+            args,
+            ["log", "-n", "1", "--format=", "--name-status", "-z"]
+                | ["log", "-n", "1", "--format=", "--numstat", "-z"]
+        )
+}
+
+fn latest_commit_files(root: &Path) -> Result<Vec<Dirty>, String> {
+    let name_status = git(
+        root,
+        &["log", "-n", "1", "--format=", "--name-status", "-z"],
+    )?;
+    let numstat =
+        git(root, &["log", "-n", "1", "--format=", "--numstat", "-z"]).unwrap_or_default();
+    let counts = parse_numstat(&numstat);
+    let mut files = parse_name_status(&name_status);
+    for file in &mut files {
+        if let Some((added, removed)) = counts.get(&file.path) {
+            file.added = *added;
+            file.removed = *removed;
+        }
+    }
+    Ok(files)
+}
+
+fn parse_name_status(bytes: &[u8]) -> Vec<Dirty> {
+    let mut files = Vec::new();
+    let mut rest = bytes;
+    while !rest.is_empty() {
+        let Some((status_raw, next)) = split_nul(rest) else {
+            break;
+        };
+        rest = next;
+        let Some((path_raw, next)) = split_nul(rest) else {
+            break;
+        };
+        rest = next;
+        let mut path = path_raw.replace('\\', "/");
+        let first_char = status_raw.chars().next().unwrap_or('M');
+        if first_char == 'R' || first_char == 'C' {
+            let Some((new_path_raw, next)) = split_nul(rest) else {
+                break;
+            };
+            rest = next;
+            path = new_path_raw.replace('\\', "/");
+        }
+        if path.is_empty() || path.contains('\0') || skip_noise(&path) {
+            continue;
+        }
+        let status = match first_char {
+            'A' => "added",
+            'D' => "deleted",
+            'R' | 'C' => "renamed",
+            _ => "modified",
+        };
+        files.push(Dirty {
+            path,
+            status,
+            added: 0,
+            removed: 0,
+        });
+    }
+    files
 }
 
 fn latest_commit_numstat(root: &Path, rel: &str) -> Option<(u64, u64)> {
@@ -2095,6 +2183,7 @@ fn path_fields(args: &Value) -> Vec<String> {
         return Vec::new();
     };
     for key in [
+        "Path",
         "file_path",
         "target_file",
         "path",
@@ -2133,6 +2222,7 @@ fn line_delta(name: &str, args: &Value) -> (u64, u64) {
             let content = str_field(
                 args,
                 &[
+                    "Content",
                     "content",
                     "CodeContent",
                     "code_content",
@@ -2154,11 +2244,20 @@ fn line_delta(name: &str, args: &Value) -> (u64, u64) {
         | "multi_edit" => {
             let old = str_field(
                 args,
-                &["old_string", "old_str", "TargetContent", "target_content"],
+                &[
+                    "Target",
+                    "target",
+                    "old_string",
+                    "old_str",
+                    "TargetContent",
+                    "target_content",
+                ],
             );
             let new = str_field(
                 args,
                 &[
+                    "Replacement",
+                    "replacement",
                     "new_string",
                     "new_str",
                     "ReplacementContent",
@@ -2378,6 +2477,22 @@ mod tests {
             "--",
             "-something"
         ]));
+        assert!(git_args_allowed(&[
+            "log",
+            "-n",
+            "1",
+            "--format=",
+            "--name-status",
+            "-z",
+        ]));
+        assert!(git_args_allowed(&[
+            "log",
+            "-n",
+            "1",
+            "--format=",
+            "--numstat",
+            "-z",
+        ]));
         assert!(!git_args_allowed(&[
             "diff",
             "--no-ext-diff",
@@ -2468,6 +2583,41 @@ mod tests {
         let edits = edits_from_jsonl(claude);
         assert_eq!(edits[0].path, "src/new.ts");
         assert_eq!(edits[0].added, 2);
+
+        let agy = r#"{"step_index":2,"type":"PLANNER_RESPONSE","tool_calls":[{"name":"edit_file","args":{"Path":"src/agy.rs","Target":"old","Replacement":"new1\nnew2"}},{"name":"write_file","args":{"Path":"src/created.rs","Content":"hello\nworld"}}]}"#;
+        let edits = edits_from_jsonl(agy);
+        assert_eq!(edits.len(), 2, "{edits:?}");
+        let agy_edit = edits.iter().find(|e| e.path == "src/agy.rs").unwrap();
+        assert_eq!(agy_edit.added, 2);
+        assert_eq!(agy_edit.removed, 1);
+        let agy_write = edits.iter().find(|e| e.path == "src/created.rs").unwrap();
+        assert_eq!(agy_write.added, 2);
+        assert_eq!(agy_write.removed, 0);
+    }
+
+    #[test]
+    fn clean_working_tree_falls_back_to_latest_commit() {
+        let root = scratch("clean-commit");
+        let app = root.join("app");
+        fs::create_dir_all(app.join("src")).unwrap();
+        fs::write(
+            app.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(app.join("src/main.rs"), "fn main() {}\n").unwrap();
+        git_init(&app);
+        // Working directory is clean (everything committed in git_init)!
+        let graph = build_change_graph(&app, &[], true);
+        assert!(graph.error.is_none(), "{graph:?}");
+        assert_eq!(graph.repos.len(), 1, "{graph:?}");
+        let primary = &graph.repos[0];
+        assert_eq!(primary.name, "app");
+        assert!(primary
+            .files
+            .iter()
+            .any(|f| f.path == "Cargo.toml" || f.path == "src/main.rs"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
