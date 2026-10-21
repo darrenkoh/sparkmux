@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::menu::{
-    AboutMetadata, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, MenuItemKind,
-    PredefinedMenuItem, SubmenuBuilder,
+    AboutMetadata, MenuBuilder, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
@@ -84,7 +83,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
     )?;
     let check_update = item(app, "check-update", "Check for Updates…", None)?;
     let enable_helper = item(app, "enable-command-helper", ENABLE_HELPER_LABEL, None)?;
-    let agy_usage = agy_usage_submenu(app)?;
 
     let file = if mac {
         SubmenuBuilder::new(app, "File")
@@ -101,7 +99,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&close_tab)
             .separator()
             .item(&enable_helper)
-            .item(&agy_usage)
             .separator()
             .item(&quit)
             .build()?
@@ -155,7 +152,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&check_update)
             .separator()
             .item(&enable_helper)
-            .item(&agy_usage)
             .separator()
             .item(&hide)
             .item(&hide_others)
@@ -222,13 +218,6 @@ fn relabel<R: Runtime>(item: &MenuItemKind<R>, id: &str, text: &str) -> bool {
 }
 
 pub fn on_event(app: &AppHandle, id: &str) {
-    if let Some(raw) = id.strip_prefix("agy-usage-") {
-        if let Ok(minutes) = raw.parse::<u32>() {
-            let _ = crate::llm_usage::set_agy_refresh_minutes(minutes);
-        }
-        sync_agy_usage_checks(app);
-        return;
-    }
     match id {
         "quit" => quit_detach(app),
         "close-tab" => {
@@ -243,56 +232,5 @@ pub fn on_event(app: &AppHandle, id: &str) {
         other => {
             let _ = app.emit_to("main", "menu", other);
         }
-    }
-}
-
-fn agy_usage_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Submenu<R>> {
-    let selected = crate::llm_usage::agy_refresh_minutes();
-    let mut choices = Vec::new();
-    for minutes in crate::llm_usage::agy_refresh_choices() {
-        let item = CheckMenuItemBuilder::with_id(
-            format!("agy-usage-{minutes}"),
-            crate::llm_usage::agy_refresh_label(*minutes),
-        )
-        .checked(*minutes == selected)
-        .build(app)?;
-        choices.push(item);
-    }
-    let mut builder = SubmenuBuilder::new(app, "Antigravity (Usage Refresh)");
-    for choice in &choices {
-        builder = builder.item(choice);
-    }
-    builder.build()
-}
-
-fn sync_agy_usage_checks(app: &AppHandle) {
-    let Some(menu) = app.menu() else {
-        return;
-    };
-    let selected = crate::llm_usage::agy_refresh_minutes();
-    let Ok(items) = menu.items() else {
-        return;
-    };
-    for item in items {
-        apply_agy_checks(&item, selected);
-    }
-}
-
-fn apply_agy_checks<R: Runtime>(item: &MenuItemKind<R>, selected: u32) {
-    if let Some(raw) = item.id().as_ref().strip_prefix("agy-usage-") {
-        if let Ok(minutes) = raw.parse::<u32>() {
-            if let Some(check) = item.as_check_menuitem() {
-                let _ = check.set_checked(minutes == selected);
-            }
-        }
-    }
-    let Some(submenu) = item.as_submenu() else {
-        return;
-    };
-    let Ok(children) = submenu.items() else {
-        return;
-    };
-    for child in children {
-        apply_agy_checks(&child, selected);
     }
 }

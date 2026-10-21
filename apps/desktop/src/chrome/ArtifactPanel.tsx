@@ -7,6 +7,7 @@ import {
   emptyOutputText,
   groupArtifactTurns,
   hasNewTopContent,
+  previewLine,
   TURN_PENDING_LABEL,
   TURN_REPLY_LABEL,
   type ArtifactEntry,
@@ -99,9 +100,38 @@ export default function ArtifactPanel({
     };
   }, [tick]);
 
+  const [filterText, setFilterText] = useState("");
   const rawEntries = feed?.entries ?? [];
   const turns = groupArtifactTurns(rawEntries);
   const empty = emptyOutputText(feed, rawEntries.length, 0);
+
+  const normalizedFilter = filterText.trim().toLowerCase();
+  const visibleTurns = normalizedFilter
+    ? turns.filter((turn) => {
+        if (turn.user?.body.toLowerCase().includes(normalizedFilter)) return true;
+        if (turn.reply?.body.toLowerCase().includes(normalizedFilter)) return true;
+        return turn.steps.some(
+          (step) =>
+            step.label.toLowerCase().includes(normalizedFilter) ||
+            step.body.toLowerCase().includes(normalizedFilter),
+        );
+      })
+    : turns;
+
+  const allOpen =
+    visibleTurns.length > 0 &&
+    visibleTurns.every((t) => turnOpen[t.id] === true);
+
+  const toggleAll = () => {
+    const nextState = !allOpen;
+    setTurnOpen((prev) => {
+      const updated = { ...prev };
+      for (const t of visibleTurns) {
+        updated[t.id] = nextState;
+      }
+      return updated;
+    });
+  };
 
   useLayoutEffect(() => {
     const el = listRef.current;
@@ -165,11 +195,41 @@ export default function ArtifactPanel({
               ⬡ Gits
             </button>
           )}
+          {visibleTurns.length > 0 && (
+            <button
+              type="button"
+              onClick={toggleAll}
+              aria-label={allOpen ? "Collapse all turns" : "Expand all turns"}
+              title={allOpen ? "Collapse all turns" : "Expand all turns"}
+            >
+              {allOpen ? "Collapse Turns" : "Expand Turns"}
+            </button>
+          )}
           <button type="button" onClick={onCollapse} aria-label="Collapse logs">
             Collapse
           </button>
         </div>
       </header>
+      <div className="artifact-filter-bar">
+        <input
+          type="search"
+          className="artifact-filter-input"
+          placeholder="Filter logs or turns..."
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          aria-label="Filter logs or turns"
+        />
+        {filterText && (
+          <button
+            type="button"
+            className="artifact-filter-clear"
+            onClick={() => setFilterText("")}
+            aria-label="Clear filter"
+          >
+            ✕
+          </button>
+        )}
+      </div>
       <div
         className="artifact-list"
         ref={listRef}
@@ -184,13 +244,15 @@ export default function ArtifactPanel({
       >
         {empty ? (
           <p className="artifact-empty">{empty}</p>
+        ) : visibleTurns.length === 0 ? (
+          <p className="artifact-empty">No logs match &ldquo;{filterText}&rdquo;.</p>
         ) : (
-          turns.map((turn) => (
+          visibleTurns.map((turn) => (
             <Turn
               key={turn.id}
               turn={turn}
               cwd={cwd}
-              open={turnOpen[turn.id] === true}
+              open={Boolean(normalizedFilter ? true : turnOpen[turn.id])}
               onToggle={(open) => {
                 setTurnOpen((prev) => ({ ...prev, [turn.id]: open }));
               }}
@@ -200,6 +262,19 @@ export default function ArtifactPanel({
       </div>
     </aside>
   );
+}
+
+function stepBreakdown(steps: ArtifactEntry[]): string {
+  const reasoningCount = steps.filter((s) => s.kind === "reasoning").length;
+  const toolCount = steps.filter((s) => s.kind === "tool" || s.kind === "tool_result").length;
+  const parts: string[] = [];
+  if (reasoningCount > 0) {
+    parts.push(`${reasoningCount} ${reasoningCount === 1 ? "thought" : "thoughts"}`);
+  }
+  if (toolCount > 0) {
+    parts.push(`${toolCount} ${toolCount === 1 ? "tool event" : "tool events"}`);
+  }
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
 function Turn({
@@ -215,7 +290,11 @@ function Turn({
 }) {
   const prompt = turn.user?.body ?? "";
   const reply = turn.reply?.body ?? "";
-  const stepCount = turn.steps.reduce((count, step) => count + (step === turn.reply ? 0 : 1), 0);
+  const intermediateSteps = turn.steps.filter((step) => step !== turn.reply);
+  const stepCount = intermediateSteps.length;
+  const promptPreview = previewLine(prompt, 240);
+  const replyPreview = previewLine(reply, 240);
+
   return (
     <details
       className="artifact-turn"
@@ -231,16 +310,16 @@ function Turn({
         <span className="artifact-turn-lines">
           <span className={`artifact-turn-line${turn.user ? " user" : ""}`}>
             <span className="artifact-label">{turn.user ? "You" : "Earlier"}</span>
-            {prompt && <span className="artifact-preview">{prompt}</span>}
+            {prompt && <span className="artifact-preview">{promptPreview}</span>}
             {!prompt && turn.steps[0] && (
-              <span className="artifact-preview">{turn.steps[0].body}</span>
+              <span className="artifact-preview">{previewLine(turn.steps[0].body, 240)}</span>
             )}
           </span>
           <span className="artifact-turn-extra">
             {turn.reply && (
               <span className="artifact-turn-line">
                 <span className="artifact-label">{TURN_REPLY_LABEL}</span>
-                {reply && <span className="artifact-preview">{reply}</span>}
+                {reply && <span className="artifact-preview">{replyPreview}</span>}
               </span>
             )}
             {turn.pending && <span className="artifact-pending-label">{TURN_PENDING_LABEL}</span>}
@@ -254,15 +333,35 @@ function Turn({
       </summary>
       <div className="artifact-turn-body">
         {turn.user && <Block entry={turn.user} cwd={cwd} />}
-        {turn.steps.map((step) => (
+        {intermediateSteps.length > 0 && (
+          <details
+            className="artifact-steps-fold"
+            open={turn.pending || !turn.reply ? true : undefined}
+          >
+            <summary className="artifact-steps-summary">
+              <span className="artifact-steps-toggle-label">
+                {intermediateSteps.length === 1
+                  ? "1 intermediate step"
+                  : `${intermediateSteps.length} intermediate steps`}
+                {stepBreakdown(intermediateSteps)}
+              </span>
+            </summary>
+            <div className="artifact-steps-content">
+              {intermediateSteps.map((step) => (
+                <Block key={step.id} entry={step} cwd={cwd} />
+              ))}
+            </div>
+          </details>
+        )}
+        {turn.reply && (
           <Block
-            key={step.id}
-            entry={step}
+            key={turn.reply.id}
+            entry={turn.reply}
             cwd={cwd}
-            label={step === turn.reply ? TURN_REPLY_LABEL : undefined}
-            final={step === turn.reply}
+            label={TURN_REPLY_LABEL}
+            final={true}
           />
-        ))}
+        )}
         {turn.pending && <p className="artifact-pending">{TURN_PENDING_LABEL}</p>}
       </div>
     </details>
@@ -280,26 +379,67 @@ function Block({
   label?: string;
   final?: boolean;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const recordedPath = entry.kind === "tool" ? toolRowPath(entry.body) : null;
+  const isLongContent =
+    (entry.body && (entry.body.length > 400 || entry.body.split("\n").length > 10)) ?? false;
+
   return (
     <div className={`artifact-item ${entry.kind}${final ? " final" : ""}`}>
       <div className="artifact-block-head">
         <span className="artifact-label">{label ?? entry.label}</span>
-        {recordedPath && (
-          <button
-            type="button"
-            className="open-editor"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void openEditorPath(recordedPath, cwd);
-            }}
-          >
-            Open in editor
-          </button>
-        )}
+        <div className="artifact-block-actions">
+          {recordedPath && (
+            <button
+              type="button"
+              className="open-editor"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void openEditorPath(recordedPath, cwd);
+              }}
+            >
+              Open in editor
+            </button>
+          )}
+          {isLongContent && (
+            <button
+              type="button"
+              className="artifact-expand-btn"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setExpanded((prev) => !prev);
+              }}
+              title={expanded ? "Cap height" : "Expand full height"}
+            >
+              {expanded ? "Cap" : "Expand"}
+            </button>
+          )}
+          {entry.body && (
+            <button
+              type="button"
+              className="artifact-copy-btn"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void navigator.clipboard.writeText(entry.body);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+              title="Copy content"
+            >
+              {copied ? "✓ Copied" : "Copy"}
+            </button>
+          )}
+        </div>
       </div>
-      {entry.body && <div className="artifact-body">{entry.body}</div>}
+      {entry.body && (
+        <div className={`artifact-body${expanded ? " expanded" : ""}`}>
+          {entry.body}
+        </div>
+      )}
     </div>
   );
 }
