@@ -18,7 +18,7 @@ import {
   type ElevField,
   type RingPeak,
 } from "./globeSensor";
-import { valueAxisFrame, valueAxisStep } from "./terrainHud";
+import { dockedValueTicks, valueAxisFrame, valueAxisStep } from "./terrainHud";
 import {
   activityAxis,
   compressedToWall,
@@ -519,6 +519,8 @@ export default function TerrainViewport({
   const showTraceRef = useRef<boolean>(persistentShowTrace);
   showTraceRef.current = showTrace;
 
+  const [valueScale, setValueScale] = useState({ maxAltitude: 4, maxMetric: 1 });
+  const valueScaleRef = useRef(valueScale);
   const [autoRotate, setAutoRotateState] = useState<boolean>(persistentAutoRotate);
   const autoRotateRef = useRef<boolean>(persistentAutoRotate);
   const setAutoRotate = (next: boolean) => {
@@ -787,6 +789,12 @@ export default function TerrainViewport({
       maxMetric = Math.max(maxMetric, pt.user, pt.think, pt.reply, pt.tool);
     }
     const maxAltitude = Math.min(8.5, Math.max(4.0, 3.2 + Math.log10(Math.max(1, maxMetric)) * 1.5));
+    const prevScale = valueScaleRef.current;
+    if (prevScale.maxAltitude !== maxAltitude || prevScale.maxMetric !== maxMetric) {
+      const nextScale = { maxAltitude, maxMetric };
+      valueScaleRef.current = nextScale;
+      setValueScale(nextScale);
+    }
     const maxGaussianHeight = Math.max(1.0, maxAltitude - (currentShape === "globe" ? 1.7 : 0.35));
     const heightScale = (maxGaussianHeight * 0.96) / (Math.log1p(Math.max(1, maxMetric)) * 1.1);
 
@@ -1879,28 +1887,17 @@ export default function TerrainViewport({
       }
 
       // (D) Left Y-Axis Altitude Ruler (VALUE AXIS)
+      // The docked map draws this as a DOM chip. Canvas text sits under the
+      // terrain and the corner badge on that short view.
       hud.globalAlpha = 1;
-      const valueFrame = valueAxisFrame(rect.height, mini);
-      const paintValueText = (text: string, x: number, y: number) => {
-        if (!mini) {
-          hud.fillStyle = "rgba(255, 255, 255, 0.35)";
-          hud.fillText(text, x, y);
-          return;
-        }
-        hud.save();
-        hud.shadowColor = "rgba(0, 0, 0, 0.9)";
-        hud.shadowBlur = 3;
-        hud.shadowOffsetX = 0;
-        hud.shadowOffsetY = 0;
-        hud.fillStyle = "rgba(255, 255, 255, 0.95)";
-        hud.fillText(text, x, y);
-        hud.restore();
-      };
+      if (!mini) {
+      const valueFrame = valueAxisFrame(rect.height, false);
       hud.font = "8px ui-monospace, SFMono-Regular, Menlo, monospace";
       hud.textAlign = "left";
       hud.textBaseline = "alphabetic";
+      hud.fillStyle = "rgba(255, 255, 255, 0.35)";
       if (valueFrame.labelY > 4 && valueFrame.labelY < rect.height - 2) {
-        paintValueText("VALUE ▲", 14, valueFrame.labelY);
+        hud.fillText("VALUE ▲", 14, valueFrame.labelY);
       }
 
       if (valueFrame.showTicks && maxAltitude > 0) {
@@ -1914,7 +1911,7 @@ export default function TerrainViewport({
         hud.moveTo(14, rulerTop);
         hud.lineTo(14, rulerBottom);
 
-        const rStep = valueAxisStep(maxAltitude, rulerBottom - rulerTop, mini);
+        const rStep = valueAxisStep(maxAltitude, rulerBottom - rulerTop, false);
         for (let v = 0; v <= maxAltitude + 0.1; v += rStep / 2) {
           const y = rY(v);
           hud.moveTo(14, y);
@@ -1923,9 +1920,10 @@ export default function TerrainViewport({
         hud.stroke();
 
         const topMetricVal = Math.round(meta.maxMetric);
+        hud.fillStyle = "rgba(255, 255, 255, 0.35)";
         for (let v = 0; v <= maxAltitude + 0.1; v += rStep) {
           const metricEquivalent = Math.round((v / maxAltitude) * topMetricVal);
-          paintValueText(`${metricEquivalent}`, 28, rY(v));
+          hud.fillText(`${metricEquivalent}`, 28, rY(v));
         }
 
         const cursorY = rY(clamp(scanPhase * maxAltitude, 0, maxAltitude));
@@ -1936,6 +1934,7 @@ export default function TerrainViewport({
         hud.lineTo(8, cursorY + 4);
         hud.closePath();
         hud.fill();
+      }
       }
 
       // (F) Bottom Right Telemetry Readout
@@ -2088,6 +2087,23 @@ export default function TerrainViewport({
         <canvas ref={hudCanvasRef} id="terrain-hud" className="scifi-hud-canvas" />
         <div className="docked-terrain-badge">
           ◈ AREA MAP
+        </div>
+        <div className="docked-value-axis" aria-label="Value">
+          <span className="docked-value-title">VALUE</span>
+          {dockedValueTicks(valueScale.maxAltitude, valueScale.maxMetric).map((tick, index) => (
+            <span className="docked-value-tick" key={`${tick}:${index}`}>{tick}</span>
+          ))}
+          {CHANNELS.map((ch, index) => (
+            <span className="docked-value-channel" key={ch.key} style={{ color: ch.hex }}>
+              {CHANNEL_TAGS[index]} {index === 0
+                ? stats?.user_prompts ?? 0
+                : index === 1
+                  ? stats?.thinking_blocks ?? 0
+                  : index === 2
+                    ? stats?.assistant_replies ?? 0
+                    : stats?.tool_calls ?? 0}
+            </span>
+          ))}
         </div>
         <div className="docked-terrain-controls">
           <div className="docked-terrain-mode" role="group" aria-label="Area map base shape">

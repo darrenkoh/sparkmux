@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.50
+
+### Improvements
+
+- AGENT LOGS preserves every user prompt across multi-turn sessions until `/new` or `/exit`, reading transcripts up to 64 MB and ensuring user prompts are never dropped by step-capping or tail-slicing.
+- Added a full Git History screen in Gits featuring chronological commits feed, branch indicator, changed files tree, and side-by-side or docked file diff viewer.
+- Area Map persists auto-rotation preferences across sessions and renders value ruler labels in docked mode.
+
+### Bug Fixes
+
+- Fixed an issue where AGENT LOGS turns lost their user prompt after heavy tool/reasoning steps and showed "Earlier" instead of "You".
+- Enhanced user query extraction to cleanly strip system and metadata tags across Antigravity, Claude, and Grok transcripts.
+
 ## 0.1.49
 
 ### Bug Fixes

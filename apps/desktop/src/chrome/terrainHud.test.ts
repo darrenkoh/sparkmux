@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { valueAxisFrame, valueAxisStep } from "./terrainHud.ts";
+import { dockedValueTicks, valueAxisFrame, valueAxisStep } from "./terrainHud.ts";
 
 test("fullscreen VALUE ruler keeps its toolbar inset", () => {
   const frame = valueAxisFrame(640, false);
@@ -26,6 +26,14 @@ test("a short docked canvas still places the VALUE label on screen", () => {
   assert.ok(frame.labelY >= 14);
   assert.ok(frame.labelY <= 70 - 12);
   assert.equal(frame.showTicks, false);
+});
+
+test("docked VALUE ticks run from the peak down to zero", () => {
+  const ticks = dockedValueTicks(8, 100);
+  assert.equal(ticks[0], 100);
+  assert.equal(ticks[ticks.length - 1], 0);
+  assert.ok(ticks.length >= 2);
+  for (let i = 1; i < ticks.length; i++) assert.ok(ticks[i] < ticks[i - 1]);
 });
 
 test("docked tick step widens when the ruler is short", () => {
