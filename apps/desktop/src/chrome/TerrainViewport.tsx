@@ -18,7 +18,7 @@ import {
   type ElevField,
   type RingPeak,
 } from "./globeSensor";
-import { dockedValueTicks, valueAxisFrame, valueAxisStep } from "./terrainHud";
+import { placeDockedNodeLabels, valueAxisFrame, valueAxisStep } from "./terrainHud";
 import {
   activityAxis,
   compressedToWall,
@@ -519,8 +519,6 @@ export default function TerrainViewport({
   const showTraceRef = useRef<boolean>(persistentShowTrace);
   showTraceRef.current = showTrace;
 
-  const [valueScale, setValueScale] = useState({ maxAltitude: 4, maxMetric: 1 });
-  const valueScaleRef = useRef(valueScale);
   const [autoRotate, setAutoRotateState] = useState<boolean>(persistentAutoRotate);
   const autoRotateRef = useRef<boolean>(persistentAutoRotate);
   const setAutoRotate = (next: boolean) => {
@@ -594,6 +592,7 @@ export default function TerrainViewport({
   timelineRef.current = timeline;
   const dockedRef = useRef(docked);
   dockedRef.current = docked;
+  const nodeLabelRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   // The map shows at most 30 minutes of compressed time. Long idle gaps are
   // already folded, so dragging moves across activity instead of empty terrain.
@@ -789,12 +788,6 @@ export default function TerrainViewport({
       maxMetric = Math.max(maxMetric, pt.user, pt.think, pt.reply, pt.tool);
     }
     const maxAltitude = Math.min(8.5, Math.max(4.0, 3.2 + Math.log10(Math.max(1, maxMetric)) * 1.5));
-    const prevScale = valueScaleRef.current;
-    if (prevScale.maxAltitude !== maxAltitude || prevScale.maxMetric !== maxMetric) {
-      const nextScale = { maxAltitude, maxMetric };
-      valueScaleRef.current = nextScale;
-      setValueScale(nextScale);
-    }
     const maxGaussianHeight = Math.max(1.0, maxAltitude - (currentShape === "globe" ? 1.7 : 0.35));
     const heightScale = (maxGaussianHeight * 0.96) / (Math.log1p(Math.max(1, maxMetric)) * 1.1);
 
@@ -1822,7 +1815,51 @@ export default function TerrainViewport({
       }
       hud.restore();
 
-      // Waypoint pins cover a short docked canvas. The VALUE ruler still draws.
+      // Docked peaks keep the fullscreen node value (for example "USR 12 PROMPTS")
+      // in a DOM plate. Canvas text on this short map sits under the terrain.
+      if (dockedRef.current) {
+        hud.font = "8px ui-monospace, SFMono-Regular, Menlo, monospace";
+        const slots = CHANNELS.map((_, idx) => {
+          const node = meta.channelWaypoints[idx];
+          const peak = node ? project(node.pos) : null;
+          return {
+            node,
+            peak,
+            text: node ? `${CHANNEL_TAGS[idx]} ${node.val}` : "",
+          };
+        });
+        const visible = slots.flatMap((slot, idx) => (slot.peak ? [{ slot, idx }] : []));
+        const boxes = placeDockedNodeLabels(
+          visible.map(({ slot }) => ({
+            x: slot.peak![0],
+            y: slot.peak![1],
+            textWidth: hud.measureText(slot.text).width,
+          })),
+          rect.width,
+          rect.height,
+          { top: 28, bottom: 22 },
+        );
+        const shown = new Set<number>();
+        visible.forEach(({ slot, idx }, boxIndex) => {
+          const el = nodeLabelRefs.current[idx];
+          const box = boxes[boxIndex];
+          if (!el || !box) return;
+          shown.add(idx);
+          const rgb = `rgb(${Math.round(slot.node!.color[0] * 255)}, ${Math.round(slot.node!.color[1] * 255)}, ${Math.round(slot.node!.color[2] * 255)})`;
+          el.style.display = "block";
+          el.style.transform = `translate(${box.x}px, ${box.y}px)`;
+          el.style.borderColor = rgb;
+          el.style.color = "#f8fafc";
+          if (el.textContent !== slot.text) el.textContent = slot.text;
+        });
+        for (let idx = 0; idx < CHANNELS.length; idx++) {
+          if (shown.has(idx)) continue;
+          const el = nodeLabelRefs.current[idx];
+          if (el) el.style.display = "none";
+        }
+      }
+
+      // Full pin cards cover a short docked canvas. Node values are drawn above.
       if (!dockedRef.current) {
       // (C) Waypoint Target Pins with Leader Lines
       for (const node of meta.channelWaypoints) {
@@ -2088,21 +2125,15 @@ export default function TerrainViewport({
         <div className="docked-terrain-badge">
           ◈ AREA MAP
         </div>
-        <div className="docked-value-axis" aria-label="Value">
-          <span className="docked-value-title">VALUE</span>
-          {dockedValueTicks(valueScale.maxAltitude, valueScale.maxMetric).map((tick, index) => (
-            <span className="docked-value-tick" key={`${tick}:${index}`}>{tick}</span>
-          ))}
-          {CHANNELS.map((ch, index) => (
-            <span className="docked-value-channel" key={ch.key} style={{ color: ch.hex }}>
-              {CHANNEL_TAGS[index]} {index === 0
-                ? stats?.user_prompts ?? 0
-                : index === 1
-                  ? stats?.thinking_blocks ?? 0
-                  : index === 2
-                    ? stats?.assistant_replies ?? 0
-                    : stats?.tool_calls ?? 0}
-            </span>
+        <div className="docked-node-labels">
+          {CHANNELS.map((ch) => (
+            <div
+              key={ch.key}
+              className="docked-node-label"
+              ref={(el) => {
+                nodeLabelRefs.current[ch.zIndex] = el;
+              }}
+            />
           ))}
         </div>
         <div className="docked-terrain-controls">

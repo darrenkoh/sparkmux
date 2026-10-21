@@ -24,23 +24,50 @@ export function valueAxisFrame(height: number, docked: boolean): ValueAxisFrame 
   return { top, bottom, labelY, showTicks };
 }
 
-/** Metric ticks for the docked VALUE chip, highest first, always including 0. */
-export function dockedValueTicks(maxAltitude: number, maxMetric: number): number[] {
-  if (!(maxAltitude > 0) || !Number.isFinite(maxAltitude) || !Number.isFinite(maxMetric)) return [0];
-  const step = valueAxisStep(maxAltitude, 64, true);
-  const ticks: number[] = [];
-  const seen = new Set<number>();
-  const push = (metric: number) => {
-    const rounded = Math.round(metric);
-    if (seen.has(rounded)) return;
-    seen.add(rounded);
-    ticks.push(rounded);
-  };
-  for (let v = maxAltitude; v >= -0.05; v -= step) {
-    push((Math.max(0, v) / maxAltitude) * Math.max(0, maxMetric));
+export interface DockedNodeLabelBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Screen box for one docked channel node value. The box sits just above the
+ * peak and stays on the canvas. A later node steps down when it would cover
+ * an earlier one.
+ */
+export function placeDockedNodeLabels(
+  items: Array<{ x: number; y: number; textWidth: number }>,
+  canvasWidth: number,
+  canvasHeight: number,
+  inset?: { top?: number; right?: number; bottom?: number; left?: number },
+): DockedNodeLabelBox[] {
+  const placed: DockedNodeLabelBox[] = [];
+  const h = 13;
+  const top = inset?.top ?? 4;
+  const right = inset?.right ?? 4;
+  const bottom = inset?.bottom ?? 4;
+  const left = inset?.left ?? 4;
+  for (const item of items) {
+    const w = Math.max(16, Math.ceil(item.textWidth) + 8);
+    let x = item.x + 8;
+    if (x + w > canvasWidth - right) x = item.x - w - 8;
+    const maxX = Math.max(left, canvasWidth - w - right);
+    x = Math.max(left, Math.min(x, maxX));
+    const maxY = Math.max(top, canvasHeight - h - bottom);
+    let y = item.y - h - 4;
+    y = Math.max(top, Math.min(y, maxY));
+    for (let guard = 0; guard < items.length; guard++) {
+      const hit = placed.some(
+        (box) => x < box.x + box.w && x + w > box.x && y < box.y + box.h && y + h > box.y,
+      );
+      if (!hit) break;
+      const down = y + h + 2;
+      y = down <= maxY ? down : Math.max(top, y - (h + 2));
+    }
+    placed.push({ x, y, w, h });
   }
-  push(0);
-  return ticks;
+  return placed;
 }
 
 /** Major tick spacing. A short docked ruler widens the step so the numbers do not stack. */

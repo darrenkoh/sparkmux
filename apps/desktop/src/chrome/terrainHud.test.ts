@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { dockedValueTicks, valueAxisFrame, valueAxisStep } from "./terrainHud.ts";
+import { placeDockedNodeLabels, valueAxisFrame, valueAxisStep } from "./terrainHud.ts";
 
 test("fullscreen VALUE ruler keeps its toolbar inset", () => {
   const frame = valueAxisFrame(640, false);
@@ -28,12 +28,22 @@ test("a short docked canvas still places the VALUE label on screen", () => {
   assert.equal(frame.showTicks, false);
 });
 
-test("docked VALUE ticks run from the peak down to zero", () => {
-  const ticks = dockedValueTicks(8, 100);
-  assert.equal(ticks[0], 100);
-  assert.equal(ticks[ticks.length - 1], 0);
-  assert.ok(ticks.length >= 2);
-  for (let i = 1; i < ticks.length; i++) assert.ok(ticks[i] < ticks[i - 1]);
+test("docked node values stay on the map and avoid each other", () => {
+  const [user, tool] = placeDockedNodeLabels(
+    [
+      { x: 40, y: 70, textWidth: 70 },
+      { x: 48, y: 72, textWidth: 64 },
+    ],
+    280,
+    120,
+  );
+  assert.ok(user.x >= 4 && user.x + user.w <= 276);
+  assert.ok(user.y >= 4 && user.y + user.h <= 116);
+  assert.ok(tool.y >= user.y + user.h || tool.x >= user.x + user.w || user.x >= tool.x + tool.w);
+
+  const [flipped] = placeDockedNodeLabels([{ x: 250, y: 40, textWidth: 80 }], 280, 120);
+  assert.ok(flipped.x + flipped.w <= 276);
+  assert.ok(flipped.x < 250);
 });
 
 test("docked tick step widens when the ruler is short", () => {

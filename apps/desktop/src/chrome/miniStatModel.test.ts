@@ -375,10 +375,10 @@ test("docked panel keeps the action labels and the decluttered map", () => {
     /if \(!dockedRef\.current\) \{\n\s*\/\/ \(C\) Waypoint Target Pins[\s\S]*?\n {6}\}\n\n {6}\/\/ \(D\) Left Y-Axis Altitude Ruler/,
   );
   assert.match(terrain.slice(ruler), /valueAxisFrame\(/);
-  assert.match(terrain, /className="docked-value-axis"/);
-  assert.match(terrain, /aria-label="Value"/);
-  assert.match(terrain, /dockedValueTicks\(/);
-  assert.match(css, /\.docked-value-axis/);
+  assert.match(terrain, /className="docked-node-labels"/);
+  assert.match(terrain, /placeDockedNodeLabels\(/);
+  assert.match(terrain, /\$\{CHANNEL_TAGS\[idx\]\} \$\{node\.val\}/);
+  assert.match(css, /\.docked-node-label/);
   assert.match(terrain, /aria-label="Area map base shape"/);
   assert.match(terrain, /aria-label="Auto-rotation"/);
   assert.match(terrain, /ROT ON/);
