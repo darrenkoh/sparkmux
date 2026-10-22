@@ -527,15 +527,114 @@ fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Optio
             .into_iter()
             .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
     }
-    if found.len() == 1 {
-        return found.into_iter().next();
+    if agy_has_open_session(family, &roots.agy_root) {
+        return None;
     }
-    if found.len() > 1 {
-        return found
+    let held = agy_locks_held_by_others(family, &roots.agy_root);
+    let available: Vec<PathBuf> = found
+        .into_iter()
+        .filter(|path| !held.contains(path))
+        .collect();
+    if available.len() == 1 {
+        return available.into_iter().next();
+    }
+    if available.len() > 1 {
+        return available
             .into_iter()
             .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
     }
     None
+}
+
+fn agy_has_open_session(family: &[(u32, u8)], jail: &Path) -> bool {
+    if family.is_empty() || jail.as_os_str().is_empty() {
+        return false;
+    }
+    for (pid, _) in family {
+        for path in open_paths(*pid) {
+            if is_agy_session_open_path(&path, jail) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_agy_session_open_path(path: &Path, jail: &Path) -> bool {
+    let Some(parent_name) = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+    else {
+        return false;
+    };
+    let is_lock =
+        parent_name == "presence" && path.extension().and_then(|e| e.to_str()) == Some("lock");
+    let is_conv_db = parent_name == "conversations"
+        && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+            n.ends_with(".db") || n.ends_with(".db-wal") || n.ends_with(".db-shm")
+        });
+    if !is_lock && !is_conv_db {
+        return false;
+    }
+    under_jail(jail, path).is_some()
+}
+
+fn agy_locks_held_by_others(family: &[(u32, u8)], root: &Path) -> Vec<PathBuf> {
+    if family.is_empty() || root.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    let presence_dir = root.join("presence");
+    let Ok(entries) = std::fs::read_dir(&presence_dir) else {
+        return Vec::new();
+    };
+    let mut held = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lock") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if is_file_flock_held(&path) {
+            if let Some(transcript) = agy_transcript(root, id) {
+                if !held.contains(&transcript) {
+                    held.push(transcript);
+                }
+            }
+        }
+    }
+    held
+}
+
+#[cfg(unix)]
+fn is_file_flock_held(path: &Path) -> bool {
+    use std::os::unix::io::AsRawFd;
+    const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+    const LOCK_UN: i32 = 8;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let fd = file.as_raw_fd();
+    let rc = unsafe { flock(fd, LOCK_EX | LOCK_NB) };
+    if rc == 0 {
+        unsafe {
+            let _ = flock(fd, LOCK_UN);
+        }
+        false
+    } else {
+        true
+    }
+}
+
+#[cfg(not(unix))]
+fn is_file_flock_held(_path: &Path) -> bool {
+    false
 }
 
 fn agy_for_cwd(cwd: &str, roots: &TranscriptRoots) -> Vec<PathBuf> {
@@ -929,15 +1028,44 @@ fn transcript_from_open(kind: CliKind, path: &Path, jail: &Path) -> Option<PathB
             if name == "transcript.jsonl" || name == "transcript_full.jsonl" {
                 return under_jail(jail, &path.parent()?.join("transcript.jsonl"));
             }
-            if path
+            let parent_name = path
                 .parent()
                 .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                == Some("presence")
+                .and_then(|n| n.to_str());
+            if parent_name == Some("presence")
                 && path.extension().and_then(|e| e.to_str()) == Some("lock")
             {
                 let id = path.file_stem()?.to_str()?;
                 return agy_transcript(jail, id);
+            }
+            if parent_name == Some("conversations") {
+                if let Some(id) = name
+                    .strip_suffix(".db")
+                    .or_else(|| name.strip_suffix(".db-wal"))
+                    .or_else(|| name.strip_suffix(".db-shm"))
+                {
+                    return agy_transcript(jail, id);
+                }
+            }
+            if parent_name == Some(".system_generated")
+                || parent_name == Some("brain")
+                || parent_name == Some("scratch")
+                || parent_name == Some(".user_uploaded")
+            {
+                let mut ancestor = Some(path);
+                while let Some(curr) = ancestor {
+                    if curr
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        == Some("brain")
+                    {
+                        if let Some(id) = curr.file_name().and_then(|n| n.to_str()) {
+                            return agy_transcript(jail, id);
+                        }
+                    }
+                    ancestor = curr.parent();
+                }
             }
             None
         }
@@ -2737,6 +2865,89 @@ mod tests {
             Some(transcript1.canonicalize().unwrap()),
             "tab 1 must resolve to transcript 1 via held presence lock, not overwritten last_conversations"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_fresh_tab2_without_prompt_does_not_show_tab1_session() {
+        let dir = scratch("agy-fresh-tab2");
+        let root = dir.join("antigravity-cli");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+
+        // Tab 1 has an active conversation and transcript
+        let id1 = "aaaaaaaa-1111-2222-3333-444444444444";
+        let logs1 = root
+            .join("brain")
+            .join(id1)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs1).unwrap();
+        let transcript1 = logs1.join("transcript.jsonl");
+        fs::write(
+            &transcript1,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"tab 1 reply\"}\n",
+        )
+        .unwrap();
+
+        // Tab 2 was just launched in the same folder: it holds a presence lock / db for id2,
+        // OR Tab 1 holds an exclusive flock on id1.lock while Tab 2 is still at the welcome screen.
+        let id2 = "bbbbbbbb-1111-2222-3333-444444444444";
+        let presence_dir = root.join("presence");
+        fs::create_dir_all(&presence_dir).unwrap();
+        let lock1_path = presence_dir.join(format!("{id1}.lock"));
+        fs::write(&lock1_path, "").unwrap();
+        let lock2_path = presence_dir.join(format!("{id2}.lock"));
+        fs::write(&lock2_path, "").unwrap();
+
+        // last_conversations.json still points to Tab 1's session id1
+        fs::create_dir_all(root.join("cache")).unwrap();
+        let cwd = project.to_string_lossy();
+        fs::write(
+            root.join("cache").join("last_conversations.json"),
+            format!("{{\"{cwd}\":\"{id1}\"}}"),
+        )
+        .unwrap();
+
+        let mut roots = roots(&dir, dir.join("no-grok"), dir.join("no-claude"));
+        roots.agy_root = root;
+
+        // Case A: Tab 2 process has opened its own lock2 (or db2), but transcript2 doesn't exist on disk yet.
+        {
+            let _held_lock2 = File::open(&lock2_path).unwrap();
+            let family_tab2 = [(std::process::id(), 0u8)];
+            let selected = select_agy(&cwd, &family_tab2, &roots);
+            assert!(
+                selected.is_none(),
+                "tab 2 with its own unprompted session must not fall back to tab 1's transcript: {selected:?}"
+            );
+        }
+
+        // Case B: Tab 1 holds an OS flock on lock1, and Tab 2 has not opened any session lock yet.
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            unsafe extern "C" {
+                fn flock(fd: i32, operation: i32) -> i32;
+            }
+            let lock1_file = File::open(&lock1_path).unwrap();
+            let rc = unsafe { flock(lock1_file.as_raw_fd(), 2 | 4) };
+            assert_eq!(rc, 0);
+
+            // Family for Tab 2 is a process that does not have lock1 or lock2 open in its fds
+            // (use pid 1 which has no open files in our scratch dir).
+            let family_tab2 = [(1, 0u8)];
+            let selected = select_agy(&cwd, &family_tab2, &roots);
+            assert!(
+                selected.is_none(),
+                "tab 2 must not claim tab 1's transcript while tab 1 holds the flock: {selected:?}"
+            );
+
+            unsafe {
+                let _ = flock(lock1_file.as_raw_fd(), 8);
+            }
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
