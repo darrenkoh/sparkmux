@@ -508,6 +508,29 @@ fn claude_active_transcript(found: &[PathBuf]) -> Option<PathBuf> {
 /// transcript is the tie-break, and anything still ambiguous stays unread.
 /// A nearer directory wins over a parent, so another workspace cannot leak in.
 fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Option<PathBuf> {
+    let active_ids = agy_active_session_ids(family, &roots.agy_root);
+    if !active_ids.is_empty() {
+        let mut transcripts = Vec::new();
+        for id in &active_ids {
+            if let Some(path) = agy_transcript(&roots.agy_root, id) {
+                if !transcripts.contains(&path) {
+                    transcripts.push(path);
+                }
+            }
+        }
+        if transcripts.len() == 1 {
+            return transcripts.into_iter().next();
+        }
+        if transcripts.len() > 1 {
+            return transcripts
+                .into_iter()
+                .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
+        }
+        // The process has an active session (e.g. after `/new` or fresh launch),
+        // but its transcript.jsonl has not been written yet.
+        return None;
+    }
+
     let open = opened_transcripts(CliKind::Antigravity, family, &roots.agy_root);
     if open.len() == 1 {
         return open.into_iter().next();
@@ -527,9 +550,6 @@ fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Optio
             .into_iter()
             .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
     }
-    if agy_has_open_session(family, &roots.agy_root) {
-        return None;
-    }
     let held = agy_locks_held_by_others(family, &roots.agy_root);
     let available: Vec<PathBuf> = found
         .into_iter()
@@ -546,38 +566,54 @@ fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Optio
     None
 }
 
-fn agy_has_open_session(family: &[(u32, u8)], jail: &Path) -> bool {
+/// Session IDs actively held open by `family` via `presence/<id>.lock` or
+/// `conversations/<id>.db`. Unlike `brain/<id>` directory watchers (which remain
+/// open across `/new`), `agy` closes the previous `.lock` and `.db` and opens
+/// the new session's `.lock` when switching or starting `/new`.
+fn agy_active_session_ids(family: &[(u32, u8)], jail: &Path) -> Vec<String> {
     if family.is_empty() || jail.as_os_str().is_empty() {
-        return false;
+        return Vec::new();
     }
+    let mut lock_ids = Vec::new();
+    let mut db_ids = Vec::new();
     for (pid, _) in family {
         for path in open_paths(*pid) {
-            if is_agy_session_open_path(&path, jail) {
-                return true;
+            let Some(parent_name) = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+            else {
+                continue;
+            };
+            if parent_name == "presence"
+                && path.extension().and_then(|e| e.to_str()) == Some("lock")
+                && under_jail(jail, &path).is_some()
+            {
+                if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                    if safe_component(id) && !lock_ids.iter().any(|existing| existing == id) {
+                        lock_ids.push(id.to_string());
+                    }
+                }
+            } else if parent_name == "conversations" && under_jail(jail, &path).is_some() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if let Some(id) = name
+                        .strip_suffix(".db")
+                        .or_else(|| name.strip_suffix(".db-wal"))
+                        .or_else(|| name.strip_suffix(".db-shm"))
+                    {
+                        if safe_component(id) && !db_ids.iter().any(|existing| existing == id) {
+                            db_ids.push(id.to_string());
+                        }
+                    }
+                }
             }
         }
     }
-    false
-}
-
-fn is_agy_session_open_path(path: &Path, jail: &Path) -> bool {
-    let Some(parent_name) = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-    else {
-        return false;
-    };
-    let is_lock =
-        parent_name == "presence" && path.extension().and_then(|e| e.to_str()) == Some("lock");
-    let is_conv_db = parent_name == "conversations"
-        && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-            n.ends_with(".db") || n.ends_with(".db-wal") || n.ends_with(".db-shm")
-        });
-    if !is_lock && !is_conv_db {
-        return false;
+    if !lock_ids.is_empty() {
+        lock_ids
+    } else {
+        db_ids
     }
-    under_jail(jail, path).is_some()
 }
 
 fn agy_locks_held_by_others(family: &[(u32, u8)], root: &Path) -> Vec<PathBuf> {
@@ -1045,26 +1081,6 @@ fn transcript_from_open(kind: CliKind, path: &Path, jail: &Path) -> Option<PathB
                     .or_else(|| name.strip_suffix(".db-shm"))
                 {
                     return agy_transcript(jail, id);
-                }
-            }
-            if parent_name == Some(".system_generated")
-                || parent_name == Some("brain")
-                || parent_name == Some("scratch")
-                || parent_name == Some(".user_uploaded")
-            {
-                let mut ancestor = Some(path);
-                while let Some(curr) = ancestor {
-                    if curr
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|n| n.to_str())
-                        == Some("brain")
-                    {
-                        if let Some(id) = curr.file_name().and_then(|n| n.to_str()) {
-                            return agy_transcript(jail, id);
-                        }
-                    }
-                    ancestor = curr.parent();
                 }
             }
             None
@@ -2947,6 +2963,23 @@ mod tests {
             unsafe {
                 let _ = flock(lock1_file.as_raw_fd(), 8);
             }
+        }
+
+        // Case C: Tab 1 runs `/new` -> it closes lock1.lock, opens lock3.lock (no transcript3 yet),
+        // while keeping directory fds open on brain/id1/.system_generated.
+        // Tab 1 must show empty logs (None), NOT the old id1 transcript or another tab's transcript.
+        let id3 = "cccccccc-1111-2222-3333-444444444444";
+        let lock3_path = presence_dir.join(format!("{id3}.lock"));
+        fs::write(&lock3_path, "").unwrap();
+        {
+            let _held_lock3 = File::open(&lock3_path).unwrap();
+            let _stale_brain_dir = File::open(logs1.parent().unwrap()).unwrap();
+            let family_tab1_after_new = [(std::process::id(), 0u8)];
+            let selected = select_agy(&cwd, &family_tab1_after_new, &roots);
+            assert!(
+                selected.is_none(),
+                "after /new, tab 1 with new lock3 (no transcript yet) and stale brain dir fd must return None: {selected:?}"
+            );
         }
 
         let _ = fs::remove_dir_all(&dir);
