@@ -6,6 +6,7 @@ import {
   clearedThrough,
   cliLabel,
   emptyOutputText,
+  formatStepCount,
   groupArtifactTurns,
   hasNewTopContent,
   markCleared,
@@ -14,6 +15,8 @@ import {
   outputTailKey,
   parseAutoScroll,
   previewLine,
+  turnIntermediateSteps,
+  turnStatus,
   visibleEntries,
   type ArtifactEntry,
   type ArtifactFeed,
@@ -237,4 +240,32 @@ test("hasNewTopContent detects prepended entries and updated latest entry body",
   // Empty lists
   assert.equal(hasNewTopContent([], []), false);
   assert.equal(hasNewTopContent([], [e1]), true);
+});
+
+test("turnStatus, turnIntermediateSteps, and formatStepCount summarize minimal prompt cards", () => {
+  const turns = groupArtifactTurns([
+    entry("1", "user", "First unfinished prompt", "You"),
+    entry("2", "tool", "ls", "run_command"),
+    entry("3", "user", "Second completed prompt", "You"),
+    entry("4", "reasoning", "thinking", "Thinking"),
+    entry("5", "tool", "read", "read_file"),
+    entry("6", "assistant", "All done.", "Assistant"),
+    entry("7", "user", "Third active prompt", "You"),
+    entry("8", "reasoning", "working", "Thinking"),
+  ]);
+
+  // Turn 0 is newest ("Third active prompt", pending)
+  assert.deepEqual(turnStatus(turns[0]), { kind: "working", label: "Working…" });
+  assert.equal(turnIntermediateSteps(turns[0]).length, 1);
+  assert.equal(formatStepCount(turnIntermediateSteps(turns[0]).length), "1 step");
+
+  // Turn 1 is completed ("Second completed prompt", 2 intermediate steps + reply)
+  assert.deepEqual(turnStatus(turns[1]), { kind: "done", label: "Done" });
+  assert.equal(turnIntermediateSteps(turns[1]).length, 2);
+  assert.equal(formatStepCount(turnIntermediateSteps(turns[1]).length), "2 steps");
+
+  // Turn 2 is earlier unfinished ("First unfinished prompt", no reply, not pending)
+  assert.deepEqual(turnStatus(turns[2]), { kind: "incomplete", label: "No reply" });
+  assert.equal(turnIntermediateSteps(turns[2]).length, 1);
+  assert.equal(formatStepCount(0), "0 steps");
 });

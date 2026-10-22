@@ -45,6 +45,31 @@ export const TURN_REPLY_LABEL = "LLM Output";
 /** Shown on the newest turn until that closing assistant text is stored. */
 export const TURN_PENDING_LABEL = "Still working";
 
+export type TurnStatusKind = "working" | "done" | "incomplete";
+
+export type TurnStatus = {
+  kind: TurnStatusKind;
+  label: string;
+};
+
+export function turnStatus(turn: ArtifactTurn): TurnStatus {
+  if (turn.pending) {
+    return { kind: "working", label: "Working…" };
+  }
+  if (turn.reply) {
+    return { kind: "done", label: "Done" };
+  }
+  return { kind: "incomplete", label: "No reply" };
+}
+
+export function turnIntermediateSteps(turn: ArtifactTurn): ArtifactEntry[] {
+  return turn.steps.filter((step) => step !== turn.reply);
+}
+
+export function formatStepCount(count: number): string {
+  return count === 1 ? "1 step" : `${count} steps`;
+}
+
 export type ArtifactTurn = {
   id: string;
   /** The user prompt that opens the span. Null for a tail that starts mid-turn. */

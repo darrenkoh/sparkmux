@@ -17,7 +17,7 @@ Desktop app that owns a private tmux server (`-L sparkmux`) and shows tiled real
 ## Product rules
 
 - App owns `-L sparkmux`. Do not list or mutate the user's default server in the GUI.
-- Quit detaches the control client; tmux server stays up. Stop server is a confirmed menu action.
+- Quit detaches the control client; tmux server stays up.
 - Named New Session uses `new_session_ex` only — never `ensure_ready` (no leftover `main`).
 - Live terminal path is control-mode `%output` / `send-keys -H`. `capture-pane` is seed-only, not polled.
 - AI transcript reading is strictly read-only (`ingest.rs`); never modify CLI directories or write into external agent logs.

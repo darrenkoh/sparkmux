@@ -1447,13 +1447,13 @@ export default function App() {
                             style={{ height: `${dockSplitRatio * 100}%` }}
                           >
                             <div className="docked-collapsed-inner">
-                              <span>OUTPUT PANEL COLLAPSED</span>
+                              <span>YOUR PROMPTS COLLAPSED</span>
                               <button
                                 type="button"
                                 className="docked-open-output-btn"
                                 onClick={() => setOutputOpen(true)}
                               >
-                                + OPEN OUTPUT
+                                + OPEN PROMPTS
                               </button>
                             </div>
                           </div>

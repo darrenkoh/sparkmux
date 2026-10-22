@@ -48,13 +48,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
     let quit = item(app, "quit", "Quit Sparkmux", mac.then_some("Cmd+Q"))?;
     let copy = item(app, "copy", "Copy", mac.then_some("Cmd+C"))?;
     let paste = item(app, "paste", "Paste", None)?;
-    let split_right = item(app, "split-right", "Split Right", mac.then_some("Cmd+D"))?;
-    let split_down = item(
-        app,
-        "split-down",
-        "Split Down",
-        mac.then_some("Cmd+Shift+D"),
-    )?;
     let zoom_in = item(
         app,
         "zoom-in",
@@ -73,8 +66,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         "Actual Size",
         Some(if mac { "Cmd+0" } else { "Ctrl+0" }),
     )?;
-    let start = item(app, "start", "Start", None)?;
-    let stop = item(app, "stop-server", "Stop tmux server…", None)?;
     let help_item = item(
         app,
         "help",
@@ -115,13 +106,22 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         .item(&zoom_reset)
         .build()?;
 
-    let tmux = SubmenuBuilder::new(app, "tmux")
-        .item(&split_right)
-        .item(&split_down)
-        .separator()
-        .item(&start)
-        .item(&stop)
-        .build()?;
+    let minimize = PredefinedMenuItem::minimize(app, None)?;
+    let zoom = PredefinedMenuItem::maximize(app, None)?;
+    let window = if mac {
+        let bring_all = PredefinedMenuItem::bring_all_to_front(app, None)?;
+        SubmenuBuilder::new(app, "Window")
+            .item(&minimize)
+            .item(&zoom)
+            .separator()
+            .item(&bring_all)
+            .build()?
+    } else {
+        SubmenuBuilder::new(app, "Window")
+            .item(&minimize)
+            .item(&zoom)
+            .build()?
+    };
 
     let help = SubmenuBuilder::new(app, "Help")
         .item(&help_item)
@@ -164,7 +164,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
     menu.item(&file)
         .item(&edit)
         .item(&view)
-        .item(&tmux)
+        .item(&window)
         .item(&help)
         .build()
 }
@@ -232,5 +232,19 @@ pub fn on_event(app: &AppHandle, id: &str) {
         other => {
             let _ = app.emit_to("main", "menu", other);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_menu_has_no_tmux_options() {
+        let menu = include_str!("menu.rs");
+        assert!(menu.contains("SubmenuBuilder::new(app, \"Window\")"));
+        assert!(!menu.contains("\"split-right\""));
+        assert!(!menu.contains("\"split-down\""));
+        assert!(!menu.contains("\"stop-server\""));
+        assert!(!menu.contains("\"start\""));
+        assert!(!menu.contains("SubmenuBuilder::new(app, \"tmux\")"));
     }
 }

@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { openEditorPath, paneArtifacts } from "../api";
+import { MarkdownContent } from "./MarkdownContent";
 import { toolRowPath } from "./openPath";
 import {
   calculatePreservedScrollTop,
   emptyOutputText,
+  formatStepCount,
   groupArtifactTurns,
   hasNewTopContent,
   previewLine,
   TURN_PENDING_LABEL,
   TURN_REPLY_LABEL,
+  turnIntermediateSteps,
+  turnStatus,
   type ArtifactEntry,
   type ArtifactFeed,
   type ArtifactTurn,
@@ -35,7 +40,7 @@ export default function ArtifactPanel({
   isDocked?: boolean;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
-  const [turnOpen, setTurnOpen] = useState<Record<string, boolean>>({});
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const unmountedRef = useRef(false);
   const paramsRef = useRef({ command, cwd, title, pid });
@@ -118,20 +123,16 @@ export default function ArtifactPanel({
       })
     : turns;
 
-  const allOpen =
-    visibleTurns.length > 0 &&
-    visibleTurns.every((t) => turnOpen[t.id] === true);
-
-  const toggleAll = () => {
-    const nextState = !allOpen;
-    setTurnOpen((prev) => {
-      const updated = { ...prev };
-      for (const t of visibleTurns) {
-        updated[t.id] = nextState;
-      }
-      return updated;
-    });
-  };
+  const selectedIndex =
+    selectedTurnId !== null
+      ? visibleTurns.findIndex((t) => t.id === selectedTurnId)
+      : -1;
+  const selectedTurn =
+    selectedIndex >= 0
+      ? visibleTurns[selectedIndex]
+      : selectedTurnId !== null
+        ? turns.find((t) => t.id === selectedTurnId) ?? null
+        : null;
 
   useLayoutEffect(() => {
     const el = listRef.current;
@@ -159,18 +160,18 @@ export default function ArtifactPanel({
       scrollTop: el.scrollTop,
       scrollHeight: el.scrollHeight,
     };
-  }, [feed, turnOpen]);
+  }, [feed]);
 
   return (
     <aside
       className={`artifact-panel${isDocked ? " docked" : ""}`}
-      aria-label="Agent logs"
+      aria-label="Your Prompts"
       onMouseDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
       <header className="artifact-head">
         <div className="artifact-title">
-          <span>AGENT LOGS</span>
+          <span>Your Prompts</span>
         </div>
         <div className="artifact-actions">
           {onOpenAnalytics && (
@@ -195,18 +196,14 @@ export default function ArtifactPanel({
               ⬡ Gits
             </button>
           )}
-          {visibleTurns.length > 0 && (
-            <button
-              type="button"
-              onClick={toggleAll}
-              aria-label={allOpen ? "Collapse all turns" : "Expand all turns"}
-              title={allOpen ? "Collapse all turns" : "Expand all turns"}
-            >
-              {allOpen ? "Collapse Turns" : "Expand Turns"}
-            </button>
-          )}
-          <button type="button" onClick={onCollapse} aria-label="Collapse logs">
-            Collapse
+          <button
+            type="button"
+            className="mini-stat-btn"
+            onClick={onCollapse}
+            title="Close Your Prompts"
+            aria-label="Close Your Prompts"
+          >
+            ✕
           </button>
         </div>
       </header>
@@ -214,10 +211,10 @@ export default function ArtifactPanel({
         <input
           type="search"
           className="artifact-filter-input"
-          placeholder="Filter logs or turns..."
+          placeholder="Filter prompts..."
           value={filterText}
           onChange={(e) => setFilterText(e.target.value)}
-          aria-label="Filter logs or turns"
+          aria-label="Filter prompts"
         />
         {filterText && (
           <button
@@ -245,21 +242,39 @@ export default function ArtifactPanel({
         {empty ? (
           <p className="artifact-empty">{empty}</p>
         ) : visibleTurns.length === 0 ? (
-          <p className="artifact-empty">No logs match &ldquo;{filterText}&rdquo;.</p>
+          <p className="artifact-empty">No prompts match &ldquo;{filterText}&rdquo;.</p>
         ) : (
           visibleTurns.map((turn) => (
-            <Turn
+            <PromptCard
               key={turn.id}
               turn={turn}
-              cwd={cwd}
-              open={Boolean(normalizedFilter ? true : turnOpen[turn.id])}
-              onToggle={(open) => {
-                setTurnOpen((prev) => ({ ...prev, [turn.id]: open }));
-              }}
+              selected={turn.id === selectedTurnId}
+              onSelect={() => setSelectedTurnId(turn.id)}
             />
           ))
         )}
       </div>
+      {selectedTurn &&
+        createPortal(
+          <PromptDetailModal
+            turn={selectedTurn}
+            cwd={cwd}
+            index={selectedIndex >= 0 ? selectedIndex : 0}
+            total={visibleTurns.length}
+            onPrev={
+              selectedIndex > 0
+                ? () => setSelectedTurnId(visibleTurns[selectedIndex - 1].id)
+                : undefined
+            }
+            onNext={
+              selectedIndex >= 0 && selectedIndex < visibleTurns.length - 1
+                ? () => setSelectedTurnId(visibleTurns[selectedIndex + 1].id)
+                : undefined
+            }
+            onClose={() => setSelectedTurnId(null)}
+          />,
+          document.body,
+        )}
     </aside>
   );
 }
@@ -277,94 +292,188 @@ function stepBreakdown(steps: ArtifactEntry[]): string {
   return parts.length > 0 ? ` (${parts.join(", ")})` : "";
 }
 
-function Turn({
+function PromptCard({
+  turn,
+  selected,
+  onSelect,
+}: {
+  turn: ArtifactTurn;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const prompt = turn.user?.body ?? turn.steps[0]?.body ?? "";
+  const promptPreview = previewLine(prompt, 200) || "(Empty prompt)";
+  const intermediateSteps = turnIntermediateSteps(turn);
+  const stepCount = intermediateSteps.length;
+  const status = turnStatus(turn);
+  const breakdown = stepBreakdown(intermediateSteps);
+
+  return (
+    <button
+      type="button"
+      className={`prompt-card${selected ? " selected" : ""} status-${status.kind}`}
+      onClick={onSelect}
+      aria-label={`Prompt: ${promptPreview}`}
+    >
+      <div className="prompt-card-content">{promptPreview}</div>
+      <div className="prompt-card-meta">
+        <span className={`prompt-status-badge ${status.kind}`}>
+          <span className="prompt-status-dot" aria-hidden="true" />
+          {status.label}
+        </span>
+        <span
+          className="prompt-steps-badge"
+          title={breakdown ? `${formatStepCount(stepCount)}${breakdown}` : undefined}
+        >
+          {formatStepCount(stepCount)}
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function PromptDetailModal({
   turn,
   cwd,
-  open,
-  onToggle,
+  index,
+  total,
+  onPrev,
+  onNext,
+  onClose,
 }: {
   turn: ArtifactTurn;
   cwd: string;
-  open: boolean;
-  onToggle: (open: boolean) => void;
+  index: number;
+  total: number;
+  onPrev?: () => void;
+  onNext?: () => void;
+  onClose: () => void;
 }) {
-  const prompt = turn.user?.body ?? "";
-  const reply = turn.reply?.body ?? "";
-  const intermediateSteps = turn.steps.filter((step) => step !== turn.reply);
+  const intermediateSteps = turnIntermediateSteps(turn);
   const stepCount = intermediateSteps.length;
-  const promptPreview = previewLine(prompt, 240);
-  const replyPreview = previewLine(reply, 240);
+  const status = turnStatus(turn);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      } else if (e.key === "ArrowLeft" && onPrev) {
+        e.preventDefault();
+        onPrev();
+      } else if (e.key === "ArrowRight" && onNext) {
+        e.preventDefault();
+        onNext();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, onPrev, onNext]);
 
   return (
-    <details
-      className="artifact-turn"
-      open={open}
-      onToggle={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const next = event.currentTarget.open;
-        if (next === open) return;
-        onToggle(next);
+    <div
+      className="prompt-modal-backdrop"
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
       }}
+      onWheel={(e) => e.stopPropagation()}
     >
-      <summary>
-        <span className="artifact-turn-lines">
-          <span className={`artifact-turn-line${turn.user ? " user" : ""}`}>
-            <span className="artifact-label">{turn.user ? "You" : "Earlier"}</span>
-            {prompt && <span className="artifact-preview">{promptPreview}</span>}
-            {!prompt && turn.steps[0] && (
-              <span className="artifact-preview">{previewLine(turn.steps[0].body, 240)}</span>
-            )}
-          </span>
-          <span className="artifact-turn-extra">
-            {turn.reply && (
-              <span className="artifact-turn-line">
-                <span className="artifact-label">{TURN_REPLY_LABEL}</span>
-                {reply && <span className="artifact-preview">{replyPreview}</span>}
+      <div
+        className="prompt-modal-window"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Prompt details"
+      >
+        <header className="prompt-modal-head">
+          <div className="prompt-modal-title-group">
+            <span className="prompt-modal-title">Prompt Details</span>
+            {total > 0 && (
+              <span className="prompt-modal-counter">
+                {index + 1} / {total}
               </span>
             )}
-            {turn.pending && <span className="artifact-pending-label">{TURN_PENDING_LABEL}</span>}
-            {stepCount > 0 && (
-              <span className="artifact-steps">
-                {stepCount === 1 ? "1 step" : `${stepCount} steps`}
-              </span>
-            )}
-          </span>
-        </span>
-      </summary>
-      <div className="artifact-turn-body">
-        {turn.user && <Block entry={turn.user} cwd={cwd} />}
-        {intermediateSteps.length > 0 && (
-          <details
-            className="artifact-steps-fold"
-            open={turn.pending || !turn.reply ? true : undefined}
-          >
-            <summary className="artifact-steps-summary">
-              <span className="artifact-steps-toggle-label">
-                {intermediateSteps.length === 1
-                  ? "1 intermediate step"
-                  : `${intermediateSteps.length} intermediate steps`}
-                {stepBreakdown(intermediateSteps)}
-              </span>
-            </summary>
-            <div className="artifact-steps-content">
-              {intermediateSteps.map((step) => (
-                <Block key={step.id} entry={step} cwd={cwd} />
-              ))}
+            <span className={`prompt-status-badge ${status.kind}`}>
+              <span className="prompt-status-dot" aria-hidden="true" />
+              {status.label}
+            </span>
+            <span className="prompt-steps-badge">
+              {formatStepCount(stepCount)}
+              {stepBreakdown(intermediateSteps)}
+            </span>
+          </div>
+          <div className="prompt-modal-actions">
+            <div className="prompt-modal-nav">
+              <button
+                type="button"
+                className="prompt-nav-btn"
+                onClick={onPrev}
+                disabled={!onPrev}
+                title="Newer prompt (←)"
+                aria-label="Newer prompt"
+              >
+                ← Prev
+              </button>
+              <button
+                type="button"
+                className="prompt-nav-btn"
+                onClick={onNext}
+                disabled={!onNext}
+                title="Older prompt (→)"
+                aria-label="Older prompt"
+              >
+                Next →
+              </button>
             </div>
-          </details>
-        )}
-        {turn.reply && (
-          <Block
-            key={turn.reply.id}
-            entry={turn.reply}
-            cwd={cwd}
-            label={TURN_REPLY_LABEL}
-            final={true}
-          />
-        )}
-        {turn.pending && <p className="artifact-pending">{TURN_PENDING_LABEL}</p>}
+            <button
+              type="button"
+              className="prompt-modal-close"
+              onClick={onClose}
+              title="Close (Esc)"
+              aria-label="Close prompt details"
+            >
+              ✕
+            </button>
+          </div>
+        </header>
+        <div className="prompt-modal-body">
+          {turn.user && <Block entry={turn.user} cwd={cwd} label="Prompt" />}
+          {intermediateSteps.length > 0 && (
+            <details
+              className="artifact-steps-fold"
+              open={turn.pending || !turn.reply ? true : undefined}
+            >
+              <summary className="artifact-steps-summary">
+                <span className="artifact-steps-toggle-label">
+                  {intermediateSteps.length === 1
+                    ? "1 intermediate step"
+                    : `${intermediateSteps.length} intermediate steps`}
+                  {stepBreakdown(intermediateSteps)}
+                </span>
+              </summary>
+              <div className="artifact-steps-content">
+                {intermediateSteps.map((step) => (
+                  <Block key={step.id} entry={step} cwd={cwd} />
+                ))}
+              </div>
+            </details>
+          )}
+          {turn.reply && (
+            <Block
+              key={turn.reply.id}
+              entry={turn.reply}
+              cwd={cwd}
+              label={TURN_REPLY_LABEL}
+              final={true}
+            />
+          )}
+          {turn.pending && <p className="artifact-pending">{TURN_PENDING_LABEL}…</p>}
+        </div>
       </div>
-    </details>
+    </div>
   );
 }
 
@@ -389,6 +498,7 @@ function Block({
     <div className={`artifact-item ${entry.kind}${final ? " final" : ""}`}>
       <div className="artifact-block-head">
         <span className="artifact-label">{label ?? entry.label}</span>
+        {entry.model && <span className="artifact-model-tag">{entry.model}</span>}
         <div className="artifact-block-actions">
           {recordedPath && (
             <button
@@ -437,7 +547,7 @@ function Block({
       </div>
       {entry.body && (
         <div className={`artifact-body${expanded ? " expanded" : ""}`}>
-          {entry.body}
+          <MarkdownContent content={entry.body} kind={entry.kind} />
         </div>
       )}
     </div>
