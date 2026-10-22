@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.53
+
+### Bug Fixes
+
+- Stats collects Antigravity subagents on the focused pane. A newer child transcript no longer replaces the conversation the person started, so tokens, tools, and the SUBAGENTS table stay on that pane.
+
 ## 0.1.52
 
 ### Improvements
