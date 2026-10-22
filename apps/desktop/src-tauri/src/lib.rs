@@ -32,6 +32,7 @@ pub fn run() {
     analytics::storage::init_config();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::tmux_status,
@@ -90,6 +91,20 @@ pub fn run() {
             commands::open_popout_window,
         ])
         .setup(|app| {
+            let handle = app.handle().clone();
+            {
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app.notification().on_action(move |_action| {
+                    if let Some(window) = handle
+                        .get_webview_window("main")
+                        .or_else(|| handle.webview_windows().into_values().next())
+                    {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                });
+            }
             llm_usage::init_agy_usage();
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;

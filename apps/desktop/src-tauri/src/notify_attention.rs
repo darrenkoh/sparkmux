@@ -1,9 +1,8 @@
 //! System notification when a hidden agent starts waiting and Sparkmux is not
 //! the front window. There is no in-app toast.
 
-use std::process::{Command, Stdio};
-
 use tauri::Manager;
+use tauri_plugin_notification::NotificationExt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteLabel {
@@ -56,26 +55,12 @@ pub fn post_attention_notification(
         return Ok(());
     }
     let body = sanitize_body(&body);
-    let mut child = Command::new("osascript")
-        .args([
-            "-e",
-            "on run argv",
-            "-e",
-            "display notification (item 1 of argv) with title (item 2 of argv)",
-            "-e",
-            "end run",
-            "--",
-        ])
-        .arg(body)
-        .arg("Sparkmux")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+    app.notification()
+        .builder()
+        .title("Sparkmux")
+        .body(body)
+        .show()
         .map_err(|err| format!("could not post notification: {err}"))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
     Ok(())
 }
 
