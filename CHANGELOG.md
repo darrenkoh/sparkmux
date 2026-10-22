@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.54
+
+### Bug Fixes
+
+- Keep Claude Code on the AgentBoard when planning mode finishes and prompts to execute the plan, correctly classifying `ExitPlanMode` tool calls as waiting on user attention and preventing window tabs from reverting to shell.
+
 ## 0.1.53
 
 ### Bug Fixes
