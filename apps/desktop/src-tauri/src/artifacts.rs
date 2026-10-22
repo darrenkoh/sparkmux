@@ -14,7 +14,7 @@
 //! transcripts are never merged into one feed. The editor store under
 //! `~/.gemini/antigravity` is not this CLI transcript.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
@@ -23,6 +23,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 const MAX_TAIL: u64 = 64 * 1024 * 1024;
+/// Antigravity holds the human session's presence lock on a high fd after it
+/// opens a conversation database per subagent. A short scan misses that lock
+/// and Stats follows whichever child file was written last.
+const MAX_OPEN_PATHS: usize = 1024;
 const MAX_ENTRIES: usize = 10_000;
 const ASSISTANT_CAP: usize = 12_000;
 const USER_CAP: usize = 12_000;
@@ -507,6 +511,8 @@ fn claude_active_transcript(found: &[PathBuf]) -> Option<PathBuf> {
 /// An array value means several conversations share the project; the open
 /// transcript is the tie-break, and anything still ambiguous stays unread.
 /// A nearer directory wins over a parent, so another workspace cannot leak in.
+/// A subagent's conversation database is not a second human session. The
+/// presence lock stays on the conversation the person started.
 fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Option<PathBuf> {
     let active_ids = agy_active_session_ids(family, &roots.agy_root);
     if !active_ids.is_empty() {
@@ -522,6 +528,9 @@ fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Optio
             return transcripts.into_iter().next();
         }
         if transcripts.len() > 1 {
+            if let Some(parent) = agy_parent_transcript(&transcripts) {
+                return Some(parent);
+            }
             return transcripts
                 .into_iter()
                 .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok());
@@ -566,10 +575,98 @@ fn select_agy(cwd: &str, family: &[(u32, u8)], roots: &TranscriptRoots) -> Optio
     None
 }
 
+/// The conversation that spawned the others in `paths`. Subagent transcripts
+/// are newer while they run, so a newest-file pick follows a child and Stats
+/// never sees the parent's `invoke_subagent` line.
+fn agy_parent_transcript(paths: &[PathBuf]) -> Option<PathBuf> {
+    if paths.len() < 2 {
+        return None;
+    }
+    let mut ids = Vec::with_capacity(paths.len());
+    for path in paths {
+        ids.push(agy_conversation_id(path)?);
+    }
+    let mut referenced = HashSet::new();
+    for (path, id) in paths.iter().zip(ids.iter()) {
+        for other in spawned_ids_in(path, &ids, id) {
+            referenced.insert(other);
+        }
+    }
+    let mut parents: Vec<PathBuf> = paths
+        .iter()
+        .zip(ids.iter())
+        .filter(|(_, id)| !referenced.contains(*id))
+        .map(|(path, _)| path.clone())
+        .collect();
+    if parents.len() == 1 {
+        parents.pop()
+    } else {
+        None
+    }
+}
+
+fn agy_conversation_id(path: &Path) -> Option<String> {
+    let id = path
+        .parent()?
+        .parent()?
+        .parent()?
+        .file_name()?
+        .to_str()?;
+    safe_component(id).then(|| id.to_string())
+}
+
+/// Other conversation ids this transcript names in a spawn result.
+fn spawned_ids_in(path: &Path, candidates: &[String], self_id: &str) -> Vec<String> {
+    let Ok(file) = File::open(path) else {
+        return Vec::new();
+    };
+    let mut buf = Vec::new();
+    if file.take(8 * 1024 * 1024).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    if !text.contains("invoke_subagent") {
+        return Vec::new();
+    }
+    candidates
+        .iter()
+        .filter(|id| id.as_str() != self_id && spawn_result_names(&text, id))
+        .cloned()
+        .collect()
+}
+
+fn spawn_result_names(text: &str, id: &str) -> bool {
+    let bytes = text.as_bytes();
+    let needle = b"conversationId";
+    let want = id.as_bytes();
+    if want.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] == needle {
+            let start = i + needle.len();
+            let end = (start + 96).min(bytes.len());
+            if bytes[start..end]
+                .windows(want.len())
+                .any(|window| window == want)
+            {
+                return true;
+            }
+            i = start;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 /// Session IDs actively held open by `family` via `presence/<id>.lock` or
 /// `conversations/<id>.db`. Unlike `brain/<id>` directory watchers (which remain
 /// open across `/new`), `agy` closes the previous `.lock` and `.db` and opens
 /// the new session's `.lock` when switching or starting `/new`.
+/// Subagent conversations keep a database open beside that lock. The lock is
+/// the human session; the databases alone are not.
 fn agy_active_session_ids(family: &[(u32, u8)], jail: &Path) -> Vec<String> {
     if family.is_empty() || jail.as_os_str().is_empty() {
         return Vec::new();
@@ -1200,19 +1297,27 @@ mod macos_proc {
     }
 
     pub fn open_paths(pid: u32) -> Vec<PathBuf> {
-        let mut raw = vec![0u8; 8 * 256];
-        let got = unsafe {
-            proc_pidinfo(
-                pid as i32,
-                PROC_PIDLISTFDS,
-                0,
-                raw.as_mut_ptr().cast(),
-                raw.len() as i32,
-            )
+        let mut cap = 256usize;
+        let mut raw = vec![0u8; 8 * cap];
+        let got = loop {
+            let got = unsafe {
+                proc_pidinfo(
+                    pid as i32,
+                    PROC_PIDLISTFDS,
+                    0,
+                    raw.as_mut_ptr().cast(),
+                    raw.len() as i32,
+                )
+            };
+            if got <= 0 {
+                return Vec::new();
+            }
+            if (got as usize) < raw.len() || cap >= 8192 {
+                break got;
+            }
+            cap = cap.saturating_mul(2).min(8192);
+            raw.resize(8 * cap, 0);
         };
-        if got <= 0 {
-            return Vec::new();
-        }
         let count = (got as usize).min(raw.len()) / 8;
         let mut out = Vec::new();
         for index in 0..count {
@@ -1225,7 +1330,7 @@ mod macos_proc {
             if let Some(path) = fd_path(pid, fd) {
                 out.push(path);
             }
-            if out.len() >= 64 {
+            if out.len() >= super::MAX_OPEN_PATHS {
                 break;
             }
         }
@@ -1316,7 +1421,7 @@ fn linux_open_paths(pid: u32) -> Vec<PathBuf> {
                 out.push(target);
             }
         }
-        if out.len() >= 64 {
+        if out.len() >= MAX_OPEN_PATHS {
             break;
         }
     }
@@ -2983,6 +3088,149 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn agy_logs(root: &Path, id: &str, body: &str) -> PathBuf {
+        let logs = root
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let transcript = logs.join("transcript.jsonl");
+        fs::write(&transcript, body).unwrap();
+        transcript
+    }
+
+    #[test]
+    fn agy_parent_transcript_is_the_conversation_that_spawned_the_other() {
+        let dir = scratch("agy-parent-fn");
+        let root = dir.join("antigravity-cli");
+        let parent_id = "11111111-1111-4111-8111-111111111111";
+        let child_id = "22222222-2222-4222-8222-222222222222";
+        let parent = agy_logs(
+            &root,
+            parent_id,
+            &format!(
+                "{{\"type\":\"PLANNER_RESPONSE\",\"tool_calls\":[{{\"name\":\"invoke_subagent\"}}]}}\n\
+                 {{\"type\":\"GENERIC\",\"content\":\"Created the following subagent: {{\\\"conversationId\\\": \\\"{child_id}\\\"}}\"}}\n"
+            ),
+        );
+        let child = agy_logs(
+            &root,
+            child_id,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"working\"}\n",
+        );
+        let picked = agy_parent_transcript(&[child.clone(), parent.clone()]);
+        assert_eq!(picked, Some(parent));
+        assert!(agy_parent_transcript(&[child]).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_open_subagent_db_does_not_replace_the_parent() {
+        let dir = scratch("agy-sub-dbs");
+        let root = dir.join("antigravity-cli");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let parent_id = "11111111-1111-4111-8111-111111111111";
+        let child_id = "22222222-2222-4222-8222-222222222222";
+        let parent = agy_logs(
+            &root,
+            parent_id,
+            &format!(
+                "{{\"type\":\"USER_INPUT\",\"content\":\"do the upgrade\"}}\n\
+                 {{\"type\":\"PLANNER_RESPONSE\",\"tool_calls\":[{{\"name\":\"invoke_subagent\",\"args\":{{\"Role\":\"\\\"Spark Model\\\"\"}}}}]}}\n\
+                 {{\"type\":\"GENERIC\",\"content\":\"Created the following subagent: {{\\\"conversationId\\\": \\\"{child_id}\\\"}}\"}}\n"
+            ),
+        );
+        let _child = agy_logs(
+            &root,
+            child_id,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"child is newer\"}\n",
+        );
+        let conversations = root.join("conversations");
+        fs::create_dir_all(&conversations).unwrap();
+        let parent_db = conversations.join(format!("{parent_id}.db"));
+        let child_db = conversations.join(format!("{child_id}.db"));
+        fs::write(&parent_db, b"parent").unwrap();
+        fs::write(&child_db, b"child").unwrap();
+        fs::create_dir_all(root.join("cache")).unwrap();
+        let cwd = project.to_string_lossy().to_string();
+        fs::write(
+            root.join("cache").join("last_conversations.json"),
+            format!("{{\"{cwd}\":\"{child_id}\"}}"),
+        )
+        .unwrap();
+        let _parent_db = File::open(&parent_db).unwrap();
+        let _child_db = File::open(&child_db).unwrap();
+        let mut roots = roots(&dir, dir.join("no-grok"), dir.join("no-claude"));
+        roots.agy_root = root;
+        let selected = select_agy(&cwd, &[(std::process::id(), 0)], &roots);
+        assert_eq!(
+            selected.as_ref().and_then(|path| path.canonicalize().ok()),
+            Some(parent.canonicalize().unwrap()),
+            "a newer subagent database must not become the pane transcript: {selected:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_presence_lock_past_many_fds_beats_a_newer_subagent() {
+        let dir = scratch("agy-sub-lock");
+        let root = dir.join("antigravity-cli");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let parent_id = "33333333-3333-4333-8333-333333333333";
+        let child_id = "44444444-4444-4444-8444-444444444444";
+        let parent = agy_logs(
+            &root,
+            parent_id,
+            &format!(
+                "{{\"type\":\"PLANNER_RESPONSE\",\"tool_calls\":[{{\"name\":\"invoke_subagent\"}}]}}\n\
+                 {{\"type\":\"GENERIC\",\"content\":\"conversationId {child_id}\"}}\n"
+            ),
+        );
+        let _child = agy_logs(
+            &root,
+            child_id,
+            "{\"type\":\"PLANNER_RESPONSE\",\"content\":\"still writing\"}\n",
+        );
+        let conversations = root.join("conversations");
+        fs::create_dir_all(&conversations).unwrap();
+        let child_db = conversations.join(format!("{child_id}.db"));
+        fs::write(&child_db, b"child").unwrap();
+        let presence = root.join("presence");
+        fs::create_dir_all(&presence).unwrap();
+        let lock = presence.join(format!("{parent_id}.lock"));
+        fs::write(&lock, b"").unwrap();
+        fs::create_dir_all(root.join("cache")).unwrap();
+        let cwd = project.to_string_lossy().to_string();
+        fs::write(
+            root.join("cache").join("last_conversations.json"),
+            format!("{{\"{cwd}\":\"{child_id}\"}}"),
+        )
+        .unwrap();
+
+        let mut held = Vec::new();
+        held.push(File::open(&child_db).unwrap());
+        for i in 0..80 {
+            let filler = dir.join(format!("filler-{i}"));
+            fs::write(&filler, b"x").unwrap();
+            held.push(File::open(&filler).unwrap());
+        }
+        held.push(File::open(&lock).unwrap());
+
+        let mut roots = roots(&dir, dir.join("no-grok"), dir.join("no-claude"));
+        roots.agy_root = root;
+        let selected = select_agy(&cwd, &[(std::process::id(), 0)], &roots);
+        assert_eq!(
+            selected.as_ref().and_then(|path| path.canonicalize().ok()),
+            Some(parent.canonicalize().unwrap()),
+            "the human session lock must win over a newer subagent database: {selected:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        drop(held);
     }
 
     #[test]

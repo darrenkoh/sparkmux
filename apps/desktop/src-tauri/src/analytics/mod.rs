@@ -33,6 +33,74 @@ fn live_lock() -> MutexGuard<'static, Option<LiveAnalytics>> {
     LIVE.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
+fn fresh_cursor(cursor: &Cursor) -> bool {
+    cursor.offset == 0
+        && cursor.spawn_offset == 0
+        && cursor.children.is_empty()
+        && cursor.spawned.is_empty()
+}
+
+/// Steps already stored for this tab. A label filled in on the replay (`h`)
+/// does not make the same step new.
+fn without_recorded(existing: &[event::Event], fresh: Vec<event::Event>) -> Vec<event::Event> {
+    let mut left: HashMap<ReplayKey, usize> = HashMap::new();
+    for ev in existing {
+        *left.entry(ReplayKey::from(ev)).or_default() += 1;
+    }
+    fresh
+        .into_iter()
+        .filter(|ev| {
+            let key = ReplayKey::from(ev);
+            if let Some(n) = left.get_mut(&key) {
+                if *n > 0 {
+                    *n -= 1;
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct ReplayKey {
+    t: i64,
+    k: String,
+    s: String,
+    g: String,
+    n: String,
+    a: String,
+    c: u64,
+    ms: u64,
+    err: bool,
+    ti: u64,
+    to: u64,
+    tc: u64,
+    tw: u64,
+    tr: u64,
+}
+
+impl From<&event::Event> for ReplayKey {
+    fn from(ev: &event::Event) -> Self {
+        Self {
+            t: ev.t,
+            k: ev.k.clone(),
+            s: ev.s.clone(),
+            g: ev.g.clone(),
+            n: ev.n.clone(),
+            a: ev.a.clone(),
+            c: ev.c,
+            ms: ev.ms,
+            err: ev.err,
+            ti: ev.ti,
+            to: ev.to,
+            tc: ev.tc,
+            tw: ev.tw,
+            tr: ev.tr,
+        }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct TabAnalyticsResponse {
     pub enabled: bool,
@@ -120,10 +188,28 @@ pub async fn tab_analytics(
         // Ingest new events if transcript exists and analytics is enabled
         if enabled {
             if let (Some(k), Some(p)) = (kind, &transcript) {
+                // The on-disk cursor follows whichever transcript was selected
+                // last. After a subagent file stole the pane, that cursor is
+                // the child, and a fresh parent read would append the history
+                // again. Drop steps this tab already stored.
+                let replay = fresh_cursor(&cursor);
                 let now = now_ms();
-                let new_events = ingest_session(k, p, &mut cursor, now, &roots);
-                if !new_events.is_empty() {
-                    let _ = append_events(&session_name, &tab_id, &new_events);
+                let mut new_events = ingest_session(k, p, &mut cursor, now, &roots);
+                let mut caught_up = false;
+                if replay {
+                    let existing = read_tab_events(&session_name, &tab_id, 0);
+                    if active_src
+                        .as_ref()
+                        .is_some_and(|src| existing.iter().any(|ev| &ev.s == src))
+                    {
+                        new_events = without_recorded(&existing, new_events);
+                        caught_up = true;
+                    }
+                }
+                if !new_events.is_empty() || caught_up {
+                    if !new_events.is_empty() {
+                        let _ = append_events(&session_name, &tab_id, &new_events);
+                    }
                     let mut meta = load_meta(&session_name, &tab_id).unwrap_or_else(|| TabMeta {
                         session_name: session_name.clone(),
                         tab_id: tab_id.clone(),
@@ -231,4 +317,32 @@ pub fn clear_analytics_data() -> Result<(), String> {
 #[command]
 pub fn analytics_config() -> Result<AnalyticsConfig, String> {
     Ok(get_storage_stats())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ev(t: i64, kind: &str, source: &str, agent: &str, name: &str) -> event::Event {
+        let mut ev = event::Event::new(t, kind);
+        ev.s = source.to_string();
+        ev.g = agent.to_string();
+        ev.n = name.to_string();
+        ev
+    }
+
+    #[test]
+    fn replay_keeps_a_new_subagent_step_and_drops_the_copy() {
+        let child = "22222222-2222-4222-8222-222222222222";
+        let stored = vec![
+            ev(10, "tool", "11111111", "", "read_file"),
+            ev(20, "tool", "11111111", child, "run_command"),
+        ];
+        let mut again = stored[1].clone();
+        again.h = "Spark Model".to_string();
+        let mut later = ev(30, "usage", "11111111", child, "");
+        later.ti = 40;
+        let kept = without_recorded(&stored, vec![stored[0].clone(), again, later.clone()]);
+        assert_eq!(kept, vec![later]);
+    }
 }
