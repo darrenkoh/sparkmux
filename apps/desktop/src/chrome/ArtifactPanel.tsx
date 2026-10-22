@@ -352,6 +352,11 @@ function PromptDetailModal({
   const intermediateSteps = turnIntermediateSteps(turn);
   const stepCount = intermediateSteps.length;
   const status = turnStatus(turn);
+  const [stepsOpen, setStepsOpen] = useState(() => turn.pending || !turn.reply);
+
+  useEffect(() => {
+    setStepsOpen(turn.pending || !turn.reply);
+  }, [turn.id]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -442,24 +447,28 @@ function PromptDetailModal({
         <div className="prompt-modal-body">
           {turn.user && <Block entry={turn.user} cwd={cwd} label="Prompt" />}
           {intermediateSteps.length > 0 && (
-            <details
-              className="artifact-steps-fold"
-              open={turn.pending || !turn.reply ? true : undefined}
-            >
-              <summary className="artifact-steps-summary">
+            <div className={`artifact-steps-fold${stepsOpen ? " open" : ""}`}>
+              <button
+                type="button"
+                className="artifact-steps-summary"
+                aria-expanded={stepsOpen}
+                onClick={() => setStepsOpen((open) => !open)}
+              >
                 <span className="artifact-steps-toggle-label">
                   {intermediateSteps.length === 1
                     ? "1 intermediate step"
                     : `${intermediateSteps.length} intermediate steps`}
                   {stepBreakdown(intermediateSteps)}
                 </span>
-              </summary>
-              <div className="artifact-steps-content">
-                {intermediateSteps.map((step) => (
-                  <Block key={step.id} entry={step} cwd={cwd} />
-                ))}
-              </div>
-            </details>
+              </button>
+              {stepsOpen && (
+                <div className="artifact-steps-content">
+                  {intermediateSteps.map((step) => (
+                    <Block key={step.id} entry={step} cwd={cwd} />
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           {turn.reply && (
             <Block
