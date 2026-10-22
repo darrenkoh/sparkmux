@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.52
+
+### Improvements
+
+- Redesigned docked agent logs into minimalist **Your Prompts** cards displaying clean prompt preview, status indicator (`Working…`, `Done`, `No reply`), and step counts.
+- Added a full **Prompt Details** modal window with full markdown prompt preview, collapsible intermediate reasoning thoughts and tool events, final LLM reply, and prev/next navigation.
+- Integrated dependency-free rich Markdown parser supporting fenced code blocks with language headers and copy action, inline formatting, lists, quotes, and formatted tool calls.
+
+### Bug Fixes
+
+- Fixed an issue where intermediate steps in prompt detail modals were shrunk and clipped by CSS flexbox.
+- Stale agent logs are cleanly cleared on `/new` command and fresh agent tabs avoid adopting unrelated session logs.
+
 ## 0.1.51
 
 ### Improvements
