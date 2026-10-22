@@ -43,6 +43,7 @@ pub async fn agent_board(panes: Vec<BoardPane>) -> Result<Vec<attention::BoardRo
                 model: model.as_deref(),
                 ask: ask.as_deref(),
                 assistant: assistant.as_deref(),
+                cli: feed.cli.as_deref(),
             }) else {
                 continue;
             };

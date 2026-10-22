@@ -28,7 +28,15 @@ const USER_PHRASES: &[&str] = &[
     "let me know",
 ];
 
-const ASK_MARKERS: &[&str] = &["askuserquestion", "request_permission", "ask_user"];
+const ASK_MARKERS: &[&str] = &[
+    "askuserquestion",
+    "request_permission",
+    "ask_user",
+    "exitplanmode",
+    "exit_plan_mode",
+    "enterplanmode",
+    "enter_plan_mode",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttentionLabel {
@@ -273,7 +281,9 @@ pub(crate) fn label_from_feed(feed: &ArtifactFeed) -> (Option<LabelToken>, Optio
 pub fn classify_entries(entries: &[ArtifactEntry]) -> Option<AttentionLabel> {
     let kept: Vec<&ArtifactEntry> = entries
         .iter()
-        .filter(|entry| entry.kind != "reasoning" && !entry.body.is_empty())
+        .filter(|entry| {
+            entry.kind != "reasoning" && (!entry.body.is_empty() || entry.kind == "tool")
+        })
         .collect();
     let Some(last) = kept.last().copied() else {
         return if tail_has_ask(entries) {
@@ -519,6 +529,13 @@ fn ask_source(entries: &[ArtifactEntry]) -> Option<String> {
     if let Some(entry) = entries[range].iter().rev().find(|entry| {
         entry.kind != "reasoning" && (has_ask_marker(&entry.label) || has_ask_marker(&entry.body))
     }) {
+        let label_lower = entry.label.to_ascii_lowercase();
+        if label_lower.contains("exitplanmode") || label_lower.contains("exit_plan_mode") {
+            return Some("Exit plan mode and execute plan?".to_string());
+        }
+        if label_lower.contains("enterplanmode") || label_lower.contains("enter_plan_mode") {
+            return Some("Enter plan mode?".to_string());
+        }
         let body = entry.body.trim();
         if !body.is_empty() {
             return Some(body.to_string());
@@ -561,6 +578,7 @@ pub struct BoardFields<'a> {
     pub model: Option<&'a str>,
     pub ask: Option<&'a str>,
     pub assistant: Option<&'a str>,
+    pub cli: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -579,7 +597,10 @@ pub fn board_row(fields: &BoardFields<'_>) -> Option<BoardRow> {
     if command_is_ssh(fields.command) {
         return None;
     }
-    let kind = crate::artifacts::detect_cli(fields.command, fields.title, &[])?;
+    let kind = fields
+        .cli
+        .and_then(crate::artifacts::cli_kind)
+        .or_else(|| crate::artifacts::detect_cli(fields.command, fields.title, &[]))?;
     let model = fields
         .model
         .map(str::trim)
@@ -1507,6 +1528,7 @@ mod tests {
             model: None,
             ask: None,
             assistant: None,
+            cli: None,
         }
     }
 
@@ -1575,9 +1597,57 @@ mod tests {
             model: None,
             ask: Some(&ask),
             assistant: None,
+            cli: None,
         })
         .expect("capped");
         assert_eq!(long.detail.chars().count(), 160);
         assert_eq!(long.model, "Grok");
+
+        let claude_plan = board_row(&BoardFields {
+            session: "spark",
+            window_id: "@1",
+            window_name: "agent",
+            pane_id: "%7",
+            command: "2.1.296",
+            title: "✳ Plan: Refactor auth flow",
+            label: Some(AttentionLabel::NeedsUser),
+            model: None,
+            ask: Some("Exit plan mode and execute plan?"),
+            assistant: None,
+            cli: Some("claude"),
+        })
+        .expect("claude plan mode row");
+        assert_eq!(claude_plan.state, "Waiting on you");
+        assert_eq!(claude_plan.model, "Claude");
+        assert_eq!(claude_plan.detail, "Exit plan mode and execute plan?");
+    }
+
+    #[test]
+    fn exit_plan_mode_needs_user_and_has_ask() {
+        let entries_empty = vec![
+            ent("assistant", "Assistant", "Here is the plan."),
+            ent("tool", "ExitPlanMode", ""),
+        ];
+        assert_eq!(
+            classify_entries(&entries_empty),
+            Some(AttentionLabel::NeedsUser)
+        );
+        assert_eq!(
+            pending_question(&entries_empty),
+            Some("Exit plan mode and execute plan?".to_string())
+        );
+
+        let entries_with_plan = vec![
+            ent("assistant", "Assistant", "Here is the plan."),
+            ent("tool", "ExitPlanMode", "plan: 1. Add auth\n2. Run tests"),
+        ];
+        assert_eq!(
+            classify_entries(&entries_with_plan),
+            Some(AttentionLabel::NeedsUser)
+        );
+        assert_eq!(
+            pending_question(&entries_with_plan),
+            Some("Exit plan mode and execute plan?".to_string())
+        );
     }
 }

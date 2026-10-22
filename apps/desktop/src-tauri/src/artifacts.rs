@@ -368,6 +368,12 @@ fn titled_cli(name: &str) -> Option<CliKind> {
     if name.contains("antigravity") || name.split_whitespace().any(|part| part == "agy") {
         return Some(CliKind::Antigravity);
     }
+    let trimmed = name.trim_start();
+    if (trimmed.starts_with('✳') || trimmed.starts_with('◐') || trimmed.starts_with('◑'))
+        && !trimmed.ends_with(" - grok")
+    {
+        return Some(CliKind::Claude);
+    }
     None
 }
 
@@ -606,12 +612,7 @@ fn agy_parent_transcript(paths: &[PathBuf]) -> Option<PathBuf> {
 }
 
 fn agy_conversation_id(path: &Path) -> Option<String> {
-    let id = path
-        .parent()?
-        .parent()?
-        .parent()?
-        .file_name()?
-        .to_str()?;
+    let id = path.parent()?.parent()?.parent()?.file_name()?.to_str()?;
     safe_component(id).then(|| id.to_string())
 }
 
@@ -2202,6 +2203,7 @@ mod tests {
             model: hinted.as_deref(),
             ask: None,
             assistant: Some("done"),
+            cli: None,
         })
         .expect("claude row");
         assert_eq!(row.model, "nemotron_3_nano_omni");
@@ -3253,6 +3255,12 @@ mod tests {
             cli_kind("C:\\Users\\x\\AppData\\Local\\claude\\versions\\2.1.296.exe"),
             Some(CliKind::Claude)
         );
+        assert_eq!(
+            cli_kind("✳ Plan: Refactor auth flow"),
+            Some(CliKind::Claude)
+        );
+        assert_eq!(cli_kind("◐ Planning..."), Some(CliKind::Claude));
+        assert_eq!(cli_kind("◑ Ready to execute"), Some(CliKind::Claude));
         assert_eq!(cli_kind("vim claude.txt"), None);
     }
 

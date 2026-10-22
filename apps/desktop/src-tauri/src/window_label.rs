@@ -153,7 +153,12 @@ pub(crate) fn desired_window_name(
             VersionChoice::Known(version) => product_label(kind, Some(&version)),
             VersionChoice::Missing => product_label(kind, None),
         },
-        None => "shell".to_string(),
+        None => {
+            if is_claude_managed(current) && looks_like_version(command_base(command)) {
+                return None;
+            }
+            "shell".to_string()
+        }
     };
     (desired != current).then_some(desired)
 }
@@ -219,6 +224,10 @@ fn product_label(kind: CliKind, version: Option<&str>) -> String {
         Some(version) if looks_like_version(version) => format!("{name} v{version}"),
         _ => name.to_string(),
     }
+}
+
+fn is_claude_managed(name: &str) -> bool {
+    name == "Claude" || name.starts_with("Claude v")
 }
 
 /// `shell`, or a label this module writes (`Grok v1.0.62`, `AGY`).
@@ -514,6 +523,11 @@ mod tests {
             desired_window_name("shell", "2.1.296", "✳ Claude Code", &versions).as_deref(),
             Some("Claude v2.1.296")
         );
+        assert_eq!(
+            desired_window_name("shell", "2.1.296", "✳ Plan: Refactor auth flow", &versions)
+                .as_deref(),
+            Some("Claude v2.1.296")
+        );
     }
 
     #[test]
@@ -577,6 +591,15 @@ mod tests {
         assert_eq!(desired_window_name("shell", "2.1.296", "", &versions), None);
         assert_eq!(
             desired_window_name("shell", "2.1.296", "notes - grok", &versions),
+            None
+        );
+        assert_eq!(
+            desired_window_name(
+                "Claude v2.1.296",
+                "2.1.296",
+                "custom topic title",
+                &versions
+            ),
             None
         );
     }
