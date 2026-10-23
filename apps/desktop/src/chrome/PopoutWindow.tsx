@@ -102,6 +102,11 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
       });
   }, []);
 
+  const attentionLabel =
+    snap.sessions
+      .find((session) => session.name === resolved.session_name)
+      ?.windows.find((win) => win.id === resolved.tab_id)?.attention_label ?? null;
+
   if (kind === "stats") {
     return (
       <AnalyticsHud
@@ -116,6 +121,7 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
         isStandaloneWindow
         pinned={isPinned}
         onTogglePin={handleTogglePin}
+        attentionLabel={attentionLabel}
       />
     );
   }

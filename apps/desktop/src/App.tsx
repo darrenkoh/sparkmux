@@ -1503,6 +1503,7 @@ export default function App() {
                       setStatsDocked(true);
                     }}
                     onPopOut={popOutStats}
+                    attentionLabel={visibleWin?.attention_label ?? null}
                   />
                 )}
                 {graphOpen && (

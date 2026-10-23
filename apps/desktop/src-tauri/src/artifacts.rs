@@ -1567,15 +1567,15 @@ fn push_grok(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
     };
     match obj.get("type").and_then(Value::as_str).unwrap_or("") {
         "user" => {
+            if obj.get("synthetic_reason").is_some_and(|v| !v.is_null()) {
+                return;
+            }
             let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
-            push_text(
-                entries,
-                offset,
-                "user",
-                "You",
-                &extract_user_query(&raw),
-                USER_CAP,
-            );
+            let query = extract_user_query(&raw);
+            if query.is_empty() || noise_prompt(&query) {
+                return;
+            }
+            push_text(entries, offset, "user", "You", &query, USER_CAP);
         }
         "assistant" => {
             let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
@@ -1620,6 +1620,7 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
     };
     if obj.get("isMeta").and_then(Value::as_bool) == Some(true)
         || obj.get("isSidechain").and_then(Value::as_bool) == Some(true)
+        || obj.get("synthetic_reason").is_some_and(|v| !v.is_null())
     {
         return;
     }
@@ -1644,14 +1645,10 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
                 ASSISTANT_CAP,
             );
         } else {
-            push_text(
-                entries,
-                offset,
-                "user",
-                "You",
-                &extract_user_query(&raw),
-                USER_CAP,
-            );
+            let query = extract_user_query(&raw);
+            if !query.is_empty() && !noise_prompt(&query) {
+                push_text(entries, offset, "user", "You", &query, USER_CAP);
+            }
         }
         attach_model(entries, offset, recorded_model);
         return;
@@ -1702,15 +1699,11 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
             &text.join("\n"),
             ASSISTANT_CAP,
         );
-    } else {
-        push_text(
-            entries,
-            offset,
-            "user",
-            "You",
-            &extract_user_query(&text.join("\n")),
-            USER_CAP,
-        );
+    } else if !text.is_empty() {
+        let query = extract_user_query(&text.join("\n"));
+        if !query.is_empty() && !noise_prompt(&query) {
+            push_text(entries, offset, "user", "You", &query, USER_CAP);
+        }
     }
     for (name, summary) in tools {
         push_text(entries, offset, "tool", &name, &summary, ARG_CAP);
@@ -1828,15 +1821,14 @@ fn push_agy(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value, full: 
     };
     match record {
         "USER_INPUT" => {
+            if obj.get("synthetic_reason").is_some_and(|v| !v.is_null()) {
+                return;
+            }
             let raw = text_from_value(obj.get("content").unwrap_or(&Value::Null));
-            push_text(
-                entries,
-                offset,
-                "user",
-                "You",
-                &extract_user_query(&raw),
-                USER_CAP,
-            );
+            let query = extract_user_query(&raw);
+            if !query.is_empty() && !noise_prompt(&query) {
+                push_text(entries, offset, "user", "You", &query, USER_CAP);
+            }
         }
         "PLANNER_RESPONSE" => {
             let thinking = obj.get("thinking").and_then(Value::as_str).unwrap_or("");
@@ -1925,21 +1917,49 @@ pub(crate) fn text_from_value(content: &Value) -> String {
     }
 }
 
+pub(crate) fn noise_prompt(text: &str) -> bool {
+    let head = text.trim_start();
+    head.starts_with("<system-reminder")
+        || head.starts_with("<system_reminder")
+        || head.starts_with("<command-")
+        || head.starts_with("<local-command-")
+        || head.starts_with("Caveat:")
+        || head.starts_with("<rules")
+        || head.starts_with("This session is being continued from a previous conversation")
+}
+
 pub(crate) fn extract_user_query(text: &str) -> String {
     if let Some(query) = last_tag(text, "user_query") {
-        return query;
+        let stripped = strip_metadata_tags(&query);
+        if !stripped.is_empty() && !noise_prompt(&stripped) {
+            return stripped;
+        }
+        if !noise_prompt(&query) {
+            return query;
+        }
+        return String::new();
     }
     if let Some(query) = last_tag(text, "USER_REQUEST") {
-        return query;
+        let stripped = strip_metadata_tags(&query);
+        if !stripped.is_empty() && !noise_prompt(&stripped) {
+            return stripped;
+        }
+        if !noise_prompt(&query) {
+            return query;
+        }
+        return String::new();
     }
     let stripped = strip_metadata_tags(text);
-    if !stripped.is_empty() {
+    if !stripped.is_empty() && !noise_prompt(&stripped) {
         return stripped;
     }
     if text.contains("<user_info>")
         || text.contains("<system_reminder>")
+        || text.contains("<system-reminder>")
+        || text.contains("<rules>")
         || text.contains("<ADDITIONAL_METADATA>")
         || text.contains("<USER_SETTINGS_CHANGE>")
+        || noise_prompt(text)
     {
         return String::new();
     }
@@ -1951,6 +1971,13 @@ fn strip_metadata_tags(text: &str) -> String {
     s = strip_tag(&s, "USER_SETTINGS_CHANGE");
     s = strip_tag(&s, "user_info");
     s = strip_tag(&s, "system_reminder");
+    s = strip_tag(&s, "system-reminder");
+    s = strip_tag(&s, "rules");
+    s = strip_tag(&s, "command-name");
+    s = strip_tag(&s, "command-message");
+    s = strip_tag(&s, "command-results");
+    s = strip_tag(&s, "local-command-results");
+    s = strip_tag(&s, "local-command-caveat");
     s.trim().to_string()
 }
 
@@ -2264,6 +2291,34 @@ mod tests {
         assert!(entries
             .windows(2)
             .all(|pair| pair[0].offset <= pair[1].offset));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grok_transcript_skips_compaction_meta_and_system_reminders() {
+        let raw = r#"
+{"type":"system","content":"You are Grok"}
+{"type":"user","content":[{"type":"text","text":"<user_info>\nOS: macos\n</user_info>\n\n<rules>\nRules here\n</rules>"}],"synthetic_reason":"compaction_meta"}
+{"type":"user","content":[{"type":"text","text":"<user_query>\nImplement the Prompt Graph feature\n</user_query>"}]}
+{"type":"user","content":[{"type":"text","text":"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation."}],"synthetic_reason":"compaction_meta"}
+{"type":"user","content":[{"type":"text","text":"<system-reminder>\n## Available Skills\n- sparkmux\n</system-reminder>"}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"<system-reminder>\nCall `search_tool` before you call `use_tool`\n</system-reminder>"}],"synthetic_reason":"system_reminder"}
+{"type":"assistant","content":"Working on it...","tool_calls":[{"id":"c1","name":"read_file","arguments":"{\"target_file\":\"src/App.tsx\"}"}]}
+"#;
+        let dir = scratch("grok-compaction");
+        let path = dir.join("chat_history.jsonl");
+        fs::write(&path, raw.trim_start()).unwrap();
+        let (_len, entries) = read_transcript(CliKind::Grok, &path, MAX_TAIL).unwrap();
+        let user_prompts: Vec<&str> = entries
+            .iter()
+            .filter(|e| e.kind == "user")
+            .map(|e| e.body.as_str())
+            .collect();
+        assert_eq!(
+            user_prompts,
+            vec!["Implement the Prompt Graph feature"],
+            "Compaction metadata and system reminders must not be parsed as user prompts"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -3375,6 +3430,10 @@ mod tests {
         let tagged = "<USER_REQUEST>\nFix the bug\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\ntime=now\n</ADDITIONAL_METADATA>";
         assert_eq!(extract_user_query(tagged), "Fix the bug");
 
+        // Grok tagged user query
+        let grok_query = "<user_query>\nBuild the prompt graph\n</user_query>";
+        assert_eq!(extract_user_query(grok_query), "Build the prompt graph");
+
         // Untagged request with metadata stripped
         let untagged = "Fix the bug\n<ADDITIONAL_METADATA>\ntime=now\n</ADDITIONAL_METADATA>";
         assert_eq!(extract_user_query(untagged), "Fix the bug");
@@ -3385,5 +3444,34 @@ mod tests {
         // Pure metadata returns empty
         let pure_meta = "<ADDITIONAL_METADATA>\ntime=now\n</ADDITIONAL_METADATA>";
         assert_eq!(extract_user_query(pure_meta), "");
+
+        // System reminders return empty
+        assert_eq!(
+            extract_user_query("<system-reminder>\nAvailable skills\n</system-reminder>"),
+            ""
+        );
+        assert_eq!(
+            extract_user_query("<system_reminder>\nAvailable skills\n</system_reminder>"),
+            ""
+        );
+
+        // Continuation summary returns empty
+        assert_eq!(
+            extract_user_query("This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion."),
+            ""
+        );
+
+        // Rules and user info return empty
+        assert_eq!(
+            extract_user_query("<user_info>\nos=macos\n</user_info>\n\n<rules>\nRules\n</rules>"),
+            ""
+        );
+        assert_eq!(extract_user_query("<rules>\nOnly rules\n</rules>"), "");
+
+        // Command messages return empty
+        assert_eq!(
+            extract_user_query("<command-name>/clear</command-name>"),
+            ""
+        );
     }
 }

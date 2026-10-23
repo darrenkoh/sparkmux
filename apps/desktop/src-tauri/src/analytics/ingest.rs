@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 
 use super::event::{self, parse_iso_ms, Event};
 use crate::artifacts::{
-    agy_bookkeeping, agy_tool_result, args_detail, args_summary, extract_user_query,
+    agy_bookkeeping, agy_tool_result, args_detail, args_summary, extract_user_query, noise_prompt,
     reasoning_text, text_from_value, tool_args, truncate_chars, CliKind,
 };
 
@@ -335,15 +335,6 @@ fn fill_tool(ev: &mut Event, args: &Value) {
     (ev.b, ev.c) = body(&detail, DETAIL_CAP);
 }
 
-fn noise_prompt(text: &str) -> bool {
-    let head = text.trim_start();
-    head.starts_with("<system-reminder>")
-        || head.starts_with("<system_reminder>")
-        || head.starts_with("<command-")
-        || head.starts_with("<local-command-")
-        || head.starts_with("Caveat:")
-}
-
 fn push_queue(queue: &mut VecDeque<i64>, ev_count: &mut u64, chat_count: u64, ts: i64) {
     // Chat already consumed this index with a fallback time. Do not queue it.
     if *ev_count >= chat_count {
@@ -406,6 +397,52 @@ fn str_of_any(obj: &Value, keys: &[&str]) -> String {
         }
     }
     String::new()
+}
+
+/// Tool names that block on the user. Compare case-insensitively.
+const ASK_TOOLS: &[&str] = &[
+    "askuserquestion", // Claude Code
+    "exitplanmode",    // Claude Code plan approval
+    "ask_question",    // Antigravity
+    "ask_user",
+    "request_user_input",
+    "notify_user", // defensive, for Grok and Antigravity variants
+];
+
+fn is_ask_tool(name: &str) -> bool {
+    ASK_TOOLS.iter().any(|tool| name.eq_ignore_ascii_case(tool))
+}
+
+/// Question text for an ask tool: `question`, `questions[0].question`, `plan`, `message`, or `prompt`.
+fn ask_text(args: &Value) -> String {
+    let question = str_of_any(args, &["question"]);
+    if !question.is_empty() {
+        return question;
+    }
+    if let Some(first) = args
+        .get("questions")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+    {
+        let nested = str_of_any(first, &["question"]);
+        if !nested.is_empty() {
+            return nested;
+        }
+    }
+    str_of_any(args, &["plan", "message", "prompt"])
+}
+
+/// Extra marker next to a TOOL event. The TOOL event itself stays, so tool counts do not change.
+fn emit_ask(out: &mut Vec<Event>, ts: i64, name: &str, args: &Value, g: &str, h: &str) {
+    if !is_ask_tool(name) {
+        return;
+    }
+    let mut ask = Event::new(ts, event::ASK);
+    ask.n = name.to_string();
+    (ask.b, ask.c) = body(&ask_text(args), DETAIL_CAP);
+    ask.g = g.to_string();
+    ask.h = h.to_string();
+    out.push(ask);
 }
 
 fn get_args_value<'a>(val: &'a Value, buf: &'a mut Option<Value>) -> &'a Value {
@@ -880,7 +917,14 @@ fn grok_chat(
                     let parsed_args = get_args_value(args, &mut args_buf);
                     track_tool_code_delta(&ev.n, parsed_args, cur);
                     fill_tool(&mut ev, args);
+                    let ask_name = ev.n.clone();
+                    let ask_g = ev.g.clone();
+                    let ask_h = ev.h.clone();
+                    let ask_ts = ev.t;
                     tools.push(ev);
+                    // Grok buffers tool rows, then extends `out`. The marker
+                    // stays in that buffer so it follows its TOOL event.
+                    emit_ask(&mut tools, ask_ts, &ask_name, parsed_args, &ask_g, &ask_h);
                 }
             }
             let text = text_from_value(obj.get("content").unwrap_or(&Value::Null));
@@ -1218,9 +1262,12 @@ fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut
                         cur.pending.remove(&oldest);
                     }
                 }
-                cur.pending.insert(id.to_string(), (ts, name));
+                cur.pending.insert(id.to_string(), (ts, name.clone()));
             }
+            let ask_g = ev.g.clone();
+            let ask_h = ev.h.clone();
             out.push(ev);
+            emit_ask(out, ts, &name, parsed_args, &ask_g, &ask_h);
         }
         _ => {}
     }
@@ -1326,7 +1373,10 @@ fn agy_step(
                     let mut ev = Event::new(ts, event::TOOL);
                     fill_tool(&mut ev, args);
                     ev.n.clone_from(&name);
+                    let ask_g = ev.g.clone();
+                    let ask_h = ev.h.clone();
                     out.push(ev);
+                    emit_ask(out, ts, &name, parsed_args, &ask_g, &ask_h);
                     remember_agy_tool(cur, ts, name);
                 }
             }
@@ -2091,5 +2141,113 @@ mod tests {
         assert_eq!(cur.lines_removed, 0);
 
         let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    fn assert_ask_follows_tool(events: &[Event], name: &str, question: &str) {
+        let pos = events
+            .iter()
+            .position(|ev| ev.k == event::TOOL && ev.n == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        let tool = &events[pos];
+        let ask = events
+            .get(pos + 1)
+            .unwrap_or_else(|| panic!("no event after {name}"));
+        assert_eq!(ask.k, event::ASK, "{events:?}");
+        assert_eq!(ask.t, tool.t);
+        assert_eq!(ask.n, name);
+        assert!(
+            ask.b.contains(question),
+            "ask body {:?} does not contain {question}",
+            ask.b
+        );
+    }
+
+    #[test]
+    fn grok_ask_user_emits_tool_then_ask() {
+        let raw = serde_json::json!({
+            "type": "assistant",
+            "tool_calls": [
+                {"name": "ask_user", "arguments": {"question": "Which file?"}},
+                {"name": "read_file", "arguments": {"path": "src/main.rs"}}
+            ]
+        });
+        let mut cur = Cursor::default();
+        let mut out = Vec::new();
+        grok_chat(
+            raw.as_object().unwrap(),
+            &mut cur,
+            false,
+            1_000,
+            1_000,
+            &mut out,
+        );
+        assert_ask_follows_tool(&out, "ask_user", "Which file?");
+        assert!(out
+            .iter()
+            .any(|ev| ev.k == event::TOOL && ev.n == "read_file"));
+        assert_eq!(out.iter().filter(|ev| ev.k == event::ASK).count(), 1);
+    }
+
+    #[test]
+    fn claude_ask_user_question_emits_tool_then_ask() {
+        let ask = serde_json::json!({
+            "type": "tool_use",
+            "id": "t-ask",
+            "name": "AskUserQuestion",
+            "input": {"questions": [{"question": "Ship it?", "header": "Ship"}]}
+        });
+        let mut cur = Cursor::default();
+        let mut out = Vec::new();
+        claude_block(&ask, "opus", &mut cur, 42, &mut out);
+        assert_ask_follows_tool(&out, "AskUserQuestion", "Ship it?");
+
+        let plan = serde_json::json!({
+            "type": "tool_use",
+            "id": "t-plan",
+            "name": "ExitPlanMode",
+            "input": {"plan": "Ship the graph"}
+        });
+        let mut plan_out = Vec::new();
+        claude_block(&plan, "opus", &mut cur, 43, &mut plan_out);
+        assert_ask_follows_tool(&plan_out, "ExitPlanMode", "Ship the graph");
+
+        let bash = serde_json::json!({
+            "type": "tool_use",
+            "id": "t-bash",
+            "name": "Bash",
+            "input": {"command": "ls"}
+        });
+        let mut bash_out = Vec::new();
+        claude_block(&bash, "opus", &mut cur, 44, &mut bash_out);
+        assert_eq!(bash_out.len(), 1);
+        assert_eq!(bash_out[0].k, event::TOOL);
+        assert!(bash_out.iter().all(|ev| ev.k != event::ASK));
+    }
+
+    #[test]
+    fn agy_ask_question_emits_tool_then_ask() {
+        let raw = serde_json::json!({
+            "type": "PLANNER_RESPONSE",
+            "created_at": "2026-10-10T08:55:25.000Z",
+            "tool_calls": [
+                {"name": "ask_question", "args": {"question": "Continue?"}},
+                {"name": "read_file", "args": {"path": "x.rs"}}
+            ]
+        });
+        let mut cur = Cursor::default();
+        let mut out = Vec::new();
+        let mut saw = false;
+        agy_step(
+            raw.as_object().unwrap(),
+            &mut cur,
+            1_000,
+            &mut saw,
+            &mut out,
+        );
+        assert_ask_follows_tool(&out, "ask_question", "Continue?");
+        assert!(out
+            .iter()
+            .any(|ev| ev.k == event::TOOL && ev.n == "read_file"));
+        assert_eq!(out.iter().filter(|ev| ev.k == event::ASK).count(), 1);
     }
 }

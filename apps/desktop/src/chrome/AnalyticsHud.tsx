@@ -8,6 +8,7 @@ import {
   type TabAnalyticsStats,
 } from "../api";
 import { cliLabel, previewLine } from "./artifactModel";
+import type { NoteLabel } from "./attentionNotify";
 import { shortModelName } from "./miniStatModel";
 import {
   formatBytes,
@@ -18,6 +19,7 @@ import {
   estimateCost,
   estimateTotalCost,
 } from "./analyticsFormat";
+import PromptGraph from "./PromptGraph";
 import TerrainViewport from "./TerrainViewport";
 import TokenSpectrumChart from "./TokenSpectrumChart";
 
@@ -35,6 +37,8 @@ export interface AnalyticsHudProps {
   isStandaloneWindow?: boolean;
   pinned?: boolean;
   onTogglePin?: () => void;
+  /** Window classifier. `needs_user` lights the graph's awaiting beacon. */
+  attentionLabel?: NoteLabel | null;
 }
 
 export { formatBytes, formatNum, formatMs, formatUsd, estimateCost, estimateTotalCost };
@@ -43,6 +47,85 @@ const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
 const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
 const STORAGE_KEY_HUD_VIEW_MODE = "sparkmux_hud_view_mode";
 const STORAGE_KEY_HUD_CENTER_ROW_HEIGHT = "sparkmux_hud_center_row_height";
+const STORAGE_KEY_VIZ_SPLIT = "sparkmux.hud.vizSplitPct";
+const STORAGE_KEY_VIZ_MODE = "sparkmux.hud.vizMode";
+
+type VizMode = "split" | "map" | "graph";
+
+function getInitialVizSplitPct(): number {
+  try {
+    const val = localStorage.getItem(STORAGE_KEY_VIZ_SPLIT);
+    if (val) {
+      const num = parseFloat(val);
+      if (!isNaN(num) && num >= 15 && num <= 85) return num;
+    }
+  } catch {}
+  return 50;
+}
+
+function getInitialVizMode(): VizMode {
+  try {
+    const val = localStorage.getItem(STORAGE_KEY_VIZ_MODE);
+    if (val === "split" || val === "map" || val === "graph") return val;
+  } catch {}
+  return "split";
+}
+
+/**
+ * Map flex basis is `pct% - 4px` and the splitter takes about 12px.
+ * Keep each pane at least 220px. Does not force the 20–80 drag range.
+ */
+function clampVizPctForWidth(pct: number, width: number): number {
+  if (width <= 0) return pct;
+  const minPane = (224 / width) * 100;
+  const maxPane = ((width - 228) / width) * 100;
+  if (minPane >= maxPane) return pct;
+  return Math.min(maxPane, Math.max(minPane, pct));
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function VizPaneButtons({
+  pane,
+  mode,
+  onMaximize,
+  onCollapse,
+}: {
+  pane: "map" | "graph";
+  mode: VizMode;
+  onMaximize: () => void;
+  onCollapse: () => void;
+}) {
+  const maximized = mode === pane;
+  const label = pane === "map" ? "Area Map" : "Prompt Graph";
+  return (
+    <div className="pg-viz-btns">
+      <button
+        type="button"
+        className="stream-filter-btn pg-viz-btn"
+        title={maximized ? "Restore split" : "Maximize"}
+        aria-label={maximized ? "Restore split" : `Maximize ${label}`}
+        onClick={onMaximize}
+      >
+        ⤢
+      </button>
+      <button
+        type="button"
+        className="stream-filter-btn pg-viz-btn"
+        title="Collapse"
+        aria-label={`Collapse ${label}`}
+        onClick={onCollapse}
+      >
+        –
+      </button>
+    </div>
+  );
+}
 
 function getInitialCenterRowHeight(): number {
   try {
@@ -276,6 +359,7 @@ function usageDetail(ev: AnalyticsEvent): string {
 function eventPreview(ev: AnalyticsEvent): string {
   if (ev.k === "turn") return turnLabel(ev);
   if (ev.k === "usage") return usagePreview(ev);
+  if (ev.k === "ask") return ev.b ? previewLine(ev.b) : ev.a || "";
   if (ev.a) return ev.a;
   if (ev.b) return previewLine(ev.b);
   if (ev.ms) return formatDuration(ev.ms);
@@ -286,6 +370,7 @@ function eventPreview(ev: AnalyticsEvent): string {
 function eventDetail(ev: AnalyticsEvent): string {
   if (ev.k === "turn") return turnLabel(ev);
   if (ev.k === "usage") return usageDetail(ev);
+  if (ev.k === "ask") return ev.b || ev.a || "";
   if (ev.b) return ev.b;
   if (ev.a) return ev.a;
   if (ev.ms) return formatDuration(ev.ms);
@@ -352,6 +437,7 @@ export default function AnalyticsHud({
   isStandaloneWindow = false,
   pinned = false,
   onTogglePin,
+  attentionLabel,
 }: AnalyticsHudProps) {
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
   const [clearing, setClearing] = useState(false);
@@ -369,9 +455,14 @@ export default function AnalyticsHud({
   const transcriptKey = useRef("");
   const [bound, setBound] = useState({ sessionName, tabId });
   const sessionChanged = bound.sessionName !== sessionName || bound.tabId !== tabId;
+  const [graphRefreshKey, setGraphRefreshKey] = useState(0);
+  const lastGraphEventT = useRef<number | undefined>(undefined);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const vizSplitRef = useRef<HTMLDivElement>(null);
   if (sessionChanged) {
     fetchGen.current += 1;
     transcriptKey.current = "";
+    lastGraphEventT.current = undefined;
     setBound({ sessionName, tabId });
     setData(null);
   }
@@ -401,9 +492,14 @@ export default function AnalyticsHud({
   const [leftWidth, setLeftWidth] = useState<number>(getInitialLeftWidth);
   const [telemetryPercent, setTelemetryPercent] = useState<number>(getInitialTelemetryPercent);
   const [centerRowHeight, setCenterRowHeight] = useState<number>(getInitialCenterRowHeight);
+  const [vizSplitPct, setVizSplitPct] = useState<number>(getInitialVizSplitPct);
+  const [vizMode, setVizMode] = useState<VizMode>(getInitialVizMode);
+  const [vizWidth, setVizWidth] = useState(0);
+  const [vizNarrow, setVizNarrow] = useState(false);
   const [isDraggingV, setIsDraggingV] = useState(false);
   const [isDraggingH, setIsDraggingH] = useState(false);
   const [isDraggingCenterH, setIsDraggingCenterH] = useState(false);
+  const [isDraggingViz, setIsDraggingViz] = useState(false);
 
   const onStartDragV = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -502,6 +598,86 @@ export default function AnalyticsHud({
     window.addEventListener("mouseup", onUp);
   }, [centerRowHeight]);
 
+  const setVizModePersist = useCallback((mode: VizMode) => {
+    setVizMode(mode);
+    try {
+      localStorage.setItem(STORAGE_KEY_VIZ_MODE, mode);
+    } catch {}
+  }, []);
+
+  const onStartDragViz = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const split = (e.currentTarget as HTMLElement).parentElement;
+    if (!split) return;
+    setIsDraggingViz(true);
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    let rawPct = vizSplitPct;
+
+    const onMove = (ev: MouseEvent) => {
+      const bounds = split.getBoundingClientRect();
+      const width = bounds.width || split.clientWidth || 1;
+      const raw = ((ev.clientX - bounds.left) / width) * 100;
+      rawPct = raw;
+      const minPane = (224 / width) * 100;
+      const maxPane = ((width - 228) / width) * 100;
+      const lo = Math.max(20, minPane);
+      const hi = Math.min(80, maxPane);
+      if (lo > hi) return;
+      const shown = Math.min(hi, Math.max(lo, raw));
+      setVizSplitPct(shown);
+      try {
+        localStorage.setItem(STORAGE_KEY_VIZ_SPLIT, String(shown));
+      } catch {}
+    };
+
+    const onUp = () => {
+      setIsDraggingViz(false);
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      if (rawPct < 12) setVizModePersist("graph");
+      else if (rawPct > 88) setVizModePersist("map");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [vizSplitPct, setVizModePersist]);
+
+  useEffect(() => {
+    const el = vizSplitRef.current;
+    if (!el) return;
+    const apply = () => {
+      const width = el.clientWidth;
+      setVizWidth(width);
+      setVizNarrow(width < 560);
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key !== "0" && event.key !== "1" && event.key !== "2") return;
+      const frame = frameRef.current;
+      const active = document.activeElement;
+      if (!frame || !(active instanceof Node) || !frame.contains(active)) return;
+      if (isTypingTarget(active)) return;
+      event.preventDefault();
+      if (event.key === "1") setVizModePersist("map");
+      else if (event.key === "2") setVizModePersist("graph");
+      else setVizModePersist("split");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setVizModePersist]);
+
   const fetchData = () => {
     const gen = fetchGen.current;
     const session = sessionName;
@@ -512,6 +688,12 @@ export default function AnalyticsHud({
         if (res.session_name !== session || res.tab_id !== tab) return;
         setData(res);
         statsRef.current = res.stats;
+        const recent = res.stats?.recent_events ?? [];
+        const lastT = recent.length > 0 ? recent[recent.length - 1]?.t : undefined;
+        if (lastT !== lastGraphEventT.current) {
+          lastGraphEventT.current = lastT;
+          setGraphRefreshKey((key) => key + 1);
+        }
 
         // Detect new incoming events and trigger bright firing wave
         const count = res.stats?.total_events ?? 0;
@@ -812,6 +994,7 @@ export default function AnalyticsHud({
   );
   const engineLabel = (cliLabel(data?.cli ?? null) || "Standby").toUpperCase();
   const modelLabel = shortModelName(st?.active_model);
+  const effectiveViz: VizMode = vizNarrow && vizMode === "split" ? "map" : vizMode;
 
   return (
     <div
@@ -819,8 +1002,16 @@ export default function AnalyticsHud({
       onClick={isStandaloneWindow ? undefined : onClose}
     >
       <div
+        ref={frameRef}
         className="scifi-hud-frame fullscreen"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
+        onMouseDown={(event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          if (target.closest("input, textarea, select, button, a, [tabindex], .stream-body")) return;
+          frameRef.current?.focus();
+        }}
         role="dialog"
         aria-label="Sci-Fi Analytics HUD"
       >
@@ -1179,14 +1370,84 @@ export default function AnalyticsHud({
             style={{ ["--hud-bottom-row-height" as any]: `${centerRowHeight}px` }}
           >
             {/* Active agent session only. Tab Cumulative stays on the counters. */}
-            <TerrainViewport
-              timeline={data?.stats?.timeline ?? []}
-              activeModel={data?.stats?.active_model}
-              sessionName={sessionName}
-              tabName={tabName}
-              stats={data?.stats}
-              mapKey={`${sessionName}\0${tabId}\0${transcriptKey.current}`}
-            />
+            <div
+              ref={vizSplitRef}
+              className={`scifi-viz-split ${effectiveViz}`}
+              style={{ ["--viz-map-pct" as string]: `${clampVizPctForWidth(vizSplitPct, vizWidth)}%` } as React.CSSProperties}
+            >
+              {effectiveViz === "graph" ? (
+                <button
+                  type="button"
+                  className="scifi-viz-pane map scifi-viz-rail"
+                  onClick={() => setVizModePersist("split")}
+                  title="Restore Area Map"
+                >
+                  <span>AREA MAP ▸</span>
+                </button>
+              ) : (
+                <div className="scifi-viz-pane map">
+                  <TerrainViewport
+                    timeline={data?.stats?.timeline ?? []}
+                    activeModel={data?.stats?.active_model}
+                    sessionName={sessionName}
+                    tabName={tabName}
+                    stats={data?.stats}
+                    mapKey={`${sessionName}\0${tabId}\0${transcriptKey.current}`}
+                  />
+                  <div className="scifi-viz-pane-actions">
+                    <VizPaneButtons
+                      pane="map"
+                      mode={vizMode}
+                      onMaximize={() => setVizModePersist(vizMode === "map" ? "split" : "map")}
+                      onCollapse={() => setVizModePersist("graph")}
+                    />
+                  </div>
+                </div>
+              )}
+              {effectiveViz === "split" && (
+                <div
+                  className={`scifi-splitter-v viz ${isDraggingViz ? "dragging" : ""}`}
+                  onMouseDown={onStartDragViz}
+                  onDoubleClick={() => {
+                    setVizSplitPct(50);
+                    setVizModePersist("split");
+                    try {
+                      localStorage.setItem(STORAGE_KEY_VIZ_SPLIT, "50");
+                    } catch {}
+                  }}
+                  title="Drag to resize Area Map / Prompt Graph (Double-click to reset 50/50)"
+                />
+              )}
+              <div className="scifi-viz-pane graph">
+                {effectiveViz === "map" ? (
+                  <button
+                    type="button"
+                    className="scifi-viz-rail"
+                    onClick={() => setVizModePersist("split")}
+                    title="Restore Prompt Graph"
+                  >
+                    <span>◂ PROMPT GRAPH</span>
+                  </button>
+                ) : null}
+                <div className={effectiveViz === "map" ? "pg-collapsed-host" : "pg-live-host"}>
+                  <PromptGraph
+                    sessionName={sessionName}
+                    tabId={tabId}
+                    liveNeedsUser={attentionLabel === "needs_user"}
+                    refreshKey={graphRefreshKey}
+                    collapsed={effectiveViz === "map"}
+                    headerActions={
+                      <VizPaneButtons
+                        pane="graph"
+                        mode={vizMode}
+                        onMaximize={() => setVizModePersist(vizMode === "graph" ? "split" : "graph")}
+                        onCollapse={() => setVizModePersist("map")}
+                      />
+                    }
+                  />
+                </div>
+              </div>
+            </div>
 
             {/* Horizontal Splitter between 3D Area Map and Telemetry Row */}
             <div
@@ -1299,7 +1560,8 @@ export default function AnalyticsHud({
                           ev.k === "user" ||
                           ev.k === "reply" ||
                           ev.k === "think" ||
-                          ev.k === "turn"
+                          ev.k === "turn" ||
+                          ev.k === "ask"
                         );
                       if (eventFilter === "tools")
                         return ev.k === "tool" || ev.k === "result" || ev.k === "done";

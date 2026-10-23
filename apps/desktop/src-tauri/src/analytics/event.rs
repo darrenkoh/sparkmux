@@ -8,6 +8,9 @@ pub const USER: &str = "user";
 pub const THINK: &str = "think";
 pub const REPLY: &str = "reply";
 pub const TOOL: &str = "tool";
+/// The agent asked the user a question or for approval (ask-type tool).
+/// Emitted next to the matching TOOL event, with the same timestamp.
+pub const ASK: &str = "ask";
 pub const RESULT: &str = "result";
 /// A finished tool call with its duration and outcome.
 pub const DONE: &str = "done";

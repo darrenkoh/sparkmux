@@ -301,7 +301,7 @@ function PromptCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const prompt = turn.user?.body ?? turn.steps[0]?.body ?? "";
+  const prompt = turn.user?.body ?? (turn.steps.length > 0 ? "(Initial setup)" : "");
   const promptPreview = previewLine(prompt, 200) || "(Empty prompt)";
   const intermediateSteps = turnIntermediateSteps(turn);
   const stepCount = intermediateSteps.length;

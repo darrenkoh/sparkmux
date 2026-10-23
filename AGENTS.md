@@ -12,6 +12,8 @@ Desktop app that owns a private tmux server (`-L sparkmux`) and shows tiled real
   - `src-tauri/src/helper.rs` / `helper_model.rs`: Local Command Helper model runner (Qwen GGUF).
   - `src/chrome/TerrainViewport.tsx`: WebGL2 interactive 3D Topographical Area Map with organic irregular island coastlines, Gaussian mountain ridges across session channels (User, Think, Reply, Tool), elevation contours, particle fields, and camera controls.
   - `src/chrome/AnalyticsHud.tsx`: Sci-Fi Telemetry HUD with live Neural Cortex synaptogenesis visualization, Actions/Tools matrix, Token Spectrum gauge, Context buffer & TTFT metrics, and filtered Event Stream Log.
+  - `src/chrome/PromptGraph.tsx`: Prompt Graph split beside the Area Map. One user prompt as an SVG node flow (adaptive horizontal or vertical), with a scrubber and a live awaiting-input beacon.
+  - `src-tauri/src/analytics/prompt_graph.rs`: Read-only prompt segmentation for that graph. It does not ingest; `tab_analytics` already does.
   - `src/chrome/DockedStatsPanel.tsx`: Dockable Area Map panel.
 
 ## Product rules
