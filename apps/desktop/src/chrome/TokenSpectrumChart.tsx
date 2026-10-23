@@ -10,15 +10,6 @@ import {
   CHANNELS,
   processTimelineData,
   seamBeforeBucket,
-  perspective,
-  lookAt,
-  multiply,
-  projectPoint,
-  Z_LANES,
-  X_SPAN,
-  X_MIN,
-  MAX_VISUAL_Y,
-  getCameraProjector,
   computeContourScanProgress,
 } from "./tokenSpectrumMath";
 
@@ -36,11 +27,14 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
   const [mode, setMode] = useState<TokenChartMode>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_MODE);
-      if (saved === "contour" || saved === "burst" || saved === "gauge") {
+      if (saved === "stack" || saved === "burst" || saved === "gauge") {
         return saved;
       }
+      if (saved === "contour") {
+        return "stack";
+      }
     } catch {}
-    return "contour";
+    return "stack";
   });
 
   const [activeChannel, setActiveChannel] = useState<ChannelKey | null>(null);
@@ -53,22 +47,11 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
   const startTimeRef = useRef<number>(performance.now());
   const pointerXRef = useRef<number | null>(null);
 
-  // 45° Perspective Camera State (matching Area Map Orbit)
-  const cam3dRef = useRef({
-    azimuth: -0.42, // ~24° orbit
-    elevation: 0.62, // ~35.5° pitch
-    radius: 34,
-    isDragging: false,
-    lastX: 0,
-    lastY: 0,
-  });
-
   const processed = useMemo(() => processTimelineData(timeline, stats), [timeline, stats]);
   const processedData = processed.buckets;
   const seams = processed.seams;
 
   const clearHover = useCallback(() => {
-    cam3dRef.current.isDragging = false;
     pointerXRef.current = null;
     setHoverIndex(null);
     setHoverChannel(null);
@@ -119,7 +102,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
       } else if (mode === "burst") {
         drawBurstMode(ctx, w, h, processedData, seams, activeChannel, hoverIndex, pointerXRef.current);
       } else {
-        draw3DContourMode(
+        draw2DStackMode(
           ctx,
           w,
           h,
@@ -129,7 +112,7 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
           hoverIndex,
           hoverChannel,
           elapsed,
-          cam3dRef.current,
+          pointerXRef.current,
         );
       }
 
@@ -147,28 +130,8 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
     };
   }, [mode, processedData, seams, stats, activeChannel, hoverIndex, hoverChannel]);
 
-  // Pointer event handlers for 3D contour orbit and crosshair inspection
-  const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (mode === "contour") {
-      cam3dRef.current.isDragging = true;
-      cam3dRef.current.lastX = e.clientX;
-      cam3dRef.current.lastY = e.clientY;
-    }
-  }, [mode]);
-
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (mode === "contour" && cam3dRef.current.isDragging) {
-        const dx = e.clientX - cam3dRef.current.lastX;
-        const dy = e.clientY - cam3dRef.current.lastY;
-        cam3dRef.current.lastX = e.clientX;
-        cam3dRef.current.lastY = e.clientY;
-
-        cam3dRef.current.azimuth -= dx * 0.007;
-        cam3dRef.current.elevation = Math.max(0.12, Math.min(1.4, cam3dRef.current.elevation + dy * 0.006));
-        return;
-      }
-
       if (mode === "gauge" || processedData.length === 0) {
         pointerXRef.current = null;
         setHoverIndex(null);
@@ -188,86 +151,74 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         return;
       }
 
+      const padLeft = 54;
+      const padRight = 16;
+      const plotW = Math.max(1, rect.width - padLeft - padRight);
+      if (clientX < padLeft || clientX > rect.width - padRight) {
+        pointerXRef.current = null;
+        setHoverIndex(null);
+        setHoverChannel(null);
+        return;
+      }
+
       pointerXRef.current = clientX;
 
-      if (mode === "contour") {
-        const projector = getCameraProjector(rect.width, rect.height, cam3dRef.current);
-        let closestDist = Infinity;
-        let bestIdx: number | null = null;
-        let bestChan: ChannelKey | null = null;
+      const ratio = Math.max(0, Math.min(1, (clientX - padLeft) / plotW));
+      let best = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < processedData.length; i++) {
+        const dist = Math.abs(processedData[i].xFraction - ratio);
+        if (dist < bestDist) {
+          best = i;
+          bestDist = dist;
+        }
+      }
+      setHoverIndex(best);
 
-        const n = processedData.length;
-        if (n >= 1) {
-          let maxAltitude = 1;
-          for (const d of processedData) {
-            maxAltitude = Math.max(maxAltitude, d.cache, d.input, d.reasoning, d.output);
-          }
-          maxAltitude = Math.max(50, Math.ceil(maxAltitude * 1.15));
-
-          for (let i = 0; i < n; i++) {
-            const x = X_MIN + processedData[i].xFraction * X_SPAN;
-            for (const ch of CHANNELS) {
-              if (activeChannel && activeChannel !== ch.key) continue;
-              const val = processedData[i][ch.key];
-              const y = (val / maxAltitude) * MAX_VISUAL_Y;
-              const z = Z_LANES[ch.key];
-              const pt = projector([x, y, z]);
-              if (pt) {
-                const dist = Math.hypot(clientX - pt[0], clientY - pt[1]);
-                if (dist < closestDist) {
-                  closestDist = dist;
-                  bestIdx = i;
-                  bestChan = ch.key;
-                }
-              }
-            }
+      if (mode === "stack") {
+        const d = processedData[best];
+        let maxAltitude = 1;
+        for (const item of processedData) {
+          if (activeChannel) {
+            maxAltitude = Math.max(maxAltitude, item[activeChannel]);
+          } else {
+            maxAltitude = Math.max(maxAltitude, item.stackOutput, item.total);
           }
         }
+        maxAltitude = Math.max(100, Math.ceil(maxAltitude * 1.15));
 
-        // Proximity threshold: lock-on if within 46px, otherwise dismiss popup immediately
-        if (closestDist <= 46 && bestIdx !== null && bestChan !== null) {
-          setHoverIndex(bestIdx);
-          setHoverChannel(bestChan);
+        const padT = 16;
+        const padB = 26;
+        const plotH = Math.max(1, rect.height - padT - padB);
+        const yBase = padT + plotH;
+
+        if (activeChannel) {
+          setHoverChannel(activeChannel);
         } else {
-          setHoverIndex(null);
-          setHoverChannel(null);
+          // Identify which stacked layer is under the cursor
+          const yCache = yBase - (d.stackCache / maxAltitude) * plotH;
+          const yInput = yBase - (d.stackInput / maxAltitude) * plotH;
+          const yReasoning = yBase - (d.stackReasoning / maxAltitude) * plotH;
+          const yOutput = yBase - (d.stackOutput / maxAltitude) * plotH;
+
+          if (clientY >= yCache && clientY <= yBase + 10) {
+            setHoverChannel("cache");
+          } else if (clientY >= yInput && clientY < yCache) {
+            setHoverChannel("input");
+          } else if (clientY >= yReasoning && clientY < yInput) {
+            setHoverChannel("reasoning");
+          } else if (clientY >= yOutput - 10 && clientY < yReasoning) {
+            setHoverChannel("output");
+          } else {
+            setHoverChannel(null);
+          }
         }
       } else {
-        const padLeft = 54;
-        const padRight = 16;
-        const plotW = Math.max(1, rect.width - padLeft - padRight);
-        if (clientX < padLeft || clientX > rect.width - padRight) {
-          setHoverIndex(null);
-          setHoverChannel(null);
-          return;
-        }
-        const ratio = Math.max(0, Math.min(1, (clientX - padLeft) / plotW));
-        let best = 0;
-        let bestDist = Infinity;
-        for (let i = 0; i < processedData.length; i++) {
-          const dist = Math.abs(processedData[i].xFraction - ratio);
-          if (dist < bestDist) {
-            best = i;
-            bestDist = dist;
-          }
-        }
-        setHoverIndex(processedData.length > 0 ? best : null);
-        setHoverChannel(null);
+        setHoverChannel(activeChannel);
       }
     },
     [mode, processedData, activeChannel],
   );
-
-  const onPointerUp = useCallback(() => {
-    cam3dRef.current.isDragging = false;
-  }, []);
-
-  const onDoubleClick = useCallback(() => {
-    if (mode === "contour") {
-      cam3dRef.current.azimuth = -0.42;
-      cam3dRef.current.elevation = 0.62;
-    }
-  }, [mode]);
 
   const hoveredBucket = hoverIndex !== null && processedData[hoverIndex] ? processedData[hoverIndex] : null;
   const gappedSeam = hoverIndex === null ? null : seamBeforeBucket(processedData, seams, hoverIndex);
@@ -279,11 +230,11 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         <div className="token-chart-modes">
           <button
             type="button"
-            className={mode === "contour" ? "on" : ""}
-            onClick={() => handleModeChange("contour")}
-            title="3D topographical contour elevation relief with orbital camera"
+            className={mode === "stack" ? "on" : ""}
+            onClick={() => handleModeChange("stack")}
+            title="Continuous 2D stacked token distribution over time with neon contours"
           >
-            3D CONTOUR
+            2D STACK
           </button>
           <button
             type="button"
@@ -313,11 +264,8 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
         <canvas
           ref={canvasRef}
           className="token-spectrum-canvas"
-          onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
           onPointerLeave={clearHover}
-          onDoubleClick={onDoubleClick}
         />
 
         {/* Hover Holographic Tooltip HUD */}
@@ -415,10 +363,10 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 }
 
 // ---------------------------------------------------------------------------
-// Canvas Drawing: 3D Topographical Contour Elevation Mode
+// Canvas Drawing: 2D Continuous Stacked Area Mode
 // ---------------------------------------------------------------------------
 
-function draw3DContourMode(
+function draw2DStackMode(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
@@ -428,504 +376,285 @@ function draw3DContourMode(
   hoverIndex: number | null,
   hoverChannel: ChannelKey | null,
   elapsed: number,
-  cam: { azimuth: number; elevation: number; radius: number },
+  pointerX: number | null,
 ) {
-  const eyeX = cam.radius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
-  const eyeY = cam.radius * Math.sin(cam.elevation);
-  const eyeZ = cam.radius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
-
-  const matProj = perspective((38 * Math.PI) / 180, w / h, 0.5, 200);
-  const matView = lookAt([eyeX, eyeY, eyeZ], [0, 1.2, 0]);
-  const matVP = multiply(matProj, matView);
-  const project = (p: [number, number, number]) => projectPoint(matVP, p, w, h);
-
-  const xSpan = X_SPAN;
-  const xMin = X_MIN;
-  const xMax = xMin + xSpan;
-  const zLanes = Z_LANES;
+  const padL = 54;
+  const padR = 16;
+  const padT = 16;
+  const padB = 26;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const yBase = padT + plotH;
 
   let maxAltitude = 1;
   for (const d of data) {
     if (activeChannel) {
       maxAltitude = Math.max(maxAltitude, d[activeChannel]);
     } else {
-      maxAltitude = Math.max(maxAltitude, d.cache, d.input, d.reasoning, d.output);
+      maxAltitude = Math.max(maxAltitude, d.stackOutput, d.total);
     }
   }
-  maxAltitude = Math.max(50, Math.ceil(maxAltitude * 1.15));
-  const maxVisualY = MAX_VISUAL_Y;
-  // Synchronized chronological scan sweep progress across time [0, 1)
-  const sweepFrac = computeContourScanProgress(elapsed);
-  const sweepX = xMin + sweepFrac * xSpan;
+  maxAltitude = Math.max(100, Math.ceil(maxAltitude * 1.15));
 
-  // 1. Draw 3D Base Matrix Platform Grid (Razor-thin 0.6px lines with holographic crosses)
-  ctx.save();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-  ctx.lineWidth = 0.6;
-
-  // Longitudinal channel lanes along X
-  const allLanes = [-6.0, -4.5, -1.5, 1.5, 4.5, 6.0];
-  for (const z of allLanes) {
-    const p0 = project([xMin, 0, z]);
-    const p1 = project([xMax, 0, z]);
-    if (p0 && p1) {
-      ctx.beginPath();
-      ctx.moveTo(p0[0], p0[1]);
-      ctx.lineTo(p1[0], p1[1]);
-      ctx.stroke();
-    }
-  }
-
-  // Transverse time steps across X
-  const numGridSteps = 12;
-  for (let s = 0; s <= numGridSteps; s++) {
-    const gx = xMin + (s / numGridSteps) * xSpan;
-    const p0 = project([gx, 0, -6.0]);
-    const p1 = project([gx, 0, 6.0]);
-    if (p0 && p1) {
-      ctx.beginPath();
-      ctx.moveTo(p0[0], p0[1]);
-      ctx.lineTo(p1[0], p1[1]);
-      ctx.stroke();
-    }
-  }
-
-  // Grid intersection holographic tick marks (+)
-  ctx.strokeStyle = "rgba(255, 154, 60, 0.25)";
-  ctx.lineWidth = 0.6;
-  for (let s = 0; s <= numGridSteps; s += 2) {
-    const gx = xMin + (s / numGridSteps) * xSpan;
-    for (const z of [-4.5, -1.5, 1.5, 4.5]) {
-      const gp = project([gx, 0, z]);
-      if (gp) {
-        ctx.beginPath();
-        ctx.moveTo(gp[0] - 2.5, gp[1]);
-        ctx.lineTo(gp[0] + 2.5, gp[1]);
-        ctx.moveTo(gp[0], gp[1] - 2.5);
-        ctx.lineTo(gp[0], gp[1] + 2.5);
-        ctx.stroke();
-      }
-    }
-  }
-
-  // Base platform outer perimeter box
-  ctx.strokeStyle = "rgba(255, 154, 60, 0.35)";
-  ctx.lineWidth = 0.8;
-  const c0 = project([xMin, 0, -6.0]);
-  const c1 = project([xMax, 0, -6.0]);
-  const c2 = project([xMax, 0, 6.0]);
-  const c3 = project([xMin, 0, 6.0]);
-  if (c0 && c1 && c2 && c3) {
-    ctx.beginPath();
-    ctx.moveTo(c0[0], c0[1]);
-    ctx.lineTo(c1[0], c1[1]);
-    ctx.lineTo(c2[0], c2[1]);
-    ctx.lineTo(c3[0], c3[1]);
-    ctx.closePath();
-    ctx.stroke();
-  }
-
-  // Lane Labels on the left edge in 3D
-  ctx.textAlign = "right";
-  CHANNELS.forEach((ch) => {
-    const isSelected = activeChannel === ch.key || hoverChannel === ch.key;
-    const isFaded =
-      (activeChannel !== null && activeChannel !== ch.key) ||
-      (hoverChannel !== null && hoverChannel !== ch.key && activeChannel === null);
-    const z = zLanes[ch.key];
-    const pt = project([xMin - 0.5, 0, z]);
-    if (pt) {
-      ctx.fillStyle = isFaded ? "rgba(255, 255, 255, 0.22)" : ch.color;
-      ctx.font = isSelected
-        ? "bold 10px ui-monospace, SFMono-Regular, Menlo, monospace"
-        : "9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-      ctx.fillText(`[${ch.tag}] ${ch.label}`, pt[0] - 6, pt[1] + 3);
-    }
-  });
-
-  // Time Axis text along the front
-  const tStart = project([xMin, 0, 6.6]);
-  const tEnd = project([xMax, 0, 6.6]);
-  if (tStart && tEnd) {
-    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-    ctx.font = "9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.textAlign = "left";
-    ctx.fillText("◄ T0 (START)", tStart[0], tStart[1]);
-    ctx.textAlign = "right";
-    ctx.fillText("LATEST ►", tEnd[0], tEnd[1]);
-  }
-  ctx.strokeStyle = "rgba(255, 154, 60, 0.45)";
-  ctx.lineWidth = 1;
-  for (const seam of seams) {
-    const seamX = xMin + seam.fraction * xSpan;
-    const pt = project([seamX, 0, 6.6]);
-    if (!pt) continue;
-    ctx.beginPath();
-    ctx.moveTo(pt[0] - 3, pt[1] + 2);
-    ctx.lineTo(pt[0] - 1, pt[1] - 2);
-    ctx.moveTo(pt[0] + 1, pt[1] + 2);
-    ctx.lineTo(pt[0] + 3, pt[1] - 2);
-    ctx.stroke();
-  }
-  ctx.restore();
+  // 1. Grid, Iso-Contours and Time Seams
+  drawGridAndContours(ctx, padL, padT, plotW, plotH, maxAltitude, data, seams);
 
   const n = data.length;
+  if (n === 0) return;
 
-  // 2. Cyber Matrix Terrain Mesh: Cross-Channel Transverse Wireframe Ribs
-  if (n >= 2 && !activeChannel) {
-    ctx.save();
-    ctx.lineWidth = 0.65;
-    ctx.strokeStyle = "rgba(120, 200, 255, 0.16)";
-    const meshStep = Math.max(1, Math.floor(n / 14));
-    for (let i = 0; i < n; i += meshStep) {
-      const x = xMin + data[i].xFraction * xSpan;
-      ctx.beginPath();
-      let firstMesh = false;
-      for (const ch of CHANNELS) {
-        const z = zLanes[ch.key];
-        const val = data[i][ch.key];
-        const y = (val / maxAltitude) * maxVisualY;
-        const pt = project([x, y, z]);
-        if (!pt) continue;
-        if (!firstMesh) {
-          ctx.moveTo(pt[0], pt[1]);
-          firstMesh = true;
-        } else {
-          ctx.lineTo(pt[0], pt[1]);
-        }
-      }
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // 3. Draw 3D Topographical Ridge Curtains
-  const sortedChannels = [...CHANNELS].sort((a, b) => {
-    const distA = Math.hypot(eyeX, eyeY, eyeZ - zLanes[a.key]);
-    const distB = Math.hypot(eyeX, eyeY, eyeZ - zLanes[b.key]);
-    return distB - distA;
+  // 2. Compute 2D coordinates for all data points
+  // Order of stack from bottom to top: Cache -> Input -> Reasoning -> Output
+  const pts = data.map((d) => {
+    const x = padL + d.xFraction * plotW;
+    return {
+      x,
+      yBase,
+      yCache: yBase - (d.stackCache / maxAltitude) * plotH,
+      yInput: yBase - (d.stackInput / maxAltitude) * plotH,
+      yReasoning: yBase - (d.stackReasoning / maxAltitude) * plotH,
+      yOutput: yBase - (d.stackOutput / maxAltitude) * plotH,
+      yIsolated: activeChannel ? yBase - (d[activeChannel] / maxAltitude) * plotH : yBase,
+    };
   });
 
-  if (n >= 2) {
-    sortedChannels.forEach((ch) => {
-      const isSelected = activeChannel === ch.key || hoverChannel === ch.key;
-      const isFaded = activeChannel !== null && !isSelected;
-      if (isFaded) return;
+  // Helper to draw smooth horizontal monotonic bezier splines
+  const drawSpline = (points: Array<{ x: number; y: number }>, reverse = false) => {
+    if (points.length === 0) return;
+    const list = reverse ? [...points].reverse() : points;
+    if (!reverse) {
+      ctx.lineTo(list[0].x, list[0].y);
+    }
+    for (let i = 0; i < list.length - 1; i++) {
+      const p0 = list[i];
+      const p1 = list[i + 1];
+      const midX = (p0.x + p1.x) / 2;
+      ctx.bezierCurveTo(midX, p0.y, midX, p1.y, p1.x, p1.y);
+    }
+  };
 
-      const z = zLanes[ch.key];
-
-      const topPts: Array<[number, number, number] | null> = [];
-      const botPts: Array<[number, number, number] | null> = [];
-
-      for (let i = 0; i < n; i++) {
-        const x = xMin + data[i].xFraction * xSpan;
-        const val = data[i][ch.key];
-        const y = (val / maxAltitude) * maxVisualY;
-
-        topPts.push(project([x, y, z]));
-        botPts.push(project([x, 0, z]));
-      }
-
-      // 3A. Vertical Ribbon Curtain Drop (fading downward to baseline)
-      ctx.save();
-      ctx.beginPath();
-      let firstValid = false;
-
-      for (let i = 0; i < n; i++) {
-        const pt = topPts[i];
-        if (!pt) continue;
-        if (!firstValid) {
-          ctx.moveTo(pt[0], pt[1]);
-          firstValid = true;
-        } else {
-          ctx.lineTo(pt[0], pt[1]);
-        }
-      }
-
-      for (let i = n - 1; i >= 0; i--) {
-        const pt = botPts[i];
-        if (pt) ctx.lineTo(pt[0], pt[1]);
-      }
-      ctx.closePath();
-
-      ctx.fillStyle = ch.bgGradient;
-      ctx.fill();
-
-      // 3B. Transverse vertical struts (thin 0.6px lines)
-      ctx.strokeStyle = ch.color;
-      ctx.globalAlpha = 0.2;
-      ctx.lineWidth = 0.6;
-      const step = Math.max(1, Math.floor(n / 20));
-      for (let i = 0; i < n; i += step) {
-        const tP = topPts[i];
-        const bP = botPts[i];
-        if (tP && bP) {
-          ctx.beginPath();
-          ctx.moveTo(tP[0], tP[1]);
-          ctx.lineTo(bP[0], bP[1]);
-          ctx.stroke();
-        }
-      }
-
-      // 3C. 3D Elevation Iso-Contours (topographical height tiers at 25%, 50%, 75%)
-      const contourTiers = [0.25, 0.5, 0.75];
-      ctx.strokeStyle = ch.color;
-      ctx.lineWidth = 0.75;
-      for (const tier of contourTiers) {
-        ctx.globalAlpha = 0.32;
-        ctx.beginPath();
-        let startedContour = false;
-        for (let i = 0; i < n; i++) {
-          const val = data[i][ch.key];
-          const y = (val / maxAltitude) * maxVisualY * tier;
-          if (y < 0.04) continue;
-          const x = xMin + data[i].xFraction * xSpan;
-          const pt = project([x, y, z]);
-          if (!pt) continue;
-          if (!startedContour) {
-            ctx.moveTo(pt[0], pt[1]);
-            startedContour = true;
-          } else {
-            ctx.lineTo(pt[0], pt[1]);
-          }
-        }
-        ctx.stroke();
-      }
-
-      // 3D. Glowing Top Ridge Crest (Thinned to 0.95px / 1.4px)
-      ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = ch.color;
-      ctx.shadowColor = ch.glow;
-      ctx.shadowBlur = isSelected ? 10 : 5;
-      ctx.lineWidth = isSelected ? 1.4 : 0.95;
-
-      ctx.beginPath();
-      let started = false;
-      for (let i = 0; i < n; i++) {
-        const pt = topPts[i];
-        if (!pt) continue;
-        if (!started) {
-          ctx.moveTo(pt[0], pt[1]);
-          started = true;
-        } else {
-          ctx.lineTo(pt[0], pt[1]);
-        }
-      }
-      ctx.stroke();
-
-      // 3E. Glowing Crest Core Beads on Non-Zero Points (thin 1.8px)
-      ctx.shadowBlur = 0;
-      for (let i = 0; i < n; i++) {
-        const pt = topPts[i];
-        if (!pt || data[i][ch.key] === 0) continue;
-        ctx.beginPath();
-        ctx.arc(pt[0], pt[1], 1.8, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
-        ctx.fill();
-      }
-
-      // 3F. Bioluminescent Energy Pulse Surging Along Ridge Crest (synchronized with 3D scan sweep line)
-      const pulsePhase = sweepFrac;
-      let pIdx = 0;
-      for (let i = 0; i < n - 1; i++) {
-        if (data[i + 1].xFraction >= pulsePhase) {
-          pIdx = i;
-          break;
-        }
-        pIdx = i;
-      }
-      const pNext = Math.min(n - 1, pIdx + 1);
-      const spanFrac = data[pNext].xFraction - data[pIdx].xFraction;
-      const sub = spanFrac <= 0 ? 0 : (pulsePhase - data[pIdx].xFraction) / spanFrac;
-      const xPulse = sweepX;
-      const valPulse = data[pIdx][ch.key] * (1 - sub) + data[pNext][ch.key] * sub;
-      const yPulse = (valPulse / maxAltitude) * maxVisualY;
-      const pulsePt = project([xPulse, yPulse, z]);
-
-      if (pulsePt && (yPulse > 0.04 || valPulse > 0)) {
-        ctx.shadowColor = ch.glow;
-        ctx.shadowBlur = 12;
-        ctx.fillStyle = "#ffffff";
-        ctx.beginPath();
-        ctx.arc(pulsePt[0], pulsePt[1], 2.4, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.strokeStyle = ch.color;
-        ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        ctx.arc(pulsePt[0], pulsePt[1], 5.0, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    });
-  }
-
-  // 4. 3D Laser Scan Sweep Line across time + Spark Dust
-  const swP0 = project([sweepX, 0, -5.5]);
-  const swP1 = project([sweepX, 0, 5.5]);
-  const swTop = project([sweepX, maxVisualY * 1.02, 0]);
-
-  if (swP0 && swP1) {
+  const drawLayer = (
+    topPts: Array<{ x: number; y: number }>,
+    botPts: Array<{ x: number; y: number }>,
+    ch: (typeof CHANNELS)[number],
+    isTargeted: boolean,
+    isDimmed: boolean,
+  ) => {
     ctx.save();
-    ctx.strokeStyle = "rgba(255, 154, 60, 0.75)";
-    ctx.lineWidth = 0.9;
-    ctx.shadowColor = "#ff9a3c";
-    ctx.shadowBlur = 8;
+
+    // Layer fill polygon
     ctx.beginPath();
-    ctx.moveTo(swP0[0], swP0[1]);
-    ctx.lineTo(swP1[0], swP1[1]);
+    ctx.moveTo(topPts[0].x, topPts[0].y);
+    drawSpline(topPts, false);
+    ctx.lineTo(botPts[botPts.length - 1].x, botPts[botPts.length - 1].y);
+    drawSpline(botPts, true);
+    ctx.closePath();
+
+    // Linear gradient from top to bottom of chart
+    const grad = ctx.createLinearGradient(0, padT, 0, yBase);
+    if (isDimmed) {
+      grad.addColorStop(0, "rgba(255, 255, 255, 0.05)");
+      grad.addColorStop(1, "rgba(255, 255, 255, 0.01)");
+    } else {
+      const topAlpha = isTargeted ? 0.42 : 0.28;
+      const botAlpha = isTargeted ? 0.15 : 0.08;
+      grad.addColorStop(0, ch.glow.replace(/[\d.]+\)$/, `${topAlpha})`));
+      grad.addColorStop(1, ch.glow.replace(/[\d.]+\)$/, `${botAlpha})`));
+    }
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Glowing Neon Contour Top Edge
+    ctx.beginPath();
+    ctx.moveTo(topPts[0].x, topPts[0].y);
+    drawSpline(topPts, false);
+    ctx.strokeStyle = isDimmed ? "rgba(255, 255, 255, 0.15)" : ch.color;
+    ctx.lineWidth = isTargeted ? 2.2 : isDimmed ? 0.8 : 1.4;
+    if (!isDimmed) {
+      ctx.shadowColor = ch.glow;
+      ctx.shadowBlur = isTargeted ? 10 : 5;
+    }
     ctx.stroke();
 
-    if (swTop) {
-      ctx.fillStyle = "rgba(255, 154, 60, 0.1)";
-      ctx.beginPath();
-      ctx.moveTo(swP0[0], swP0[1]);
-      ctx.lineTo(swTop[0], swTop[1]);
-      ctx.lineTo(swP1[0], swP1[1]);
-      ctx.closePath();
-      ctx.fill();
-    }
+    ctx.restore();
+  };
 
-    // Floating spark particles rising along sweep plane
-    for (let p = 0; p < 4; p++) {
-      const pPhase = (elapsed * 1.4 + p * 0.25) % 1.0;
-      const pY = pPhase * maxVisualY * 0.85;
-      const pZ = -4.5 + ((p * 2.8 + elapsed * 1.2) % 9.0);
-      const spPt = project([sweepX, pY, pZ]);
-      if (spPt) {
-        ctx.fillStyle = `rgba(255, 190, 80, ${1 - pPhase})`;
-        ctx.beginPath();
-        ctx.arc(spPt[0], spPt[1], 1.2, 0, Math.PI * 2);
-        ctx.fill();
+  if (activeChannel) {
+    // Isolated Channel Mode
+    const ch = CHANNELS.find((c) => c.key === activeChannel)!;
+    const topPts = pts.map((p) => ({ x: p.x, y: p.yIsolated }));
+    const botPts = pts.map((p) => ({ x: p.x, y: p.yBase }));
+    drawLayer(topPts, botPts, ch, true, false);
+  } else {
+    // 4 Stacked Layers from Bottom to Top: Cache -> Input -> Reasoning -> Output
+    const layers = [
+      {
+        channel: CHANNELS[0], // cache
+        top: pts.map((p) => ({ x: p.x, y: p.yCache })),
+        bot: pts.map((p) => ({ x: p.x, y: p.yBase })),
+      },
+      {
+        channel: CHANNELS[1], // input
+        top: pts.map((p) => ({ x: p.x, y: p.yInput })),
+        bot: pts.map((p) => ({ x: p.x, y: p.yCache })),
+      },
+      {
+        channel: CHANNELS[2], // reasoning
+        top: pts.map((p) => ({ x: p.x, y: p.yReasoning })),
+        bot: pts.map((p) => ({ x: p.x, y: p.yInput })),
+      },
+      {
+        channel: CHANNELS[3], // output
+        top: pts.map((p) => ({ x: p.x, y: p.yOutput })),
+        bot: pts.map((p) => ({ x: p.x, y: p.yReasoning })),
+      },
+    ];
+
+    for (const lay of layers) {
+      const isTargeted = hoverChannel === lay.channel.key;
+      const isDimmed = hoverChannel !== null && !isTargeted;
+      drawLayer(lay.top, lay.bot, lay.channel, isTargeted, isDimmed);
+    }
+  }
+
+  // 3. Synchronized Chronological Scan Sweep Line
+  const sweepFrac = computeContourScanProgress(elapsed);
+  const sweepX = padL + sweepFrac * plotW;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 205, 65, 0.40)";
+  ctx.lineWidth = 1;
+  ctx.shadowColor = "rgba(255, 205, 65, 0.6)";
+  ctx.shadowBlur = 4;
+  ctx.beginPath();
+  ctx.moveTo(sweepX, padT);
+  ctx.lineTo(sweepX, yBase);
+  ctx.stroke();
+
+  // Playhead top tick indicator
+  ctx.fillStyle = "#ffcd41";
+  ctx.beginPath();
+  ctx.moveTo(sweepX - 3, padT);
+  ctx.lineTo(sweepX + 3, padT);
+  ctx.lineTo(sweepX, padT + 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // 4. Hover Crosshair & Reticle Nodes
+  if (hoverIndex !== null && data[hoverIndex]) {
+    const hd = data[hoverIndex];
+    const hp = pts[hoverIndex];
+    const hx = hp.x;
+
+    // Vertical dashed crosshair
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(hx, padT);
+    ctx.lineTo(hx, yBase);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // Node points at the stack boundaries
+    if (activeChannel) {
+      const ch = CHANNELS.find((c) => c.key === activeChannel)!;
+      drawTargetReticle(ctx, hx, hp.yIsolated, ch, hd[activeChannel]);
+    } else {
+      const nodes = [
+        { key: "cache" as ChannelKey, y: hp.yCache, val: hd.cache, ch: CHANNELS[0] },
+        { key: "input" as ChannelKey, y: hp.yInput, val: hd.input, ch: CHANNELS[1] },
+        { key: "reasoning" as ChannelKey, y: hp.yReasoning, val: hd.reasoning, ch: CHANNELS[2] },
+        { key: "output" as ChannelKey, y: hp.yOutput, val: hd.output, ch: CHANNELS[3] },
+      ];
+
+      for (const node of nodes) {
+        if (node.val <= 0) continue;
+        const isHovered = hoverChannel === node.key;
+
+        if (isHovered) {
+          drawTargetReticle(ctx, hx, node.y, node.ch, node.val);
+        } else {
+          // Subtle core bead for unhovered stack boundaries
+          ctx.save();
+          ctx.fillStyle = node.ch.color;
+          ctx.beginPath();
+          ctx.arc(hx, node.y, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
       }
+    }
+  }
+
+  // 5. Idle Seam Fold Hover Labels
+  if (pointerX !== null) {
+    ctx.save();
+    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const seam of seams) {
+      const x = padL + seam.fraction * plotW;
+      if (Math.abs(pointerX - x) > 8) continue;
+      const width = ctx.measureText(seam.label).width;
+      const y = padT + 11;
+      ctx.fillStyle = "rgba(10, 12, 16, 0.92)";
+      ctx.fillRect(x - width / 2 - 4, y - 7, width + 8, 14);
+      ctx.fillStyle = "#ff9a3c";
+      ctx.fillText(seam.label, x, y);
     }
     ctx.restore();
   }
 
-  // 5. Direct Node Lock-on Tactical Reticle on the EXACT Hovered Node
-  if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < n) {
-    const hX = xMin + data[hoverIndex].xFraction * xSpan;
-    const d = data[hoverIndex];
-
-    // Determine target channel: prefer hoverChannel if detected, else channel with highest value
-    let targetChan: ChannelKey = hoverChannel ?? "cache";
-    if (!hoverChannel) {
-      let maxV = -1;
-      CHANNELS.forEach((c) => {
-        if (d[c.key] > maxV) {
-          maxV = d[c.key];
-          targetChan = c.key;
-        }
-      });
-    }
-
-    const ch = CHANNELS.find((c) => c.key === targetChan)!;
-    const z = zLanes[targetChan];
-    const val = d[targetChan];
-    const peakY = (val / maxAltitude) * maxVisualY;
-
-    const basePt = project([hX, 0, z]);
-    const nodePt = project([hX, peakY, z]);
-    const topPinPt = project([hX, peakY + 0.9, z]);
-
-    if (basePt && nodePt) {
-      ctx.save();
-
-      // 5A. Ground waypoint radar ellipse
-      ctx.strokeStyle = ch.color;
-      ctx.lineWidth = 0.8;
-      ctx.shadowColor = ch.glow;
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      ctx.ellipse(basePt[0], basePt[1], 6, 3, 0, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // 5B. Razor-thin vertical altitude drop line (dashed 2,2)
-      ctx.setLineDash([2, 2]);
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
-      ctx.lineWidth = 0.75;
-      ctx.shadowBlur = 0;
-      ctx.beginPath();
-      ctx.moveTo(basePt[0], basePt[1]);
-      ctx.lineTo(nodePt[0], nodePt[1]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // 5C. Laser pin antenna to beacon point
-      if (topPinPt) {
-        ctx.strokeStyle = ch.color;
-        ctx.lineWidth = 0.85;
-        ctx.shadowColor = ch.glow;
-        ctx.shadowBlur = 6;
-        ctx.beginPath();
-        ctx.moveTo(nodePt[0], nodePt[1]);
-        ctx.lineTo(topPinPt[0], topPinPt[1]);
-        ctx.stroke();
-      }
-
-      // 5D. Tactical Holographic Lock-on Reticle around Node
-      const reticleAngle = elapsed * 2.2;
-      const reticleR = 8.5;
-
-      ctx.strokeStyle = ch.color;
-      ctx.lineWidth = 1.0;
-      ctx.shadowColor = ch.glow;
-      ctx.shadowBlur = 8;
-
-      // Rotating 4-corner targeting brackets
-      for (let k = 0; k < 4; k++) {
-        const a = reticleAngle + (k * Math.PI) / 2;
-        ctx.beginPath();
-        ctx.arc(nodePt[0], nodePt[1], reticleR, a - 0.25, a + 0.25);
-        ctx.stroke();
-      }
-
-      // Cardinal crosshair ticks
-      for (let k = 0; k < 4; k++) {
-        const a = (k * Math.PI) / 2;
-        const tx0 = nodePt[0] + Math.cos(a) * (reticleR + 2);
-        const ty0 = nodePt[1] + Math.sin(a) * (reticleR + 2);
-        const tx1 = nodePt[0] + Math.cos(a) * (reticleR + 5);
-        const ty1 = nodePt[1] + Math.sin(a) * (reticleR + 5);
-        ctx.beginPath();
-        ctx.moveTo(tx0, ty0);
-        ctx.lineTo(tx1, ty1);
-        ctx.stroke();
-      }
-
-      // Glowing core node bead
-      ctx.fillStyle = "#ffffff";
-      ctx.beginPath();
-      ctx.arc(nodePt[0], nodePt[1], 2.2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // 5E. Floating Holographic Data Callout Pill
-      const tagText = `[${ch.tag}: ${formatNum(val)}]`;
-      ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
-      const tm = ctx.measureText(tagText);
-      const tagX = nodePt[0] + 14;
-      const tagY = nodePt[1] - 6;
-
-      ctx.fillStyle = "rgba(10, 14, 20, 0.88)";
-      ctx.fillRect(tagX - 3, tagY - 9, tm.width + 6, 12);
-      ctx.strokeStyle = ch.color;
-      ctx.lineWidth = 0.7;
-      ctx.strokeRect(tagX - 3, tagY - 9, tm.width + 6, 12);
-
-      ctx.fillStyle = ch.color;
-      ctx.fillText(tagText, tagX, tagY);
-
-      ctx.restore();
-    }
-  }
-
-  // 6. Camera Control Hint
+  // 6. Navigation / Interaction Hint
   ctx.save();
   ctx.font = "9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
   ctx.textAlign = "left";
-  ctx.fillText("DRAG · 3D ORBIT   DBL-CLICK · RESET", 14, h - 8);
+  ctx.fillText("HOVER · INSPECT STACK   CLICK PILL · ISOLATE CHANNEL", 14, h - 8);
+  ctx.restore();
+}
+
+function drawTargetReticle(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  ch: (typeof CHANNELS)[number],
+  val: number,
+) {
+  ctx.save();
+  ctx.strokeStyle = ch.color;
+  ctx.lineWidth = 1.2;
+  ctx.shadowColor = ch.glow;
+  ctx.shadowBlur = 8;
+
+  // Outer target ring
+  ctx.beginPath();
+  ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Glowing center dot
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Floating Pill Callout Tag
+  const tagText = `[${ch.tag}: ${formatNum(val)}]`;
+  ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
+  const tm = ctx.measureText(tagText);
+  const tagX = x + 10;
+  const tagY = y - 4;
+
+  ctx.fillStyle = "rgba(10, 14, 20, 0.88)";
+  ctx.fillRect(tagX - 3, tagY - 9, tm.width + 6, 12);
+  ctx.strokeStyle = ch.color;
+  ctx.lineWidth = 0.8;
+  ctx.strokeRect(tagX - 3, tagY - 9, tm.width + 6, 12);
+
+  ctx.fillStyle = ch.color;
+  ctx.fillText(tagText, tagX, tagY);
   ctx.restore();
 }
 

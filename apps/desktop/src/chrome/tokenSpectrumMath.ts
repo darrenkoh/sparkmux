@@ -1,7 +1,7 @@
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
 import { activityAxis, wallToCompressed } from "./terrainWindow.ts";
 
-export type TokenChartMode = "contour" | "burst" | "gauge";
+export type TokenChartMode = "stack" | "burst" | "gauge";
 export type ChannelKey = "cache" | "input" | "reasoning" | "output";
 
 export interface ChannelDef {

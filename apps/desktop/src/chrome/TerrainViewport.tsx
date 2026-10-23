@@ -136,7 +136,7 @@ function makeRng(seed: number) {
 const VS_TERRAIN = `#version 300 es
 uniform mat4 uVP;
 uniform float uTime, uFocus, uAperture, uDpr, uGain, uScanX, uMaxX, uReal;
-uniform float uGlobe, uScanAng, uMaxFrac;
+uniform float uGlobe, uScanAng, uMaxFrac, uScanAmount;
 in vec4 aPos;      // xyz + brightness
 in vec3 aCol;      // label category color
 in float aSeed;
@@ -153,13 +153,13 @@ void main() {
   float energy = (base * base) / (size * size);
   float twinkle = 0.84 + 0.16 * sin(uTime * (0.8 + aSeed * 2.2) + aSeed * 53.0);
 
-  float scan = 1.0 + 3.2 * exp(-pow((aPos.x - uScanX) * 0.95, 2.0));
+  float scan = 1.0 + uScanAmount * exp(-pow((aPos.x - uScanX) * 0.95, 2.0));
   float timeClip = smoothstep(uMaxX + 0.45, uMaxX - 0.2, aPos.x);
   if (uGlobe > 0.5) {
     float ang = atan(aPos.z, aPos.x);
     float dAng = ang - uScanAng;
     dAng = dAng - 6.2831853 * floor((dAng + 3.14159265) / 6.2831853);
-    scan = 1.0 + 3.2 * exp(-pow(dAng * 3.2, 2.0));
+    scan = 1.0 + uScanAmount * exp(-pow(dAng * 3.2, 2.0));
     float delta = mod(ang - 3.14159265 + 6.2831853, 6.2831853);
     float span = 6.2831853 - ${RING_TIME_GAP.toFixed(4)};
     float frac = delta / span;
@@ -245,6 +245,9 @@ const RECT_HX = 14.0;
 const RECT_HZ = 9.0;
 const POINT_COUNT = 50000;
 const LIGHT_DIR = [-0.45, 0.8, 0.4];
+
+/** Subtle light intensity boost along the chronological ray as it circles/scans across the terrain. */
+const SCAN_LIGHT_BOOST = 0.75;
 
 export type BaseShape = "rect" | "globe";
 export type ScanSpeed = "0.25x" | "0.5x" | "1x" | "2x" | "paused";
@@ -1319,6 +1322,7 @@ export default function TerrainViewport({
       uDpr: gl.getUniformLocation(progTerrain, "uDpr"),
       uGain: gl.getUniformLocation(progTerrain, "uGain"),
       uScanX: gl.getUniformLocation(progTerrain, "uScanX"),
+      uScanAmount: gl.getUniformLocation(progTerrain, "uScanAmount"),
       uMaxX: gl.getUniformLocation(progTerrain, "uMaxX"),
       uReal: gl.getUniformLocation(progTerrain, "uReal"),
       uGlobe: gl.getUniformLocation(progTerrain, "uGlobe"),
@@ -1569,12 +1573,14 @@ export default function TerrainViewport({
         }
       }
 
+      const scanBoost = SCAN_LIGHT_BOOST * scanFade;
+
       // Draw Marching Squares Contours
       if (contoursCountRef.current > 0) {
         gl.uniform1f(uC.uGlobe, globeOn ? 1 : 0);
         gl.uniform1f(uC.uScanAng, scanAng);
         gl.uniform1f(uC.uMaxFrac, maxFrac);
-        gl.uniform1f(uC.uScanAmount, 3.0 * scanFade);
+        gl.uniform1f(uC.uScanAmount, scanBoost);
         gl.uniform1f(uC.uMaxX, curMaxX);
         gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.78, isMono ? 1.0 : 1.0, isMono ? 1.0 : 0.94);
         gl.bindVertexArray(vaoContours);
@@ -1590,6 +1596,7 @@ export default function TerrainViewport({
       gl.uniform1f(uT.uDpr, dpr);
       gl.uniform1f(uT.uGain, 0.44);
       gl.uniform1f(uT.uScanX, scanXPos);
+      gl.uniform1f(uT.uScanAmount, scanBoost);
       gl.uniform1f(uT.uMaxX, curMaxX);
       gl.uniform1f(uT.uReal, isMono ? 0.0 : 1.0);
       gl.uniform1f(uT.uGlobe, globeOn ? 1 : 0);
@@ -1687,7 +1694,7 @@ export default function TerrainViewport({
       }
 
       // (A.1) Chronological playhead. Rect is a vertical line. Globe is a radial spoke.
-      hud.strokeStyle = `rgba(255, 220, 100, ${0.40 * scanFade})`;
+      hud.strokeStyle = `rgba(255, 220, 100, ${0.28 * scanFade})`;
       hud.lineWidth = 0.75;
       hud.beginPath();
       if (globeOn) {

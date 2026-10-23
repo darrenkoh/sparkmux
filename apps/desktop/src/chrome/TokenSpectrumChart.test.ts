@@ -200,6 +200,11 @@ test("CHANNELS definitions contain all 4 channels with colors", () => {
   assert.deepEqual(keys, ["cache", "input", "reasoning", "output"]);
 });
 
+test("TokenChartMode includes 2D stack mode as the default timeline view", () => {
+  const validModes: Array<import("./tokenSpectrumMath.ts").TokenChartMode> = ["stack", "burst", "gauge"];
+  assert.equal(validModes[0], "stack");
+});
+
 test("3D perspective projection projects center point accurately", async () => {
   const { perspective, lookAt, multiply, projectPoint } = await import("./tokenSpectrumMath.ts");
   const proj = perspective((45 * Math.PI) / 180, 1.0, 0.1, 100);

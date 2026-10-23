@@ -835,54 +835,6 @@ body.is-resizing * {
   cursor: default;
 }
 
-.artifact-filter-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.2);
-}
-
-.artifact-filter-input {
-  flex: 1;
-  min-width: 0;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-
-.artifact-filter-input:focus {
-  border-color: var(--accent);
-}
-
-.artifact-filter-input::placeholder {
-  color: var(--muted);
-}
-
-.artifact-filter-clear {
-  flex: 0 0 auto;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 3px;
-  transition: all 0.12s ease;
-}
-
-.artifact-filter-clear:hover {
-  color: var(--fg);
-  background: rgba(255, 255, 255, 0.1);
-}
-
 .artifact-list {
   flex: 1;
   min-height: 0;

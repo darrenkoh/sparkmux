@@ -105,34 +105,13 @@ export default function ArtifactPanel({
     };
   }, [tick]);
 
-  const [filterText, setFilterText] = useState("");
   const rawEntries = feed?.entries ?? [];
   const turns = groupArtifactTurns(rawEntries);
   const empty = emptyOutputText(feed, rawEntries.length, 0);
 
-  const normalizedFilter = filterText.trim().toLowerCase();
-  const visibleTurns = normalizedFilter
-    ? turns.filter((turn) => {
-        if (turn.user?.body.toLowerCase().includes(normalizedFilter)) return true;
-        if (turn.reply?.body.toLowerCase().includes(normalizedFilter)) return true;
-        return turn.steps.some(
-          (step) =>
-            step.label.toLowerCase().includes(normalizedFilter) ||
-            step.body.toLowerCase().includes(normalizedFilter),
-        );
-      })
-    : turns;
-
   const selectedIndex =
-    selectedTurnId !== null
-      ? visibleTurns.findIndex((t) => t.id === selectedTurnId)
-      : -1;
-  const selectedTurn =
-    selectedIndex >= 0
-      ? visibleTurns[selectedIndex]
-      : selectedTurnId !== null
-        ? turns.find((t) => t.id === selectedTurnId) ?? null
-        : null;
+    selectedTurnId !== null ? turns.findIndex((t) => t.id === selectedTurnId) : -1;
+  const selectedTurn = selectedIndex >= 0 ? turns[selectedIndex] : null;
 
   useLayoutEffect(() => {
     const el = listRef.current;
@@ -207,26 +186,6 @@ export default function ArtifactPanel({
           </button>
         </div>
       </header>
-      <div className="artifact-filter-bar">
-        <input
-          type="search"
-          className="artifact-filter-input"
-          placeholder="Filter prompts..."
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          aria-label="Filter prompts"
-        />
-        {filterText && (
-          <button
-            type="button"
-            className="artifact-filter-clear"
-            onClick={() => setFilterText("")}
-            aria-label="Clear filter"
-          >
-            ✕
-          </button>
-        )}
-      </div>
       <div
         className="artifact-list"
         ref={listRef}
@@ -241,10 +200,8 @@ export default function ArtifactPanel({
       >
         {empty ? (
           <p className="artifact-empty">{empty}</p>
-        ) : visibleTurns.length === 0 ? (
-          <p className="artifact-empty">No prompts match &ldquo;{filterText}&rdquo;.</p>
         ) : (
-          visibleTurns.map((turn) => (
+          turns.map((turn) => (
             <PromptCard
               key={turn.id}
               turn={turn}
@@ -259,16 +216,16 @@ export default function ArtifactPanel({
           <PromptDetailModal
             turn={selectedTurn}
             cwd={cwd}
-            index={selectedIndex >= 0 ? selectedIndex : 0}
-            total={visibleTurns.length}
+            index={selectedIndex}
+            total={turns.length}
             onPrev={
               selectedIndex > 0
-                ? () => setSelectedTurnId(visibleTurns[selectedIndex - 1].id)
+                ? () => setSelectedTurnId(turns[selectedIndex - 1].id)
                 : undefined
             }
             onNext={
-              selectedIndex >= 0 && selectedIndex < visibleTurns.length - 1
-                ? () => setSelectedTurnId(visibleTurns[selectedIndex + 1].id)
+              selectedIndex >= 0 && selectedIndex < turns.length - 1
+                ? () => setSelectedTurnId(turns[selectedIndex + 1].id)
                 : undefined
             }
             onClose={() => setSelectedTurnId(null)}
