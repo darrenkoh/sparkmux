@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.55
+
+### Improvements
+
+- Converted Token Spectrum into a clean 2D stacked continuous area chart with streamlined time boundaries (`T0` and `LATEST`).
+- Added adjustable scan ray light intensity (`LIGHT: OFF`, `0.25x`, `0.5x`, `1x`, `2x`, `MAX`) and chrono sweep speeds in the 3D Area Map.
+- Decluttered the Area Map viewport: consolidated floating controls into an integrated translucent HUD toolbar ribbon, shortened button labels (`⟳ ROT`, `TRACE`), and dynamically prevented collision with interaction hints.
+- Adjusted altitude ruler frames and telemetry readouts to eliminate overlap with the viewport toolbar and timeline scrubber.
+
+### Bug Fixes
+
+- Switched attention notifications to native notification paths, avoiding triggering Script Editor.
+
 ## 0.1.54
 
 ### Bug Fixes
