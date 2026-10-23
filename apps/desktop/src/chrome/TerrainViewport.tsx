@@ -246,15 +246,23 @@ const RECT_HZ = 9.0;
 const POINT_COUNT = 50000;
 const LIGHT_DIR = [-0.45, 0.8, 0.4];
 
-/** Subtle light intensity boost along the chronological ray as it circles/scans across the terrain. */
-const SCAN_LIGHT_BOOST = 0.75;
-
 export type BaseShape = "rect" | "globe";
 export type ScanSpeed = "0.25x" | "0.5x" | "1x" | "2x" | "paused";
+export type ScanIntensity = "off" | "0.25x" | "0.5x" | "1x" | "2x" | "max";
 
 const STORAGE_KEY_BASE_SHAPE = "sparkmux_area_map_base_shape";
 const STORAGE_KEY_SCAN_SPEED = "sparkmux_area_map_scan_speed";
 const STORAGE_KEY_SHOW_TRACE = "sparkmux_area_map_show_trace";
+const STORAGE_KEY_SCAN_INTENSITY = "sparkmux_area_map_scan_intensity";
+
+export const SCAN_INTENSITY_VALUES: Record<ScanIntensity, number> = {
+  off: 0.0,
+  "0.25x": 0.2,
+  "0.5x": 0.45,
+  "1x": 0.75, // default
+  "2x": 1.5,
+  max: 3.0,
+};
 
 /** Elapsed session time: `12:05`, or `1:12:05` once an hour has passed. */
 export function formatElapsed(ms: number): string {
@@ -299,8 +307,19 @@ function getInitialShowTrace(): boolean {
   return true;
 }
 
+function getInitialScanIntensity(): ScanIntensity {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_SCAN_INTENSITY);
+    if (saved === "off" || saved === "0.25x" || saved === "0.5x" || saved === "1x" || saved === "2x" || saved === "max") {
+      return saved;
+    }
+  } catch {}
+  return "1x";
+}
+
 let persistentBaseShape: BaseShape = getInitialBaseShape();
 let persistentScanSpeed: ScanSpeed = getInitialScanSpeed();
+let persistentScanIntensity: ScanIntensity = getInitialScanIntensity();
 let persistentShowTrace: boolean = getInitialShowTrace();
 let persistentAutoRotate = true;
 
@@ -518,6 +537,10 @@ export default function TerrainViewport({
   const [scanSpeed, setScanSpeedState] = useState<ScanSpeed>(persistentScanSpeed);
   const scanSpeedRef = useRef<ScanSpeed>(persistentScanSpeed);
 
+  const [scanIntensity, setScanIntensityState] = useState<ScanIntensity>(persistentScanIntensity);
+  const scanIntensityRef = useRef<ScanIntensity>(persistentScanIntensity);
+  scanIntensityRef.current = scanIntensity;
+
   const [showTrace, setShowTraceState] = useState<boolean>(persistentShowTrace);
   const showTraceRef = useRef<boolean>(persistentShowTrace);
   showTraceRef.current = showTrace;
@@ -566,6 +589,15 @@ export default function TerrainViewport({
     setScanSpeedState(next);
     try {
       localStorage.setItem(STORAGE_KEY_SCAN_SPEED, next);
+    } catch {}
+  };
+
+  const setScanIntensity = (next: ScanIntensity) => {
+    persistentScanIntensity = next;
+    scanIntensityRef.current = next;
+    setScanIntensityState(next);
+    try {
+      localStorage.setItem(STORAGE_KEY_SCAN_INTENSITY, next);
     } catch {}
   };
 
@@ -1573,7 +1605,8 @@ export default function TerrainViewport({
         }
       }
 
-      const scanBoost = SCAN_LIGHT_BOOST * scanFade;
+      const scanLightBoost = SCAN_INTENSITY_VALUES[scanIntensityRef.current] ?? 0.75;
+      const scanBoost = scanLightBoost * scanFade;
 
       // Draw Marching Squares Contours
       if (contoursCountRef.current > 0) {
@@ -1694,32 +1727,37 @@ export default function TerrainViewport({
       }
 
       // (A.1) Chronological playhead. Rect is a vertical line. Globe is a radial spoke.
-      hud.strokeStyle = `rgba(255, 220, 100, ${0.28 * scanFade})`;
-      hud.lineWidth = 0.75;
-      hud.beginPath();
-      if (globeOn) {
-        const ang = timeFracToAngle(scanFrac);
-        const field = elevFieldRef.current;
-        let started = false;
-        for (let s = 0; s <= 28; s++) {
-          const r = (s / 28) * GLOBE_RADIUS;
-          const x = Math.cos(ang) * r;
-          const z = Math.sin(ang) * r;
-          const y = field ? sampleElev(field, x, z) : 0;
-          const sc = project([x, y + 0.04, z]);
-          if (!sc) continue;
-          if (!started) { hud.moveTo(sc[0], sc[1]); started = true; }
-          else hud.lineTo(sc[0], sc[1]);
+      const playheadAlpha = scanLightBoost > 0
+        ? Math.min(0.5, 0.28 * (scanLightBoost / 0.75)) * scanFade
+        : 0;
+      if (playheadAlpha > 0.005) {
+        hud.strokeStyle = `rgba(255, 220, 100, ${playheadAlpha})`;
+        hud.lineWidth = 0.75;
+        hud.beginPath();
+        if (globeOn) {
+          const ang = timeFracToAngle(scanFrac);
+          const field = elevFieldRef.current;
+          let started = false;
+          for (let s = 0; s <= 28; s++) {
+            const r = (s / 28) * GLOBE_RADIUS;
+            const x = Math.cos(ang) * r;
+            const z = Math.sin(ang) * r;
+            const y = field ? sampleElev(field, x, z) : 0;
+            const sc = project([x, y + 0.04, z]);
+            if (!sc) continue;
+            if (!started) { hud.moveTo(sc[0], sc[1]); started = true; }
+            else hud.lineTo(sc[0], sc[1]);
+          }
+        } else {
+          const pScanTop = project([scanXPos, maxAltitude * 1.05, 0]);
+          const pScanBottom = project([scanXPos, 0, 0]);
+          if (pScanTop && pScanBottom) {
+            hud.moveTo(pScanTop[0], pScanTop[1]);
+            hud.lineTo(pScanBottom[0], pScanBottom[1]);
+          }
         }
-      } else {
-        const pScanTop = project([scanXPos, maxAltitude * 1.05, 0]);
-        const pScanBottom = project([scanXPos, 0, 0]);
-        if (pScanTop && pScanBottom) {
-          hud.moveTo(pScanTop[0], pScanTop[1]);
-          hud.lineTo(pScanBottom[0], pScanBottom[1]);
-        }
+        hud.stroke();
       }
-      hud.stroke();
 
       // (B) 3D Axis Labels: TIME (X), LABEL (Z), VALUE (Y)
       hud.save();
@@ -2295,6 +2333,21 @@ export default function TerrainViewport({
           <option value="1x">SWEEP: 1x (NORM)</option>
           <option value="2x">SWEEP: 2x (FAST)</option>
           <option value="paused">SWEEP: PAUSED</option>
+        </select>
+
+        <select
+          className="scifi-select"
+          value={scanIntensity}
+          onChange={(e) => setScanIntensity(e.target.value as ScanIntensity)}
+          title="Timeline Chrono Scan Ray Light Intensity"
+          aria-label="Timeline Chrono Scan Ray Light Intensity"
+        >
+          <option value="off">LIGHT: OFF</option>
+          <option value="0.25x">LIGHT: 0.25x (DIM)</option>
+          <option value="0.5x">LIGHT: 0.5x (LOW)</option>
+          <option value="1x">LIGHT: 1x (NORM)</option>
+          <option value="2x">LIGHT: 2x (BRIGHT)</option>
+          <option value="max">LIGHT: MAX</option>
         </select>
 
         <button

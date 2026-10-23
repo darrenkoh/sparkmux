@@ -2889,6 +2889,7 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .scifi-viewport-mode {
   display: flex;

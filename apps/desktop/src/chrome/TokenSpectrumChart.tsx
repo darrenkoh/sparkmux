@@ -10,7 +10,6 @@ import {
   CHANNELS,
   processTimelineData,
   seamBeforeBucket,
-  computeContourScanProgress,
 } from "./tokenSpectrumMath";
 
 export type { TokenChartMode, ChannelKey, ChannelDef, ProcessedBucket };
@@ -44,7 +43,6 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number | null>(null);
-  const startTimeRef = useRef<number>(performance.now());
   const pointerXRef = useRef<number | null>(null);
 
   const processed = useMemo(() => processTimelineData(timeline, stats), [timeline, stats]);
@@ -80,8 +78,6 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
 
     const render = () => {
       if (destroyed) return;
-      const now = performance.now();
-      const elapsed = (now - startTimeRef.current) / 1000;
 
       const rect = canvas.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -111,7 +107,6 @@ export default function TokenSpectrumChart({ timeline, stats }: TokenSpectrumCha
           activeChannel,
           hoverIndex,
           hoverChannel,
-          elapsed,
           pointerXRef.current,
         );
       }
@@ -375,7 +370,6 @@ function draw2DStackMode(
   activeChannel: ChannelKey | null,
   hoverIndex: number | null,
   hoverChannel: ChannelKey | null,
-  elapsed: number,
   pointerX: number | null,
 ) {
   const padL = 54;
@@ -516,30 +510,7 @@ function draw2DStackMode(
     }
   }
 
-  // 3. Synchronized Chronological Scan Sweep Line
-  const sweepFrac = computeContourScanProgress(elapsed);
-  const sweepX = padL + sweepFrac * plotW;
-  ctx.save();
-  ctx.strokeStyle = "rgba(255, 205, 65, 0.40)";
-  ctx.lineWidth = 1;
-  ctx.shadowColor = "rgba(255, 205, 65, 0.6)";
-  ctx.shadowBlur = 4;
-  ctx.beginPath();
-  ctx.moveTo(sweepX, padT);
-  ctx.lineTo(sweepX, yBase);
-  ctx.stroke();
-
-  // Playhead top tick indicator
-  ctx.fillStyle = "#ffcd41";
-  ctx.beginPath();
-  ctx.moveTo(sweepX - 3, padT);
-  ctx.lineTo(sweepX + 3, padT);
-  ctx.lineTo(sweepX, padT + 5);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-
-  // 4. Hover Crosshair & Reticle Nodes
+  // 3. Hover Crosshair & Reticle Nodes
   if (hoverIndex !== null && data[hoverIndex]) {
     const hd = data[hoverIndex];
     const hp = pts[hoverIndex];
@@ -606,14 +577,6 @@ function draw2DStackMode(
     }
     ctx.restore();
   }
-
-  // 6. Navigation / Interaction Hint
-  ctx.save();
-  ctx.font = "9.5px ui-monospace, SFMono-Regular, Menlo, monospace";
-  ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
-  ctx.textAlign = "left";
-  ctx.fillText("HOVER · INSPECT STACK   CLICK PILL · ISOLATE CHANNEL", 14, h - 8);
-  ctx.restore();
 }
 
 function drawTargetReticle(
@@ -873,32 +836,59 @@ function drawGridAndContours(
   }
 
   ctx.setLineDash([]);
-  ctx.textAlign = "center";
-  ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.font = "8.5px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+
   if (data.length > 0) {
-    const tickCount = Math.min(5, data.length);
-    for (let i = 0; i < tickCount; i++) {
-      const fraction = tickCount === 1 ? data[0].xFraction : i / (tickCount - 1);
-      let dataIdx = 0;
+    const yTick = padT + plotH;
+    const yText = yTick + 13;
+
+    // Left start time
+    const startLabel = data[0]?.timeLabel || "T0";
+    ctx.textAlign = "left";
+    ctx.fillText(startLabel, padL, yText);
+
+    // Left tick
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, yTick);
+    ctx.lineTo(padL, yTick + 3);
+    ctx.stroke();
+
+    // Right latest time
+    const endLabel = data[data.length - 1]?.timeLabel || "LATEST";
+    ctx.textAlign = "right";
+    ctx.fillText(endLabel, padL + plotW, yText);
+
+    // Right tick
+    ctx.beginPath();
+    ctx.moveTo(padL + plotW, yTick);
+    ctx.lineTo(padL + plotW, yTick + 3);
+    ctx.stroke();
+
+    // Clean single midpoint only when wide enough to avoid any clutter
+    if (plotW >= 240 && data.length >= 3) {
+      let midIdx = 0;
       let bestDist = Infinity;
       for (let p = 0; p < data.length; p++) {
-        const dist = Math.abs(data[p].xFraction - fraction);
+        const dist = Math.abs(data[p].xFraction - 0.5);
         if (dist < bestDist) {
           bestDist = dist;
-          dataIdx = p;
+          midIdx = p;
         }
       }
-      const x = padL + data[dataIdx].xFraction * plotW;
-      const label = data[dataIdx]?.timeLabel ?? "";
+      const midX = padL + data[midIdx].xFraction * plotW;
+      const midLabel = data[midIdx]?.timeLabel ?? "";
+      if (midX > padL + 45 && midX < padL + plotW - 45) {
+        ctx.textAlign = "center";
+        ctx.fillText(midLabel, midX, yText);
 
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
-      ctx.beginPath();
-      ctx.moveTo(x, padT + plotH);
-      ctx.lineTo(x, padT + plotH + 4);
-      ctx.stroke();
-
-      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-      ctx.fillText(label, x, padT + plotH + 15);
+        ctx.beginPath();
+        ctx.moveTo(midX, yTick);
+        ctx.lineTo(midX, yTick + 3);
+        ctx.stroke();
+      }
     }
   }
 
