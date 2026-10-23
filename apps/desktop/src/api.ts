@@ -543,40 +543,6 @@ export function tabAnalytics(
   });
 }
 
-export type PromptStatus = "complete" | "in_progress" | "interrupted";
-
-export interface PromptSummary {
-  index: number;
-  t_start: number;
-  t_end: number;
-  duration_ms: number;
-  preview: string;
-  status: PromptStatus;
-  event_count: number;
-  tool_count: number;
-  ask_count: number;
-  err_count: number;
-  subagent_count: number;
-  tokens_in: number;
-  tokens_out: number;
-}
-
-export interface PromptGraphResponse {
-  prompts: PromptSummary[];
-  selected: number | null;
-  events: AnalyticsEvent[];
-  truncated: boolean;
-}
-
-/** One prompt's events. `turnIndex` null follows the latest prompt. Read-only. */
-export function tabPromptGraph(
-  sessionName: string,
-  tabId: string,
-  turnIndex: number | null,
-): Promise<PromptGraphResponse> {
-  return invoke("tab_prompt_graph", { sessionName, tabId, turnIndex });
-}
-
 export function setAnalyticsEnabled(enabled: boolean): Promise<void> {
   return invoke("set_analytics_enabled", { enabled });
 }

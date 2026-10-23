@@ -78,7 +78,6 @@ pub fn run() {
             chronicle::chronicle_hologram,
             chronicle::clear_chronicle_cache,
             analytics::tab_analytics,
-            analytics::tab_prompt_graph,
             analytics::set_analytics_enabled,
             analytics::clear_analytics_data,
             analytics::analytics_config,

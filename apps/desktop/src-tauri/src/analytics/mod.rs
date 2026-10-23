@@ -3,7 +3,6 @@
 
 pub mod event;
 pub mod ingest;
-pub mod prompt_graph;
 pub mod stats;
 pub mod storage;
 mod subagents;
@@ -292,25 +291,6 @@ pub async fn tab_analytics(
             lifetime_stats,
             storage,
         })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Full event list for one prompt. Read-only: `tab_analytics` already ingests.
-#[command]
-pub async fn tab_prompt_graph(
-    session_name: String,
-    tab_id: String,
-    turn_index: Option<i64>,
-) -> Result<prompt_graph::PromptGraphResponse, String> {
-    tokio::task::spawn_blocking(move || {
-        // Same lock as `tab_analytics`, so a purge cannot delete the file
-        // between this read and an in-flight append.
-        let guard = live_lock();
-        let events = read_tab_events(&session_name, &tab_id, 0);
-        drop(guard);
-        Ok(prompt_graph::build(&events, turn_index))
     })
     .await
     .map_err(|e| e.to_string())?
