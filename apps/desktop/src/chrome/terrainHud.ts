@@ -14,8 +14,9 @@ export interface ValueAxisFrame {
  */
 export function valueAxisFrame(height: number, docked: boolean): ValueAxisFrame {
   if (!docked) {
-    const top = 70;
-    return { top, bottom: height - 50, labelY: top - 8, showTicks: true };
+    const top = 78;
+    const bottom = Math.max(top + 30, height - 90);
+    return { top, bottom, labelY: top - 8, showTicks: true };
   }
   const labelY = Math.min(36, Math.max(14, height - 12));
   const top = labelY + 8;

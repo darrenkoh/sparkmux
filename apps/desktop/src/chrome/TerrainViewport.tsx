@@ -1793,7 +1793,7 @@ export default function TerrainViewport({
         } else {
           hud.textAlign = "left";
           hud.fillText(
-            timed ? `◄ +${formatElapsed(meta.startTime - meta.sessionStart)}` : "◄ CHRONO TIME: 00:00 (START)",
+            timed ? `◄ +${formatElapsed(meta.startTime - meta.sessionStart)}` : "◄ 00:00",
             tStart[0],
             tStart[1],
           );
@@ -1801,7 +1801,7 @@ export default function TerrainViewport({
           hud.fillText(
             timed
               ? `+${formatElapsed(meta.endTime - meta.sessionStart)}${meta.live ? " NOW" : ""} ►`
-              : "LATEST EVENT (NOW) ►",
+              : "NOW ►",
             tEnd[0],
             tEnd[1],
           );
@@ -2027,7 +2027,7 @@ export default function TerrainViewport({
         const sweepReadout = globeOn
           ? `PING ${Math.round(clockRef.current.radarFrac * 100)}%`
           : `SWEEP X ${scanXPos.toFixed(1)}`;
-        hud.fillText(`${sweepReadout}   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 12);
+        hud.fillText(`${sweepReadout}   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 82);
       }
     };
 
@@ -2280,93 +2280,97 @@ export default function TerrainViewport({
         <small>{activeModel || (sessionName ? `${sessionName} // ${tabName ?? "OUTPUT"}` : "QUANTUM RELIEF")}</small>
       </header>
 
-      <div className="scifi-viewport-hint">
-        DRAG · ORBIT &nbsp;&nbsp; WHEEL · ZOOM &nbsp;&nbsp; DBL-CLICK · RESET
-      </div>
-
       <div className="scifi-viewport-toolbar">
-        <div className="scifi-viewport-mode">
+        <div className="scifi-viewport-controls">
+          <div className="scifi-viewport-mode">
+            <button
+              type="button"
+              className={realism === "mono" ? "on" : ""}
+              onClick={() => setRealism("mono")}
+              title="Monochrome elevation shading"
+            >
+              MONO
+            </button>
+            <button
+              type="button"
+              className={realism === "color" ? "on" : ""}
+              onClick={() => setRealism("color")}
+              title="Spectral multi-channel elevation shading"
+            >
+              SPECTRAL
+            </button>
+          </div>
+
+          <div className="scifi-viewport-mode" title="Area Map Base Platform Shape">
+            <button
+              type="button"
+              className={baseShape === "rect" ? "on" : ""}
+              onClick={() => setBaseShape("rect")}
+              title="Rectangular Cartesian matrix base"
+            >
+              RECT
+            </button>
+            <button
+              type="button"
+              className={baseShape === "globe" ? "on" : ""}
+              onClick={() => setBaseShape("globe")}
+              title="Channel rings, outward radar ping"
+            >
+              GLOBE
+            </button>
+          </div>
+
+          <select
+            className="scifi-select"
+            value={scanSpeed}
+            onChange={(e) => setScanSpeed(e.target.value as ScanSpeed)}
+            title="Timeline Chrono Sweep Speed"
+            aria-label="Timeline Chrono Sweep Speed"
+          >
+            <option value="0.25x">SWEEP 0.25x</option>
+            <option value="0.5x">SWEEP 0.5x</option>
+            <option value="1x">SWEEP 1x</option>
+            <option value="2x">SWEEP 2x</option>
+            <option value="paused">SWEEP OFF</option>
+          </select>
+
+          <select
+            className="scifi-select"
+            value={scanIntensity}
+            onChange={(e) => setScanIntensity(e.target.value as ScanIntensity)}
+            title="Timeline Chrono Scan Ray Light Intensity"
+            aria-label="Timeline Chrono Scan Ray Light Intensity"
+          >
+            <option value="off">LIGHT OFF</option>
+            <option value="0.25x">LIGHT 0.25x</option>
+            <option value="0.5x">LIGHT 0.5x</option>
+            <option value="1x">LIGHT 1x</option>
+            <option value="2x">LIGHT 2x</option>
+            <option value="max">LIGHT MAX</option>
+          </select>
+
           <button
             type="button"
-            className={realism === "mono" ? "on" : ""}
-            onClick={() => setRealism("mono")}
+            className={`scifi-btn-toggle ${autoRotate ? "on" : ""}`}
+            onClick={() => setAutoRotate(!autoRotate)}
+            title={autoRotate ? "Auto-rotate: On (Click to pause)" : "Auto-rotate: Off (Click to enable)"}
           >
-            MONO
+            ⟳ ROT
           </button>
+
           <button
             type="button"
-            className={realism === "color" ? "on" : ""}
-            onClick={() => setRealism("color")}
+            className={`scifi-btn-toggle ${showTrace ? "on" : ""}`}
+            onClick={() => setShowTrace(!showTrace)}
+            title={showTrace ? "Journey trace: On (Click to hide)" : "Journey trace: Off (Click to show)"}
           >
-            SPECTRAL
+            TRACE
           </button>
         </div>
 
-        <div className="scifi-viewport-mode" title="Area Map Base Platform Shape">
-          <button
-            type="button"
-            className={baseShape === "rect" ? "on" : ""}
-            onClick={() => setBaseShape("rect")}
-            title="Rectangular Cartesian matrix base"
-          >
-            RECT
-          </button>
-          <button
-            type="button"
-            className={baseShape === "globe" ? "on" : ""}
-            onClick={() => setBaseShape("globe")}
-            title="Channel rings, outward ping"
-          >
-            GLOBE
-          </button>
+        <div className="scifi-viewport-hint">
+          DRAG · ORBIT &nbsp;&nbsp; WHEEL · ZOOM &nbsp;&nbsp; DBL-CLICK · RESET
         </div>
-
-        <select
-          className="scifi-select"
-          value={scanSpeed}
-          onChange={(e) => setScanSpeed(e.target.value as ScanSpeed)}
-          title="Timeline Chrono Sweep Speed"
-          aria-label="Timeline Chrono Sweep Speed"
-        >
-          <option value="0.25x">SWEEP: 0.25x</option>
-          <option value="0.5x">SWEEP: 0.5x</option>
-          <option value="1x">SWEEP: 1x (NORM)</option>
-          <option value="2x">SWEEP: 2x (FAST)</option>
-          <option value="paused">SWEEP: PAUSED</option>
-        </select>
-
-        <select
-          className="scifi-select"
-          value={scanIntensity}
-          onChange={(e) => setScanIntensity(e.target.value as ScanIntensity)}
-          title="Timeline Chrono Scan Ray Light Intensity"
-          aria-label="Timeline Chrono Scan Ray Light Intensity"
-        >
-          <option value="off">LIGHT: OFF</option>
-          <option value="0.25x">LIGHT: 0.25x (DIM)</option>
-          <option value="0.5x">LIGHT: 0.5x (LOW)</option>
-          <option value="1x">LIGHT: 1x (NORM)</option>
-          <option value="2x">LIGHT: 2x (BRIGHT)</option>
-          <option value="max">LIGHT: MAX</option>
-        </select>
-
-        <button
-          type="button"
-          className={`scifi-btn-toggle ${autoRotate ? "on" : ""}`}
-          onClick={() => setAutoRotate(!autoRotate)}
-          title={autoRotate ? "Click to pause auto-rotation" : "Click to enable auto-rotation"}
-        >
-          {autoRotate ? "AUTO-ROTATE: ON" : "AUTO-ROTATE: OFF"}
-        </button>
-
-        <button
-          type="button"
-          className={`scifi-btn-toggle ${showTrace ? "on" : ""}`}
-          onClick={() => setShowTrace(!showTrace)}
-          title={showTrace ? "Click to hide chronological journey trace line & nodes" : "Click to show chronological journey trace line & nodes"}
-        >
-          {showTrace ? "TRACE: ON" : "TRACE: OFF"}
-        </button>
       </div>
 
       {/* Chronological Timeline Playback Scrubber */}
