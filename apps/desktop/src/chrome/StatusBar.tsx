@@ -1,5 +1,5 @@
 import type { LlmUsage, TmuxStatus } from "../types";
-import { usageChips } from "./llmUsage";
+import { usageChips, type UsageChip } from "./llmUsage";
 import { formatCpu, formatMemory, type AppTelemetry } from "./telemetry";
 
 function ModelIcon({ model }: { model?: string }) {
@@ -48,6 +48,96 @@ function ModelIcon({ model }: { model?: string }) {
   );
 }
 
+function ModelQuotaCard({ chip }: { chip: UsageChip }) {
+  const details = chip.details ?? [];
+  const cost = chip.costDetail;
+
+  return (
+    <div
+      className={`status-quota-card ${chip.tone}`}
+      role="tooltip"
+      aria-hidden="true"
+    >
+      <div className="status-quota-card-header">
+        <div className="status-quota-card-title">
+          <span className="status-quota-card-icon">
+            <ModelIcon model={chip.model} />
+          </span>
+          <span className="status-quota-card-name">
+            {chip.model ?? "Model Quota"}
+          </span>
+        </div>
+        {chip.percent != null && (
+          <div className="status-quota-card-badge">
+            <span className="badge-tag">{chip.window ?? "LIMIT"}</span>
+            <span className="badge-val">{chip.percent}%</span>
+          </div>
+        )}
+      </div>
+
+      {cost && (
+        <div className="status-quota-card-cost">
+          <div className="cost-row">
+            <span>Session Cost</span>
+            <b>{cost.sessionUsd}</b>
+          </div>
+          <div className="cost-row">
+            <span>Today's Total</span>
+            <b>{cost.todayUsd}</b>
+          </div>
+          <div className="cost-note">
+            {cost.estimated
+              ? "Estimated from token consumption"
+              : "Direct Bedrock API metrics"}
+          </div>
+        </div>
+      )}
+
+      {details.length > 0 && (
+        <div className="status-quota-card-windows">
+          {details.map((item, idx) => (
+            <div
+              key={`${item.label}-${idx}`}
+              className={`quota-window-item ${item.tone}${item.isTighter ? " is-tighter" : ""}`}
+            >
+              <div className="quota-window-top">
+                <div className="window-name">
+                  <span>{item.label}</span>
+                  {item.isTighter && <span className="tighter-pill">ACTIVE</span>}
+                </div>
+                <span className="window-pct">{item.percent}%</span>
+              </div>
+
+              <div className="quota-window-track">
+                <div
+                  className="quota-window-fill"
+                  style={{ width: `${item.fill}%` }}
+                />
+              </div>
+
+              <div className="quota-window-bottom">
+                {item.countdown && (
+                  <span className="window-reset-in">⏱ {item.countdown}</span>
+                )}
+                {item.resetsAtFormatted && (
+                  <span className="window-reset-at">
+                    Resets {item.resetsAtFormatted}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="status-quota-card-footer">
+        <span className="telemetry-tag">◈ TELEMETRY</span>
+        <span className="age-tag">{chip.fetchedAgeText ?? "active stream"}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function StatusBar({
   status,
   session,
@@ -93,37 +183,42 @@ export default function StatusBar({
             {chips.map((chip, index) => {
               const label = chip.model ?? chip.text;
               return (
-                <span
+                <div
                   key={`${chip.model ?? chip.text}-${index}`}
-                  className={`status-pill status-usage ${chip.tone}`}
-                  title={chip.title}
-                  aria-label={
-                    chip.meter
-                      ? `Model allowance: ${chip.text}`
-                      : `Bedrock usage: ${chip.text}`
-                  }
+                  className="status-pill-anchor"
                 >
-                  <span className="status-pill-head">
-                    <span className="status-pill-icon" aria-hidden="true">
-                      <ModelIcon model={chip.model} />
+                  <span
+                    className={`status-pill status-usage ${chip.tone}`}
+                    tabIndex={0}
+                    aria-label={
+                      chip.meter
+                        ? `Model allowance: ${chip.text}`
+                        : `Bedrock usage: ${chip.text}`
+                    }
+                  >
+                    <span className="status-pill-head">
+                      <span className="status-pill-icon" aria-hidden="true">
+                        <ModelIcon model={chip.model} />
+                      </span>
+                      <span className="status-pill-name">{label}</span>
+                      {chip.window && (
+                        <span className="status-pill-window">{chip.window}</span>
+                      )}
                     </span>
-                    <span className="status-pill-name">{label}</span>
-                    {chip.window && (
-                      <span className="status-pill-window">{chip.window}</span>
+                    {chip.percent != null && (
+                      <span className="status-pill-value">{chip.percent}%</span>
+                    )}
+                    {chip.meter && (
+                      <span className="status-pill-track" aria-hidden="true">
+                        <span
+                          className="status-pill-fill"
+                          style={{ width: `${chip.fill}%` }}
+                        />
+                      </span>
                     )}
                   </span>
-                  {chip.percent != null && (
-                    <span className="status-pill-value">{chip.percent}%</span>
-                  )}
-                  {chip.meter && (
-                    <span className="status-pill-track" aria-hidden="true">
-                      <span
-                        className="status-pill-fill"
-                        style={{ width: `${chip.fill}%` }}
-                      />
-                    </span>
-                  )}
-                </span>
+                  <ModelQuotaCard chip={chip} />
+                </div>
               );
             })}
           </span>

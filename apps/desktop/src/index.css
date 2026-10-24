@@ -1940,7 +1940,7 @@ body.is-resizing * {
   color: var(--muted);
   font-size: 12px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   white-space: nowrap;
 }
 
@@ -1961,7 +1961,7 @@ body.is-resizing * {
   gap: 8px;
   flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1970,8 +1970,14 @@ body.is-resizing * {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   flex: 0 1 auto;
+}
+
+.status-pill-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
 }
 
 .status-pill {
@@ -1991,9 +1997,305 @@ body.is-resizing * {
   transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.status-pill:hover {
+.status-pill:hover,
+.status-pill:focus-visible {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.2);
+  outline: none;
+}
+
+/* Sci-Fi Floating HUD Quota Card */
+.status-quota-card {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  right: 0;
+  width: 290px;
+  max-width: 340px;
+  background: rgba(10, 13, 19, 0.96);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 18px rgba(0, 0, 0, 0.5);
+  padding: 10px 12px 9px 12px;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              visibility 0.18s;
+  z-index: 1000;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+/* Hover bridge between pill and card */
+.status-quota-card::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 12px;
+}
+
+.status-pill-anchor:hover .status-quota-card,
+.status-pill-anchor:focus-within .status-quota-card {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+/* Card tone borders, glowing header accents, and shadows */
+.status-quota-card.ok {
+  border-color: rgba(61, 214, 140, 0.35);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 16px rgba(61, 214, 140, 0.15);
+}
+.status-quota-card.ok::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+  border-radius: 2px;
+}
+
+.status-quota-card.warn {
+  border-color: rgba(232, 168, 73, 0.4);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 16px rgba(232, 168, 73, 0.16);
+}
+.status-quota-card.warn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  background: #e8a849;
+  box-shadow: 0 0 8px #e8a849;
+  border-radius: 2px;
+}
+
+.status-quota-card.hot {
+  border-color: rgba(240, 113, 120, 0.45);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 18px rgba(240, 113, 120, 0.22);
+}
+.status-quota-card.hot::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+  border-radius: 2px;
+}
+
+.status-quota-card.cost {
+  border-color: rgba(250, 204, 21, 0.38);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 16px rgba(250, 204, 21, 0.16);
+}
+.status-quota-card.cost::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  background: #facc15;
+  box-shadow: 0 0 8px #facc15;
+  border-radius: 2px;
+}
+
+/* Card Header */
+.status-quota-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 7px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.status-quota-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+
+.status-quota-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+}
+.status-quota-card.ok .status-quota-card-icon { color: var(--ok); }
+.status-quota-card.warn .status-quota-card-icon { color: #e8a849; }
+.status-quota-card.hot .status-quota-card-icon { color: var(--danger); }
+.status-quota-card.cost .status-quota-card-icon { color: #facc15; }
+
+.status-quota-card-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.status-quota-card-badge .badge-tag {
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.status-quota-card.ok .badge-val { color: var(--ok); }
+.status-quota-card.warn .badge-val { color: #e8a849; }
+.status-quota-card.hot .badge-val { color: var(--danger); }
+.status-quota-card.cost .badge-val { color: #facc15; }
+
+/* Windows list */
+.status-quota-card-windows {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.quota-window-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.quota-window-item.is-tighter {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.quota-window-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.window-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.tighter-pill {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--fg);
+}
+
+.window-pct {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.quota-window-item.ok .window-pct { color: var(--ok); }
+.quota-window-item.warn .window-pct { color: #e8a849; }
+.quota-window-item.hot .window-pct { color: var(--danger); }
+
+.quota-window-track {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.quota-window-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+  transition: width 0.3s ease;
+}
+.quota-window-item.ok .quota-window-fill { background: var(--ok); box-shadow: 0 0 6px rgba(61, 214, 140, 0.35); }
+.quota-window-item.warn .quota-window-fill { background: #e8a849; box-shadow: 0 0 6px rgba(232, 168, 73, 0.35); }
+.quota-window-item.hot .quota-window-fill { background: var(--danger); box-shadow: 0 0 6px rgba(240, 113, 120, 0.4); }
+
+.quota-window-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 9.5px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.window-reset-in {
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+}
+
+/* Cost Card Body */
+.status-quota-card-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  background: rgba(250, 204, 21, 0.05);
+  border: 1px solid rgba(250, 204, 21, 0.15);
+  border-radius: 4px;
+}
+
+.cost-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+.cost-row span { color: var(--muted); }
+.cost-row b { color: #facc15; font-weight: 600; }
+
+.cost-note {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+  margin-top: 2px;
+}
+
+/* Card Footer */
+.status-quota-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.05em;
+}
+
+.status-quota-card-footer .telemetry-tag {
+  color: rgba(255, 255, 255, 0.4);
 }
 
 .status-pill-head {

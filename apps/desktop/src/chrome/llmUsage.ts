@@ -5,6 +5,24 @@ export type { LlmUsage, UsageBar };
 
 export type UsageTone = "ok" | "warn" | "hot" | "cost";
 
+export interface ModelWindowDetail {
+  label: string;
+  shortLabel: string;
+  percent: number;
+  fill: number;
+  tone: UsageTone;
+  resetsAtMs: number | null;
+  resetsAtFormatted: string | null;
+  countdown: string | null;
+  isTighter: boolean;
+}
+
+export interface UsageCostDetail {
+  sessionUsd: string;
+  todayUsd: string;
+  estimated: boolean;
+}
+
 export interface UsageChip {
   text: string;
   title: string;
@@ -21,6 +39,14 @@ export interface UsageChip {
   percent?: number;
   /** Countdown string if available, e.g. "8h 55m". */
   resetsIn?: string | null;
+  /** Detailed window limits for the model info card popup. */
+  details?: ModelWindowDetail[];
+  /** When this payload was fetched (ms epoch). */
+  fetchedAtMs?: number | null;
+  /** Human-formatted age, e.g. "fetched just now". */
+  fetchedAgeText?: string | null;
+  /** Bedrock cost breakdown if applicable. */
+  costDetail?: UsageCostDetail;
 }
 
 const MONTHS = [
@@ -106,10 +132,24 @@ export function usageChips(
   }
   if (usage.bars.length === 0) return [];
   const title = tooltip(usage, now, timeZone);
+  const fetchedAgeText = usage.fetched_at_ms != null ? fetchedAge(usage.fetched_at_ms, now) : null;
   if (usage.cli === "grok") {
     const bar = usage.bars[0];
     if (!bar) return [];
     const left = amountLeft(bar);
+    const details: ModelWindowDetail[] = [
+      {
+        label: bar.label || "Weekly Limit",
+        shortLabel: shortWindow(bar.label) ?? "Wk",
+        percent: whole(left),
+        fill: left,
+        tone: usageTone(left),
+        resetsAtMs: bar.resets_at_ms,
+        resetsAtFormatted: bar.resets_at_ms ? formatAbsolute(bar.resets_at_ms, timeZone) : null,
+        countdown: countdown(bar.resets_at_ms, now),
+        isTighter: true,
+      },
+    ];
     return [
       {
         text: grokText(bar, now),
@@ -121,12 +161,29 @@ export function usageChips(
         window: shortWindow(bar.label),
         percent: whole(left),
         resetsIn: countdown(bar.resets_at_ms, now),
+        details,
+        fetchedAtMs: usage.fetched_at_ms,
+        fetchedAgeText,
       },
     ];
   }
   if (usage.cli === "claude") {
     const bar = tighter(usage.bars);
     const left = amountLeft(bar);
+    const details: ModelWindowDetail[] = usage.bars.map((m) => {
+      const mLeft = amountLeft(m);
+      return {
+        label: m.label,
+        shortLabel: shortWindow(m.label) ?? m.label,
+        percent: whole(mLeft),
+        fill: mLeft,
+        tone: usageTone(mLeft),
+        resetsAtMs: m.resets_at_ms,
+        resetsAtFormatted: m.resets_at_ms ? formatAbsolute(m.resets_at_ms, timeZone) : null,
+        countdown: countdown(m.resets_at_ms, now),
+        isTighter: m === bar,
+      };
+    });
     return [
       {
         text: claudeText(usage.bars, now),
@@ -138,6 +195,9 @@ export function usageChips(
         window: shortWindow(bar.label),
         percent: whole(left),
         resetsIn: countdown(bar.resets_at_ms, now),
+        details,
+        fetchedAtMs: usage.fetched_at_ms,
+        fetchedAgeText,
       },
     ];
   }
@@ -260,6 +320,20 @@ function groupChips(
     const modelTitle = modelGroupTooltip(name, members, bar, now, timeZone, fetchedAt);
     const windowTag = shortWindow(bar.label);
     const left = amountLeft(bar);
+    const details: ModelWindowDetail[] = members.map((m) => {
+      const mLeft = amountLeft(m);
+      return {
+        label: m.label,
+        shortLabel: shortWindow(m.label) ?? m.label,
+        percent: whole(mLeft),
+        fill: mLeft,
+        tone: usageTone(mLeft),
+        resetsAtMs: m.resets_at_ms,
+        resetsAtFormatted: m.resets_at_ms ? formatAbsolute(m.resets_at_ms, timeZone) : null,
+        countdown: countdown(m.resets_at_ms, now),
+        isTighter: m === bar,
+      };
+    });
     chips.push({
       text: allowanceText(label, bar, now),
       title: modelTitle || title,
@@ -270,6 +344,9 @@ function groupChips(
       window: windowTag,
       percent: whole(left),
       resetsIn: countdown(bar.resets_at_ms, now),
+      details,
+      fetchedAtMs: fetchedAt,
+      fetchedAgeText: fetchedAt != null ? fetchedAge(fetchedAt, now) : null,
     });
   }
   return chips;
@@ -316,7 +393,9 @@ function tighter(bars: UsageBar[]): UsageBar {
 function costChip(cost: NonNullable<LlmUsage["cost"]>): UsageChip {
   const session = pricePart(cost.session);
   const today = pricePart(cost.today);
-  const text = `Claude ${costAmount(session.usd, session.estimated)} session · ${costAmount(today.usd, today.estimated)} today`;
+  const sessionFormatted = costAmount(session.usd, session.estimated);
+  const todayFormatted = costAmount(today.usd, today.estimated);
+  const text = `Claude ${sessionFormatted} session · ${todayFormatted} today`;
   return {
     text,
     title: costTooltip(session, today),
@@ -324,6 +403,11 @@ function costChip(cost: NonNullable<LlmUsage["cost"]>): UsageChip {
     tone: "cost",
     meter: false,
     model: "Claude",
+    costDetail: {
+      sessionUsd: sessionFormatted,
+      todayUsd: todayFormatted,
+      estimated: session.estimated || today.estimated,
+    },
   };
 }
 
