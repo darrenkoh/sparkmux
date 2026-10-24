@@ -13,6 +13,14 @@ export interface UsageChip {
   tone: UsageTone;
   /** Quota chips draw a remaining-percent bar. A Bedrock cost chip does not. */
   meter: boolean;
+  /** Short model / group identifier, e.g. "Gemini", "Argon", "Claude", "Grok". */
+  model?: string;
+  /** Limit window label, e.g. "5h", "Wk". */
+  window?: string;
+  /** Formatted percentage number, e.g. 52. */
+  percent?: number;
+  /** Countdown string if available, e.g. "8h 55m". */
+  resetsIn?: string | null;
 }
 
 const MONTHS = [
@@ -101,15 +109,51 @@ export function usageChips(
   if (usage.cli === "grok") {
     const bar = usage.bars[0];
     if (!bar) return [];
-    return [chip(grokText(bar, now), title, bar)];
+    const left = amountLeft(bar);
+    return [
+      {
+        text: grokText(bar, now),
+        title,
+        fill: left,
+        tone: usageTone(left),
+        meter: true,
+        model: "Grok",
+        window: shortWindow(bar.label),
+        percent: whole(left),
+        resetsIn: countdown(bar.resets_at_ms, now),
+      },
+    ];
   }
   if (usage.cli === "claude") {
-    return [chip(claudeText(usage.bars, now), title, tighter(usage.bars))];
+    const bar = tighter(usage.bars);
+    const left = amountLeft(bar);
+    return [
+      {
+        text: claudeText(usage.bars, now),
+        title,
+        fill: left,
+        tone: usageTone(left),
+        meter: true,
+        model: "Claude",
+        window: shortWindow(bar.label),
+        percent: whole(left),
+        resetsIn: countdown(bar.resets_at_ms, now),
+      },
+    ];
   }
   if (usage.cli === "antigravity") {
-    return groupChips(usage.bars, title, now);
+    return groupChips(usage.bars, title, now, timeZone, usage.fetched_at_ms);
   }
   return [];
+}
+
+export function shortWindow(label: string | null | undefined): string | undefined {
+  if (!label) return undefined;
+  const lower = label.toLowerCase();
+  if (lower.includes("five") || lower.includes("5") || lower.includes("5h")) return "5h";
+  if (lower.includes("week") || lower.includes("wk")) return "Wk";
+  if (lower.includes("day")) return "Day";
+  return label.slice(0, 4);
 }
 
 export function amountLeft(bar: UsageBar): number {
@@ -168,7 +212,41 @@ function allowanceText(name: string, bar: UsageBar, now: number): string {
   return left ? `${head} - Resets:${left}` : head;
 }
 
-function groupChips(bars: UsageBar[], title: string, now: number): UsageChip[] {
+function modelGroupTooltip(
+  groupName: string,
+  members: UsageBar[],
+  tighterBar: UsageBar,
+  now: number,
+  timeZone?: string,
+  fetchedAt?: number | null,
+): string {
+  const lines: string[] = [];
+  const headName = groupName || "Model Quota";
+  const tighterPercent = whole(amountLeft(tighterBar));
+  const tighterLabel = tighterBar.label ? ` (tighter: ${tighterBar.label})` : "";
+  lines.push(`${headName} · ${tighterPercent}% Remaining${tighterLabel}`);
+  for (const bar of members) {
+    const pct = precise(amountLeft(bar));
+    const countdownStr = countdown(bar.resets_at_ms, now);
+    const resetPart =
+      bar.resets_at_ms != null
+        ? `, resets ${formatAbsolute(bar.resets_at_ms, timeZone)}${countdownStr ? ` (in ${countdownStr})` : ""}`
+        : "";
+    lines.push(`• ${bar.label}: ${pct} Remaining${resetPart}`);
+  }
+  if (fetchedAt != null) {
+    lines.push(fetchedAge(fetchedAt, now));
+  }
+  return lines.join("\n");
+}
+
+function groupChips(
+  bars: UsageBar[],
+  title: string,
+  now: number,
+  timeZone?: string,
+  fetchedAt?: number | null,
+): UsageChip[] {
   const groups: string[] = [];
   for (const bar of bars) {
     const name = bar.group ?? "";
@@ -179,7 +257,20 @@ function groupChips(bars: UsageBar[], title: string, now: number): UsageChip[] {
     const members = bars.filter((bar) => (bar.group ?? "") === name);
     const bar = tighter(members);
     const label = name || bar.label;
-    chips.push(chip(allowanceText(label, bar, now), title, bar));
+    const modelTitle = modelGroupTooltip(name, members, bar, now, timeZone, fetchedAt);
+    const windowTag = shortWindow(bar.label);
+    const left = amountLeft(bar);
+    chips.push({
+      text: allowanceText(label, bar, now),
+      title: modelTitle || title,
+      fill: left,
+      tone: usageTone(left),
+      meter: true,
+      model: name || bar.label,
+      window: windowTag,
+      percent: whole(left),
+      resetsIn: countdown(bar.resets_at_ms, now),
+    });
   }
   return chips;
 }
@@ -222,16 +313,6 @@ function tighter(bars: UsageBar[]): UsageBar {
   return best;
 }
 
-function chip(text: string, title: string, bar: UsageBar): UsageChip {
-  return {
-    text,
-    title,
-    fill: amountLeft(bar),
-    tone: usageTone(amountLeft(bar)),
-    meter: true,
-  };
-}
-
 function costChip(cost: NonNullable<LlmUsage["cost"]>): UsageChip {
   const session = pricePart(cost.session);
   const today = pricePart(cost.today);
@@ -242,6 +323,7 @@ function costChip(cost: NonNullable<LlmUsage["cost"]>): UsageChip {
     fill: 0,
     tone: "cost",
     meter: false,
+    model: "Claude",
   };
 }
 
@@ -369,12 +451,12 @@ export function parseAgyUsageScreen(text: string, now: number): LlmUsage | null 
       group = shortAgyGroup(line);
       continue;
     }
-    if (/^weekly limit remaining$/i.test(line)) {
+    if (/weekly/i.test(line) && /limit/i.test(line)) {
       label = "Weekly";
       percent = null;
       continue;
     }
-    if (/^five hour limit remaining$/i.test(line)) {
+    if (/(five hour|5.?hour|5h)/i.test(line) && /limit/i.test(line)) {
       label = "5 hour";
       percent = null;
       continue;
@@ -407,13 +489,24 @@ export function parseAgyUsageScreen(text: string, now: number): LlmUsage | null 
 }
 
 function isAgyGroupHeader(line: string): boolean {
-  return line.length < 48 && /models$/i.test(line) && line === line.toUpperCase();
+  if (line.length >= 48) return false;
+  const upper = line.toUpperCase();
+  if (line !== upper) return false;
+  if (/^(QUOTA|USAGE|LIMITS|WEEKLY|FIVE HOUR)/i.test(line)) return false;
+  return (
+    /models$/i.test(line) ||
+    /^(GEMINI|CLAUDE|GPT|ARGON|GROK|O1|O3|SONNET|OPUS|HAIKU)/i.test(line)
+  );
 }
 
 function shortAgyGroup(name: string): string {
   const lower = name.toLowerCase();
+  if (lower.includes("argon")) return "Argon";
+  if (lower.includes("flash")) return "Flash";
+  if (lower.includes("pro")) return "Pro";
   if (lower.includes("gemini")) return "Gemini";
   if (lower.includes("claude")) return "Claude";
+  if (lower.includes("grok")) return "Grok";
   return (name.split(/\s+/)[0] ?? name).slice(0, 16);
 }
 

@@ -9,7 +9,6 @@ Desktop app that owns a private tmux server (`-L sparkmux`) and shows tiled real
 - `apps/desktop` — Tauri 2 + React UI. Never spawn `tmux` except through core.
   - `src-tauri/src/analytics/`: Incremental transcript follower (`ingest.rs`, `stats.rs`, `storage.rs`, `event.rs`) for Grok Build CLI (`~/.grok`), Claude Code CLI (`~/.claude`), and Antigravity CLI (`~/.gemini/antigravity-cli`). Real-time token analytics (input, output, cache reads/writes, reasoning tokens estimation) and tool code delta tracking (+lines / -lines).
   - `src-tauri/src/artifacts.rs`: Read-only follower for AI agent conversation steps (prompts, thinking, replies, tools, results).
-  - `src-tauri/src/helper.rs` / `helper_model.rs`: Local Command Helper model runner (Qwen GGUF).
   - `src/chrome/TerrainViewport.tsx`: WebGL2 interactive 3D Topographical Area Map with organic irregular island coastlines, Gaussian mountain ridges across session channels (User, Think, Reply, Tool), elevation contours, particle fields, and camera controls.
   - `src/chrome/AnalyticsHud.tsx`: Sci-Fi Telemetry HUD with live Neural Cortex synaptogenesis visualization, Actions/Tools matrix, Token Spectrum gauge, Context buffer & TTFT metrics, and filtered Event Stream Log.
   - `src/chrome/DockedStatsPanel.tsx`: Dockable Area Map panel.

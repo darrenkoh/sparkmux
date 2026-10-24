@@ -8,8 +8,6 @@ mod chronicle;
 mod commands;
 mod control;
 mod error;
-mod helper;
-mod helper_model;
 mod llm_usage;
 mod menu;
 mod notify_attention;
@@ -61,10 +59,6 @@ pub fn run() {
             commands::attach_target_name,
             commands::paste_into_pane,
             commands::clipboard_write,
-            helper::command_helper_status,
-            helper::enable_command_helper,
-            helper::disable_command_helper,
-            helper::suggest_shell_command,
             telemetry::app_telemetry,
             llm_usage::llm_usage,
             artifacts::pane_artifacts,
@@ -108,7 +102,6 @@ pub fn run() {
             llm_usage::init_agy_usage();
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;
-            menu::set_command_helper_label(app.handle(), helper::command_helper_status().enabled);
             Ok(())
         })
         .on_menu_event(|app, event| {

@@ -607,11 +607,23 @@ fn parse_agy_usage(text: &str, now: i64) -> Option<LlmUsage> {
 
 fn short_group(name: &str) -> String {
     let lower = name.to_ascii_lowercase();
+    if lower.contains("argon") {
+        return "Argon".to_string();
+    }
+    if lower.contains("flash") {
+        return "Flash".to_string();
+    }
+    if lower.contains("pro") {
+        return "Pro".to_string();
+    }
     if lower.contains("gemini") {
         return "Gemini".to_string();
     }
     if lower.contains("claude") {
         return "Claude".to_string();
+    }
+    if lower.contains("grok") {
+        return "Grok".to_string();
     }
     name.split_whitespace()
         .next()
@@ -628,6 +640,9 @@ fn bucket_label(kind: &str) -> Option<&'static str> {
     }
     if key.contains("week") {
         return Some("Weekly");
+    }
+    if key.contains("day") || key.contains("daily") {
+        return Some("Daily");
     }
     None
 }
@@ -654,24 +669,51 @@ fn parse_agy_print(text: &str) -> Option<LlmUsage> {
     })
 }
 
-fn parse_agy_print_line(line: &str) -> Option<UsageBar> {
-    let line = line.trim();
-    if line.is_empty() {
-        return None;
-    }
+fn split_agy_columns(line: &str) -> Vec<&str> {
     if line.contains('\t') {
-        let parts: Vec<&str> = line
+        return line
             .split('\t')
             .map(str::trim)
             .filter(|part| !part.is_empty())
             .collect();
-        if parts.len() < 3 {
-            return None;
+    }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b' ' && i + 1 < bytes.len() && bytes[i + 1] == b' ' {
+            let chunk = line[start..i].trim();
+            if !chunk.is_empty() {
+                parts.push(chunk);
+            }
+            while i < bytes.len() && bytes[i] == b' ' {
+                i += 1;
+            }
+            start = i;
+        } else {
+            i += 1;
         }
-        let label = bucket_label(parts[1])?;
-        let percent = parse_percent_token(parts[2])?;
-        let resets_at_ms = parts.get(3).and_then(|stamp| parse_agy_stamp(stamp));
-        return Some(print_bar(parts[0], label, percent, resets_at_ms));
+    }
+    let last = line[start..].trim();
+    if !last.is_empty() {
+        parts.push(last);
+    }
+    parts
+}
+
+fn parse_agy_print_line(line: &str) -> Option<UsageBar> {
+    let line = line.trim();
+    if line.is_empty() || line.eq_ignore_ascii_case("quota:") {
+        return None;
+    }
+    let parts = split_agy_columns(line);
+    if parts.len() >= 3 {
+        if let Some(percent) = parse_percent_token(parts[2]) {
+            let label = bucket_label(parts[1]).unwrap_or(parts[1]);
+            let resets_at_ms = parts.get(3).and_then(|stamp| parse_agy_stamp(stamp));
+            return Some(print_bar(parts[0], label, percent, resets_at_ms));
+        }
     }
     let lower = line.to_ascii_lowercase();
     let (idx, label_len, label) = if let Some(idx) = lower.find("five hour limit remaining") {
@@ -1085,6 +1127,28 @@ Claude and GPT models  Five Hour Limit Remaining  100%  2026-10-11 16:48 PDT
             parse_rfc3339_ms("2026-10-11T23:48:00Z")
         );
         assert!(parse_agy_print("just a shell prompt\n%").is_none());
+
+        let multi_model = "\
+Quota:
+Gemini Models          Weekly Limit Remaining       52%   2026-10-25 00:30 PDT
+Gemini Models          Five Hour Limit Remaining    100%  2026-10-24 20:33 PDT
+Claude and GPT models  Weekly Limit Remaining       69%   2026-10-29 16:46 PDT
+Claude and GPT models  Five Hour Limit Remaining    100%  2026-10-24 20:34 PDT
+Gemini 4 Argon         Gemini 4 Argon Weekly Limit  1%    2026-10-24 21:53 PDT
+";
+        let parsed = parse_agy_print(multi_model).unwrap();
+        assert_eq!(parsed.bars.len(), 5);
+        assert_eq!(parsed.bars[0].group.as_deref(), Some("Gemini"));
+        assert_eq!(parsed.bars[0].percent, 52.0);
+        assert_eq!(parsed.bars[1].group.as_deref(), Some("Gemini"));
+        assert_eq!(parsed.bars[1].percent, 100.0);
+        assert_eq!(parsed.bars[2].group.as_deref(), Some("Claude"));
+        assert_eq!(parsed.bars[2].percent, 69.0);
+        assert_eq!(parsed.bars[3].group.as_deref(), Some("Claude"));
+        assert_eq!(parsed.bars[3].percent, 100.0);
+        assert_eq!(parsed.bars[4].group.as_deref(), Some("Argon"));
+        assert_eq!(parsed.bars[4].label, "Weekly");
+        assert_eq!(parsed.bars[4].percent, 1.0);
     }
 
     #[test]

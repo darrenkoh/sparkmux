@@ -1968,10 +1968,159 @@ body.is-resizing * {
 .status-usage-row {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  font-size: 11px;
+  line-height: 14px;
+  cursor: default;
+  user-select: none;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.status-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.status-pill-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-pill-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.status-pill-icon svg {
+  width: 11px;
+  height: 11px;
+}
+
+.status-pill-name {
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill-window {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  line-height: 12px;
+  flex-shrink: 0;
+}
+
+.status-pill-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.status-pill-track {
+  width: 24px;
+  height: 3.5px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.status-pill-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+  transition: width 0.25s ease;
+}
+
+/* Tone styling for status-pill */
+.status-pill.ok {
+  border-color: rgba(61, 214, 140, 0.25);
+  background: rgba(61, 214, 140, 0.05);
+}
+.status-pill.ok:hover {
+  border-color: rgba(61, 214, 140, 0.45);
+  background: rgba(61, 214, 140, 0.1);
+  box-shadow: 0 0 8px rgba(61, 214, 140, 0.15);
+}
+.status-pill.ok .status-pill-value,
+.status-pill.ok .status-pill-fill,
+.status-pill.ok .status-pill-icon {
+  color: var(--ok);
+}
+
+.status-pill.warn {
+  border-color: rgba(232, 168, 73, 0.3);
+  background: rgba(232, 168, 73, 0.06);
+}
+.status-pill.warn:hover {
+  border-color: rgba(232, 168, 73, 0.5);
+  background: rgba(232, 168, 73, 0.12);
+  box-shadow: 0 0 8px rgba(232, 168, 73, 0.15);
+}
+.status-pill.warn .status-pill-value,
+.status-pill.warn .status-pill-fill,
+.status-pill.warn .status-pill-icon {
+  color: #e8a849;
+}
+
+.status-pill.hot {
+  border-color: rgba(240, 113, 120, 0.35);
+  background: rgba(240, 113, 120, 0.08);
+}
+.status-pill.hot:hover {
+  border-color: rgba(240, 113, 120, 0.6);
+  background: rgba(240, 113, 120, 0.15);
+  box-shadow: 0 0 8px rgba(240, 113, 120, 0.2);
+}
+.status-pill.hot .status-pill-value,
+.status-pill.hot .status-pill-fill,
+.status-pill.hot .status-pill-icon {
+  color: var(--danger);
+}
+
+.status-pill.cost {
+  border-color: rgba(250, 204, 21, 0.28);
+  background: rgba(250, 204, 21, 0.06);
+}
+.status-pill.cost:hover {
+  border-color: rgba(250, 204, 21, 0.5);
+  background: rgba(250, 204, 21, 0.12);
+}
+.status-pill.cost .status-pill-value,
+.status-pill.cost .status-pill-name,
+.status-pill.cost .status-pill-icon {
+  color: #facc15;
 }
 
 .status-metrics > span:not(.status-usage-row) {
@@ -1980,13 +2129,9 @@ body.is-resizing * {
 
 .status-usage {
   display: inline-flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
   min-width: 0;
   max-width: 64ch;
   flex: 0 1 auto;
-  line-height: 1.15;
 }
 
 .status-usage-text {
@@ -2023,13 +2168,6 @@ body.is-resizing * {
 
 .status-usage.cost {
   color: #facc15;
-}
-
-.status-helper {
-  max-width: 28ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 0 auto;
 }
 
 .status-output {
@@ -2088,51 +2226,6 @@ body.is-resizing * {
 .artifact-stats-btn:hover {
   background: rgba(255, 154, 60, 0.2) !important;
   border-color: #ff9a3c !important;
-}
-
-.status-ask {
-  margin-left: 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: #1a1e26;
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: var(--radius);
-  padding: 2px 8px;
-  cursor: pointer;
-  flex: 0 0 auto;
-}
-
-.status-ask svg {
-  width: 14px;
-  height: 14px;
-  display: block;
-}
-
-.helper-progress {
-  margin-top: 12px;
-  height: 4px;
-  border-radius: 999px;
-  background: #2a2f3a;
-  overflow: hidden;
-}
-
-.helper-progress > span {
-  display: block;
-  height: 100%;
-  width: 40%;
-  background: var(--accent, #7aa2f7);
-  animation: helper-indeterminate 1.1s ease-in-out infinite;
-}
-
-@keyframes helper-indeterminate {
-  0% {
-    transform: translateX(-120%);
-  }
-  100% {
-    transform: translateX(320%);
-  }
 }
 
 .toast {

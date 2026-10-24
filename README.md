@@ -16,8 +16,7 @@
   <b>Tiled Native xterm.js Terminals</b> &bull;
   <b>Real-Time AI Agent Telemetry</b> &bull;
   <b>3D WebGL Topographical Area Map</b> &bull;
-  <b>Sci-Fi Neural HUD</b> &bull;
-  <b>Local Offline Command Assistant</b>
+  <b>Sci-Fi Neural HUD</b>
 </p>
 
 ---
@@ -41,7 +40,6 @@
   - [3. Sci-Fi Neural Telemetry HUD](#3-sci-fi-neural-telemetry-hud)
   - [4. Private & Isolated tmux Architecture](#4-private--isolated-tmux-architecture)
   - [5. Visual Git Intelligence Canvas](#5-visual-git-intelligence-canvas)
-  - [6. Offline Command Helper (Local LLM)](#6-offline-command-helper-local-llm)
 - [Architecture](#-architecture)
 - [Quick Install](#-quick-install)
   - [macOS (Apple Silicon)](#macos-apple-silicon)
@@ -148,16 +146,6 @@ Visualize git repository changes and agent edits on an interactive 2D/3D workspa
 
 ---
 
-### 6. Offline Command Helper (Local LLM)
-
-Integrated on-device command assistance that keeps your code and workflow completely private.
-
-- **100% Offline & Private**: Powered by an embedded local GGUF model (Qwen2.5-Coder) running natively on your hardware.
-- **Instant Shell Suggestions**: Click **Ask** in the status bar or trigger via keyboard shortcut to generate shell pipelines, syntax corrections, and commands.
-- **Zero Cloud Latency**: No API keys required, zero telemetry phoning home, with live CPU and RAM usage indicators in the status bar.
-
----
-
 ## 🏗️ Architecture
 
 ```mermaid
@@ -174,7 +162,6 @@ flowchart TD
         Client["tmux -C Control Client"]
         LayoutParser["window_layout Parser"]
         Follower["Transcript Follower (ingest.rs)"]
-        Helper["Local LLM Runner (Qwen GGUF)"]
     end
 
     subgraph TmuxServer ["Private Server (-L sparkmux)"]
@@ -282,7 +269,6 @@ sparkmux -L my-socket dump
 |---|---|---|
 | <kbd>⌘</kbd> + <kbd>T</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> | Global | Create new window in current session |
 | <kbd>⌘</kbd> + <kbd>V</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd> | Terminal | Paste clipboard content to focused pane |
-| <kbd>Shift</kbd> + <kbd>Tab</kbd> | Terminal | Toggle command mode / helper navigation |
 | <kbd>Ctrl</kbd> + <kbd>C</kbd> | Terminal | Send interrupt signal to focused pane |
 | <kbd>Left Click + Drag</kbd> | 3D Area Map | Orbit camera angle |
 | <kbd>Right Click + Drag</kbd> | 3D Area Map | Pan camera across terrain |

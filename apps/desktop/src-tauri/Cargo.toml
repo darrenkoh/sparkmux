@@ -32,6 +32,4 @@ url = "2"
 tauri-plugin-updater = "2"
 toml = { workspace = true }
 libc = "0.2"
-ureq = { version = "2", features = ["native-certs"] }
-llama-cpp-2 = "=0.1.158"
 tauri-plugin-notification = "2"

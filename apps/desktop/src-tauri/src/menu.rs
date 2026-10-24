@@ -1,12 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::menu::{
-    AboutMetadata, MenuBuilder, MenuItemBuilder, MenuItemKind, PredefinedMenuItem, SubmenuBuilder,
+    AboutMetadata, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-
-pub const ENABLE_HELPER_LABEL: &str = "Enable Command Helper";
-pub const DISABLE_HELPER_LABEL: &str = "Disable Command Helper";
 
 use crate::state::AppState;
 
@@ -73,7 +70,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         Some(if mac { "Cmd+Shift+/" } else { "F1" }),
     )?;
     let check_update = item(app, "check-update", "Check for Updates…", None)?;
-    let enable_helper = item(app, "enable-command-helper", ENABLE_HELPER_LABEL, None)?;
 
     let file = if mac {
         SubmenuBuilder::new(app, "File")
@@ -88,8 +84,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&new_window)
             .separator()
             .item(&close_tab)
-            .separator()
-            .item(&enable_helper)
             .separator()
             .item(&quit)
             .build()?
@@ -151,8 +145,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&about)
             .item(&check_update)
             .separator()
-            .item(&enable_helper)
-            .separator()
             .item(&hide)
             .item(&hide_others)
             .item(&show_all)
@@ -180,41 +172,6 @@ fn item<R: Runtime>(
         b = b.accelerator(acc);
     }
     b.build(app)
-}
-
-pub fn set_command_helper_label<R: Runtime>(app: &AppHandle<R>, enabled: bool) {
-    let Some(menu) = app.menu() else {
-        return;
-    };
-    let text = if enabled {
-        DISABLE_HELPER_LABEL
-    } else {
-        ENABLE_HELPER_LABEL
-    };
-    let Ok(items) = menu.items() else {
-        return;
-    };
-    for item in items {
-        if relabel(&item, "enable-command-helper", text) {
-            return;
-        }
-    }
-}
-
-fn relabel<R: Runtime>(item: &MenuItemKind<R>, id: &str, text: &str) -> bool {
-    if item.id().as_ref() == id {
-        return item
-            .as_menuitem()
-            .and_then(|menu_item| menu_item.set_text(text).ok())
-            .is_some();
-    }
-    let Some(submenu) = item.as_submenu() else {
-        return false;
-    };
-    let Ok(children) = submenu.items() else {
-        return false;
-    };
-    children.iter().any(|child| relabel(child, id, text))
 }
 
 pub fn on_event(app: &AppHandle, id: &str) {

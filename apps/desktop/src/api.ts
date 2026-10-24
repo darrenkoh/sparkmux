@@ -555,22 +555,6 @@ export function analyticsConfig(): Promise<AnalyticsConfig> {
   return invoke("analytics_config");
 }
 
-export interface HelperStatus {
-  enabled: boolean;
-  weight_path: string | null;
-  usage: string;
-}
-
-export interface ShellSuggestion {
-  command: string;
-  destructive: boolean;
-  raw: string;
-}
-
-export function commandHelperStatus(): Promise<HelperStatus> {
-  return invoke("command_helper_status");
-}
-
 export function appTelemetry(): Promise<AppTelemetry> {
   return invoke("app_telemetry");
 }
@@ -582,22 +566,6 @@ export function llmUsage(
   pid: number,
 ): Promise<LlmUsage> {
   return invoke("llm_usage", { command, title, cwd, pid });
-}
-
-export function enableCommandHelper(): Promise<HelperStatus> {
-  return invoke("enable_command_helper");
-}
-
-export function disableCommandHelper(): Promise<HelperStatus> {
-  return invoke("disable_command_helper");
-}
-
-export function suggestShellCommand(
-  request: string,
-  shell: string,
-  alternate: boolean,
-): Promise<ShellSuggestion> {
-  return invoke("suggest_shell_command", { request, shell, alternate });
 }
 
 export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {

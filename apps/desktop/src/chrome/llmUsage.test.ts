@@ -263,7 +263,47 @@ CLAUDE AND GPT MODELS
   );
   assert.equal(chips[0].fill, 76.23);
   assert.equal(chips[0].tone, "ok");
+  assert.equal(chips[0].model, "Gemini");
+  assert.equal(chips[0].percent, 76);
+  assert.equal(chips[0].window, "Wk");
   assert.equal(chips[1].tone, "warn");
+  assert.equal(chips[1].model, "Claude");
+  assert.equal(chips[1].percent, 49);
+  assert.equal(chips[1].window, "Wk");
+  assert.ok(chips[0].title.includes("Weekly: 76.2% Remaining"));
+  assert.ok(chips[0].title.includes("5 hour: 96.1% Remaining"));
+
+  const multiWithArgon = parseAgyUsageScreen(
+    `
+GEMINI MODELS
+  Weekly Limit Remaining
+    52%
+    Refreshes in 8h 55m
+  Five Hour Limit Remaining
+    100%
+    Quota available
+GEMINI 4 ARGON
+  Gemini 4 Argon Weekly Limit
+    1%
+    Refreshes in 6h 19m
+CLAUDE AND GPT MODELS
+  Weekly Limit Remaining
+    69%
+    Refreshes in 112h 46m
+`,
+    NOW,
+  );
+  const multiChips = usageChips(multiWithArgon, NOW);
+  assert.equal(multiChips.length, 3);
+  assert.equal(multiChips[0].model, "Gemini");
+  assert.equal(multiChips[0].percent, 52);
+  assert.equal(multiChips[0].tone, "ok");
+  assert.equal(multiChips[1].model, "Argon");
+  assert.equal(multiChips[1].percent, 1);
+  assert.equal(multiChips[1].tone, "hot");
+  assert.equal(multiChips[2].model, "Claude");
+  assert.equal(multiChips[2].percent, 69);
+  assert.equal(multiChips[2].tone, "ok");
 
   const tighter = parseAgyUsageScreen(
     `

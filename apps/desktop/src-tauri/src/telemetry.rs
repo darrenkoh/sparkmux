@@ -1,4 +1,4 @@
-//! Memory and CPU of this Sparkmux process, plus the command-helper model.
+//! Memory and CPU of this Sparkmux process.
 //! The figures stay in the app. Nothing here is sent off the machine.
 //!
 //! CPU is a percent of one core since the previous sample, so several busy
@@ -9,17 +9,12 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::helper::{command_helper_loaded, command_helper_status, MODEL_NAME};
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AppTelemetry {
     /// Resident memory of this Sparkmux process, in bytes. Zero means the read failed.
     pub memory_bytes: u64,
     /// Absent on the first sample. Later samples are a percent of one core.
     pub cpu_percent: Option<f64>,
-    pub helper_enabled: bool,
-    pub model_name: String,
-    pub model_loaded: bool,
 }
 
 struct Tick {
@@ -32,13 +27,9 @@ static PREV: Mutex<Option<Tick>> = Mutex::new(None);
 #[tauri::command]
 pub fn app_telemetry() -> AppTelemetry {
     let (memory_bytes, cpu_percent) = sample_process();
-    let helper = command_helper_status();
     AppTelemetry {
         memory_bytes,
         cpu_percent,
-        helper_enabled: helper.enabled,
-        model_name: MODEL_NAME.to_string(),
-        model_loaded: helper.enabled && command_helper_loaded(),
     }
 }
 
@@ -217,10 +208,8 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_names_the_command_helper_model() {
+    fn telemetry_reports_this_process() {
         let sample = app_telemetry();
-        assert_eq!(sample.model_name, MODEL_NAME);
-        assert!(sample.model_name.contains("Qwen2.5-Coder-1.5B-Instruct"));
         assert!(
             sample.memory_bytes > 1_000_000,
             "resident {}",
@@ -230,11 +219,11 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_shows_the_model_and_process_use() {
+    fn the_status_bar_shows_process_use() {
         let bar = include_str!("../../src/chrome/StatusBar.tsx");
-        assert!(bar.contains("Command helper model:"));
         assert!(bar.contains("Sparkmux memory:"));
         assert!(bar.contains("Sparkmux CPU:"));
+        assert!(!bar.contains("Command helper"));
         let app = include_str!("../../src/App.tsx");
         assert!(app.contains("appTelemetry"));
         assert!(app.contains("formatMemory"));
