@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.62
+
+### Improvements & Bug Fixes
+
+- **Mobile Web Terminal Input Prompt Auto-Scroll & Viewport Panning**:
+  - Automatically keep the terminal caret and shell input prompt continuously in view across `onCursorMove`, `onRender`, user keystrokes (`onData`), incoming streaming tmux output writes, and `ResizeObserver`.
+  - Added natural one-finger touch drag panning for overflowing terminal viewports on mobile devices (`touch-action: pan-x pan-y`), smoothly navigating across rows and columns without getting trapped.
+  - Automatically clear bottom safe-area padding when the software keyboard opens (`.app.keyboard-open`), maximizing visible terminal height above the keyboard.
+- **Status Bar Mobile Overflow & Pill Layout**:
+  - Enforced non-shrinking flex behavior (`flex: 0 0 auto`) on telemetry metrics, model quotas, and hardware pills to eliminate squishing and overlapping on narrow screens.
+  - Added smooth horizontal scrolling (`overflow-x: auto`) with hidden scrollbars to the status bar on mobile devices.
+  - Hid desktop tmux and socket debug prefix (`tmux 3.4 · -L sparkmux`) on compact phone postures to prioritize session tabs, quota metrics, and action buttons.
+  - Centered floating quota and telemetry detail cards within mobile viewports.
+
 ## 0.1.61
 
 ### Improvements & Bug Fixes
