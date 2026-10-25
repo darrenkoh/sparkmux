@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.59
+
+### Improvements
+
+- **Balanced 2×2 Telemetry Cards in Section 05**: Reorganized the Cache Efficiency & Code Delta panel into a clean 2×2 card deck with dedicated tiles for Cache Hit Efficiency, Context Capacity, Session Economy, and Latency & Code Delta.
+- **Prompt Cache Savings Ticker**: Added real-time dollar cost savings estimation from prompt cache hits vs. uncached baseline pricing, alongside cache discount ROI metrics.
+- **Context Window Capacity Meter**: Integrated dynamic multi-threshold gauge tracking context saturation and remaining headroom with alert color transitions.
+- **Latency & Code Delta Diff Bar**: Added Time to First Token (TTFT) metrics, generation throughput (tok/s), and a proportional green/red diff ratio bar with churn tracking.
+
 ## 0.1.58
 
 ### Improvements
