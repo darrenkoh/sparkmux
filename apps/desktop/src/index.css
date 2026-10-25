@@ -3031,7 +3031,11 @@ body.is-resizing * {
 }
 
 .modal.web-serve-modal {
-  max-width: 560px;
+  width: min(520px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .web-serve-qr {
@@ -3073,11 +3077,14 @@ body.is-resizing * {
   gap: 8px;
   align-items: flex-start;
   margin: 8px 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .web-serve-pick {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding: 0;
   border: 0;
@@ -3087,14 +3094,22 @@ body.is-resizing * {
   cursor: pointer;
 }
 
+.web-serve-url > button:last-child {
+  flex: 0 0 auto;
+}
+
 .web-serve-url.selected code {
   border-color: #5b8def;
 }
 
 .web-serve-url code {
-  flex: 1;
-  min-width: 0;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
   word-break: break-all;
+  white-space: normal;
   background: #0d0f12;
   border: 1px solid var(--border);
   border-radius: 6px;

@@ -287,7 +287,7 @@ The phone or tablet page is the Sparkmux UI, served from the Mac or Linux machin
 
 ### Start the page
 
-In the desktop app, choose **Start iPhone and iPad Server**. On macOS that item is in the Sparkmux menu. On Linux it is in File. The window lists the addresses. **Stop iPhone and iPad Server** closes the page and leaves your tmux sessions running.
+In the desktop app, choose **Start Remote Server**. On macOS that item is in the Sparkmux menu. On Linux it is in File. The window lists the addresses. **Stop Remote Server** closes the page and leaves your tmux sessions running.
 
 From a terminal on the host:
 

@@ -33,8 +33,8 @@ use crate::web_protocol::{
 };
 
 pub const WEB_SERVE_MENU_ID: &str = "web-serve";
-pub const WEB_SERVE_MENU_START: &str = "Start iPhone and iPad Server";
-pub const WEB_SERVE_MENU_STOP: &str = "Stop iPhone and iPad Server";
+pub const WEB_SERVE_MENU_START: &str = "Start Remote Server";
+pub const WEB_SERVE_MENU_STOP: &str = "Stop Remote Server";
 
 #[derive(RustEmbed)]
 #[folder = "../dist/"]
@@ -1128,8 +1128,8 @@ mod tests {
         assert!(!body.contains("kill_server"));
         assert!(!body.contains("stop_server_core"));
         assert!(src.contains("WEB_SERVE_MENU_START"));
-        assert!(src.contains("Start iPhone and iPad Server"));
-        assert!(src.contains("Stop iPhone and iPad Server"));
+        assert!(src.contains("Start Remote Server"));
+        assert!(src.contains("Stop Remote Server"));
     }
 
     #[test]

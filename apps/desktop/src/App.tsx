@@ -765,7 +765,7 @@ export default function App() {
       return;
     }
     setDialog((current) => (current?.kind === "web-serve" ? null : current));
-    showToast("iPhone and iPad server stopped. Sessions stay up.");
+    showToast("Remote server stopped. Sessions stay up.");
   }
 
   async function doCopy() {
@@ -1919,8 +1919,8 @@ export default function App() {
             <dd>⌘+ ⌘- ⌘0 / Ctrl+ ± 0</dd>
             <dt>Quit</dt>
             <dd>⌘Q — detaches only</dd>
-            <dt>iPhone and iPad</dt>
-            <dd>Sparkmux menu, or File on Linux. Start and stop the phone page</dd>
+            <dt>Remote Server</dt>
+            <dd>Sparkmux menu, or File on Linux. Start Remote Server</dd>
           </dl>
           <p className="hint">
             Prefix keys are not emulated here; they still work in a real attach.
@@ -1936,7 +1936,7 @@ export default function App() {
       )}
       {dialog?.kind === "web-serve" && (
         <Modal
-          title="iPhone and iPad"
+          title="Remote Server"
           className="web-serve-modal"
           onClose={() => setDialog(null)}
         >
@@ -1992,7 +1992,7 @@ export default function App() {
               className="danger"
               onClick={() => void toggleWebServer().catch((err) => showToast(String(err)))}
             >
-              Stop server
+              Stop Remote Server
             </button>
             <button className="primary" onClick={() => setDialog(null)}>
               Close

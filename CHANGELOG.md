@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.60
+
+### Features & Improvements
+
+- **iPhone and iPad Web Server & PWA (`sparkmux serve`)**: Host a pure web and installable PWA terminal session from your workstation (`sparkmux serve` or via desktop menu). Full feature parity including `%output` streaming, pane seeding, reconnection logic, TouchKeyBar (Esc, Ctrl-C, Tab, Arrows), and foldable iPhone Duo posture handling (book/clamshell) & iPad Pro Split View.
+- **Dynamic Pairing QR Code**: Desktop server window displays interactive QR code cards that dynamically update to match the selected IP address (Wi-Fi, Tailscale, LAN, or local).
+- **Docked Area Map CPU & GPU Optimization**: Eliminated 60 FPS layout thrashing in `TerrainViewport` by caching canvas bounding dimensions via `ResizeObserver`, and throttled the docked mini-map render loop to 30 FPS.
+
 ## 0.1.59
 
 ### Improvements
