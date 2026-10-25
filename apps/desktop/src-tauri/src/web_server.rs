@@ -159,6 +159,17 @@ impl WebServeSlot {
             self.start(state, opts).await
         }
     }
+
+    pub async fn status(&self, state: &AppState) -> WebServeStatus {
+        let guard = self.current.lock().await;
+        if let Some(running) = guard.as_ref() {
+            serve_status(true, running.urls.clone())
+        } else {
+            let urls = state.web_urls.lock().unwrap().clone();
+            let running = !urls.is_empty();
+            serve_status(running, urls)
+        }
+    }
 }
 
 fn menu_serve_options() -> ServeOptions {
@@ -167,6 +178,14 @@ fn menu_serve_options() -> ServeOptions {
         port: 7420,
         token: None,
     }
+}
+
+#[tauri::command]
+pub async fn web_serve_status(
+    state: tauri::State<'_, AppState>,
+    slot: tauri::State<'_, WebServeSlot>,
+) -> Result<WebServeStatus, String> {
+    Ok(slot.status(state.inner()).await)
 }
 
 #[tauri::command]
@@ -358,6 +377,7 @@ async fn open_web(
         Vec::new()
     };
     let urls = collect_pairing_urls(&opts.bind, bound.port(), &token, &extras);
+    *state.web_urls.lock().unwrap() = urls.clone();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let task_state = Arc::new(state.clone());
     let task = tokio::spawn(async move {
@@ -377,6 +397,7 @@ async fn open_web(
 }
 
 async fn shutdown_web(running: RunningWeb) {
+    running.state.web_urls.lock().unwrap().clear();
     let _ = running.shutdown.send(true);
     let RunningWeb {
         mut task,
@@ -1050,6 +1071,11 @@ async fn dispatch_rpc_inner(
         "open_editor_path" => {
             crate::open_path::open_editor_path(str_arg(&args, "path"), str_arg(&args, "cwd"))?;
             Ok(Value::Null)
+        }
+        "web_serve_status" => {
+            let urls = state.web_urls.lock().unwrap().clone();
+            let running = !urls.is_empty();
+            json_ok(serve_status(running, urls))
         }
         other => Err(format!("unsupported RPC command: {other}")),
     }

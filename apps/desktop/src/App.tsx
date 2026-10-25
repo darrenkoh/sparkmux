@@ -12,6 +12,8 @@ import {
   attachTargetName,
   clipboardWrite,
   webServeToggle,
+  webServeStatus,
+  type WebServeStatus,
   appTelemetry,
   llmUsage,
   paneWrite,
@@ -108,7 +110,12 @@ type Dialog =
   | { kind: "stop"; socket: string; count: number }
   | { kind: "help" }
   | { kind: "recipes" }
-  | { kind: "web-serve"; links: { url: string; modules: string }[]; selected: string };
+  | {
+      kind: "web-serve";
+      running: boolean;
+      links: { url: string; modules: string }[];
+      selected: string;
+    };
 
 function namedSession(name: string | null | undefined): string | null {
   const trimmed = name?.trim() ?? "";
@@ -170,6 +177,7 @@ export default function App() {
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [input, setInput] = useState("");
   const [telemetry, setTelemetry] = useState<AppTelemetry | null>(null);
+  const [webStatus, setWebStatus] = useState<WebServeStatus | null>(null);
   const [allowance, setAllowance] = useState<LlmUsage | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -236,6 +244,18 @@ export default function App() {
     const id = window.setInterval(refreshTelemetry, 1000);
     return () => window.clearInterval(id);
   }, [refreshTelemetry]);
+
+  const refreshWebStatus = useCallback(() => {
+    void webServeStatus()
+      .then((next) => setWebStatus(next))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshWebStatus();
+    const id = window.setInterval(refreshWebStatus, 3000);
+    return () => window.clearInterval(id);
+  }, [refreshWebStatus]);
 
   useEffect(() => {
     attachedRef.current = attachedSession;
@@ -779,6 +799,9 @@ export default function App() {
         case "web-serve":
           await toggleWebServer();
           break;
+        case "web-serve-urls":
+          await openWebServerDialog();
+          break;
         default:
           break;
       }
@@ -788,17 +811,39 @@ export default function App() {
   }
   onMenuRef.current = onMenu;
 
+  async function openWebServerDialog() {
+    try {
+      const status = await webServeStatus();
+      setWebStatus(status);
+      setDialog({
+        kind: "web-serve",
+        running: status.running,
+        links: status.links,
+        selected: status.selected || status.links[0]?.url || "",
+      });
+    } catch (e) {
+      showToast(String(e));
+    }
+  }
+
   async function toggleWebServer() {
     const status = await webServeToggle();
+    setWebStatus(status);
     if (status.running) {
       setDialog({
         kind: "web-serve",
+        running: true,
         links: status.links,
         selected: status.selected || status.links[0]?.url || "",
       });
       return;
     }
-    setDialog((current) => (current?.kind === "web-serve" ? null : current));
+    setDialog({
+      kind: "web-serve",
+      running: false,
+      links: [],
+      selected: "",
+    });
     showToast("Remote server stopped. Sessions stay up.");
   }
 
@@ -1762,6 +1807,15 @@ export default function App() {
           setGraphOpen((open) => !open);
         }}
         onRecipes={() => setDialog({ kind: "recipes" })}
+        webRunning={webStatus?.running ?? false}
+        webModalOpen={dialog?.kind === "web-serve"}
+        onWebServe={() => {
+          if (dialog?.kind === "web-serve") {
+            setDialog(null);
+          } else {
+            void openWebServerDialog();
+          }
+        }}
       />
       <UpdateNotice
         phase={updateNotice.phase}
@@ -1937,7 +1991,7 @@ export default function App() {
             <dt>Quit</dt>
             <dd>⌘Q — detaches only</dd>
             <dt>Remote Server</dt>
-            <dd>Sparkmux menu, or File on Linux. Start Remote Server</dd>
+            <dd>Status bar "Remote", Sparkmux menu, or File on Linux</dd>
           </dl>
           <p className="hint">
             Prefix keys are not emulated here; they still work in a real attach.
@@ -1957,64 +2011,93 @@ export default function App() {
           className="web-serve-modal"
           onClose={() => setDialog(null)}
         >
-          {(() => {
-            const link =
-              dialog.links.find((item) => item.url === dialog.selected) ?? dialog.links[0];
-            if (!link) return null;
-            const local = link.url.includes("127.0.0.1");
-            return (
-              <div className="web-serve-qr">
-                <QrMark modules={link.modules} />
-                <p>
-                  {local
-                    ? "This code only opens on this computer."
-                    : "Scan the selected address with the iPhone camera."}
+          {dialog.running ? (
+            <>
+              <div className="web-serve-status-badge running">
+                <span className="status-remote-dot active" /> Online · Port 7420
+              </div>
+              {(() => {
+                const link =
+                  dialog.links.find((item) => item.url === dialog.selected) ?? dialog.links[0];
+                if (!link) return null;
+                const local = link.url.includes("127.0.0.1");
+                return (
+                  <div className="web-serve-qr">
+                    <QrMark modules={link.modules} />
+                    <p>
+                      {local
+                        ? "This code only opens on this computer."
+                        : "Scan the selected address with the iPhone camera."}
+                    </p>
+                  </div>
+                );
+              })()}
+              <p>Select an address. 127.0.0.1 is this computer. In Safari, use Share, then Add to Home Screen.</p>
+              {dialog.links.map((link) => (
+                <div
+                  key={link.url}
+                  className={link.url === dialog.selected ? "web-serve-url selected" : "web-serve-url"}
+                >
+                  <button
+                    type="button"
+                    className="web-serve-pick"
+                    aria-pressed={link.url === dialog.selected}
+                    onClick={() =>
+                      setDialog((current) =>
+                        current?.kind === "web-serve" ? { ...current, selected: link.url } : current,
+                      )
+                    }
+                  >
+                    <code>{link.url}</code>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void clipboardWrite(link.url)
+                        .then(() => showToast("Copied."))
+                        .catch((err) => showToast(String(err)))
+                    }
+                  >
+                    Copy
+                  </button>
+                </div>
+              ))}
+              <p className="hint">Stopping this server leaves your tmux sessions running.</p>
+              <div className="modal-actions">
+                <button
+                  className="danger"
+                  onClick={() => void toggleWebServer().catch((err) => showToast(String(err)))}
+                >
+                  Stop Remote Server
+                </button>
+                <button className="primary" onClick={() => setDialog(null)}>
+                  Close
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="web-serve-status-badge stopped">
+                <span className="status-remote-dot" /> Offline
+              </div>
+              <div className="web-serve-offline-box">
+                <p className="web-serve-offline-desc">
+                  Start the remote server to view pairing URLs and QR code. You can mirror and control your tmux sessions securely from an iPhone, iPad, or another browser on your local network.
                 </p>
               </div>
-            );
-          })()}
-          <p>Select an address. 127.0.0.1 is this computer. In Safari, use Share, then Add to Home Screen.</p>
-          {dialog.links.map((link) => (
-            <div
-              key={link.url}
-              className={link.url === dialog.selected ? "web-serve-url selected" : "web-serve-url"}
-            >
-              <button
-                type="button"
-                className="web-serve-pick"
-                aria-pressed={link.url === dialog.selected}
-                onClick={() =>
-                  setDialog((current) =>
-                    current?.kind === "web-serve" ? { ...current, selected: link.url } : current,
-                  )
-                }
-              >
-                <code>{link.url}</code>
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  void clipboardWrite(link.url)
-                    .then(() => showToast("Copied."))
-                    .catch((err) => showToast(String(err)))
-                }
-              >
-                Copy
-              </button>
-            </div>
-          ))}
-          <p className="hint">Stopping this server leaves your tmux sessions running.</p>
-          <div className="modal-actions">
-            <button
-              className="danger"
-              onClick={() => void toggleWebServer().catch((err) => showToast(String(err)))}
-            >
-              Stop Remote Server
-            </button>
-            <button className="primary" onClick={() => setDialog(null)}>
-              Close
-            </button>
-          </div>
+              <div className="modal-actions">
+                <button
+                  className="primary"
+                  onClick={() => void toggleWebServer().catch((err) => showToast(String(err)))}
+                >
+                  Start Remote Server
+                </button>
+                <button onClick={() => setDialog(null)}>
+                  Close
+                </button>
+              </div>
+            </>
+          )}
         </Modal>
       )}
       {dialog?.kind === "recipes" && (

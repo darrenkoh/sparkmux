@@ -507,6 +507,9 @@ export default function StatusBar({
   onAnalytics,
   onGraph,
   onRecipes,
+  webRunning,
+  webModalOpen,
+  onWebServe,
 }: {
   status: TmuxStatus | null;
   session: string | null;
@@ -520,6 +523,9 @@ export default function StatusBar({
   onAnalytics?: () => void;
   onGraph?: () => void;
   onRecipes: () => void;
+  webRunning?: boolean;
+  webModalOpen?: boolean;
+  onWebServe?: () => void;
 }) {
   const tmux = status?.version ?? "tmux";
   const sock = status?.socket_name ? `-L ${status.socket_name}` : "-L sparkmux";
@@ -689,6 +695,23 @@ export default function StatusBar({
           onClick={onGraph}
         >
           ⬡ Gits
+        </button>
+      )}
+      {onWebServe && (
+        <button
+          type="button"
+          className={`status-remote${webRunning ? " running" : ""}${webModalOpen ? " open" : ""}`}
+          aria-pressed={webModalOpen}
+          aria-label="Remote server URLs"
+          title={
+            webRunning
+              ? "Remote server running — click to view URLs & QR code"
+              : "Remote server offline — click to configure & start"
+          }
+          onClick={onWebServe}
+        >
+          <span className={`status-remote-dot${webRunning ? " active" : ""}`} aria-hidden="true" />
+          Remote
         </button>
       )}
       <button

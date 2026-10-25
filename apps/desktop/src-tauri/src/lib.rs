@@ -140,6 +140,7 @@ pub fn run() {
             commands::get_active_target,
             commands::open_popout_window,
             web_server::web_serve_toggle,
+            web_server::web_serve_status,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

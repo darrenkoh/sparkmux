@@ -74,6 +74,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         Some(if mac { "Cmd+Shift+/" } else { "F1" }),
     )?;
     let check_update = item(app, "check-update", "Check for Updates…", None)?;
+    let web_serve_urls = item(app, "web-serve-urls", "Remote Server URLs…", None)?;
     let web_serve = item(app, WEB_SERVE_MENU_ID, WEB_SERVE_MENU_START, None)?;
 
     let file = if mac {
@@ -90,6 +91,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .separator()
             .item(&close_tab)
             .separator()
+            .item(&web_serve_urls)
             .item(&web_serve)
             .separator()
             .item(&quit)
@@ -151,6 +153,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         let app_menu = SubmenuBuilder::new(app, "Sparkmux")
             .item(&about)
             .item(&check_update)
+            .separator()
+            .item(&web_serve_urls)
             .item(&web_serve)
             .separator()
             .item(&hide)

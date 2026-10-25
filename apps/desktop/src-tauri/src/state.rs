@@ -89,6 +89,7 @@ pub struct AppState {
     pub active_target: Arc<std::sync::Mutex<ActiveTarget>>,
     pub events_tx: broadcast::Sender<ServerPushEvent>,
     pub is_headless: bool,
+    pub web_urls: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 pub struct Inner {
@@ -143,6 +144,7 @@ impl AppState {
             active_target: Arc::new(std::sync::Mutex::new(ActiveTarget::default())),
             events_tx,
             is_headless,
+            web_urls: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 }

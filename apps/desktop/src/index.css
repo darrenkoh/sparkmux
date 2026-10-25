@@ -3138,6 +3138,51 @@ body.is-resizing * {
   padding: 7px 9px;
 }
 
+.web-serve-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+
+.web-serve-status-badge.running {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+}
+
+.web-serve-status-badge.stopped {
+  background: rgba(148, 163, 184, 0.08);
+  border-color: rgba(148, 163, 184, 0.2);
+  color: #94a3b8;
+}
+
+.web-serve-offline-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 16px;
+  background: rgba(26, 30, 38, 0.4);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  margin: 12px 0;
+  gap: 10px;
+}
+
+.web-serve-offline-desc {
+  font-size: 13px;
+  color: #94a3b8;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 400px;
+}
+
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, "Ubuntu Mono", "DejaVu Sans Mono", monospace;
   font-size: 12px;
@@ -5551,6 +5596,53 @@ div.mini-subagents-head {
 
 .status-graph:hover {
   background: rgba(45, 212, 191, 0.18);
+}
+
+.status-remote {
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #1a1e26;
+  border: 1px solid var(--border);
+  color: #94a3b8;
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  transition: all 0.15s ease;
+}
+
+.status-remote.running {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.status-remote.open {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.status-remote:hover {
+  background: rgba(56, 189, 248, 0.12);
+  color: #f1f5f9;
+}
+
+.status-remote-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+  display: inline-block;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.status-remote-dot.active {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.7);
 }
 
 .status-recipes {

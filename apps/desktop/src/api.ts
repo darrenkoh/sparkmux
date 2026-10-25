@@ -182,6 +182,10 @@ export function webServeToggle(): Promise<WebServeStatus> {
   return rpcInvoke("web_serve_toggle");
 }
 
+export function webServeStatus(): Promise<WebServeStatus> {
+  return rpcInvoke("web_serve_status");
+}
+
 export async function clipboardWrite(text: string): Promise<void> {
   if (isTauriRuntime()) {
     return rpcInvoke("clipboard_write", { text });
