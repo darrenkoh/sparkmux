@@ -129,9 +129,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
     // macOS keeps Check for Updates in the app menu. Linux has no app menu,
     // so the same command lives in Help there.
     let help = if mac {
-        SubmenuBuilder::new(app, "Help")
-            .item(&help_item)
-            .build()?
+        SubmenuBuilder::new(app, "Help").item(&help_item).build()?
     } else {
         SubmenuBuilder::new(app, "Help")
             .item(&help_item)
@@ -255,9 +253,7 @@ mod tests {
         );
         assert!(help_block[else_at..].contains(".item(&check_update)"));
 
-        let app_end = menu[app_at..]
-            .find(".build()?")
-            .expect("app menu end");
+        let app_end = menu[app_at..].find(".build()?").expect("app menu end");
         assert!(menu[app_at..app_at + app_end].contains(".item(&check_update)"));
     }
 }

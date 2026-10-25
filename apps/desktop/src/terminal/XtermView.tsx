@@ -81,6 +81,7 @@ export default function XtermView({
   const doFitRef = useRef<() => void>(() => {});
   const redrawCaretRef = useRef<(forceBottom?: boolean) => void>(() => {});
   const syncTmuxCursorRef = useRef<(forceBottom?: boolean) => void>(() => {});
+  const scrollCursorIntoViewRef = useRef<(row?: number, col?: number) => void>(() => {});
   const restoreMouseRef = useRef<() => void>(() => {});
   const findOpenRef = useRef(false);
   const findRef = useRef<HTMLInputElement>(null);
@@ -188,31 +189,39 @@ export default function XtermView({
       showCaret(term, forceBottom);
     };
 
-    const scrollCursorIntoView = (row: number, col = 0) => {
+    const scrollCursorIntoView = (row?: number, col?: number) => {
       const host = hostRef.current;
       const live = termRef.current;
       if (!host || !live) return;
+      const buf = live.buffer.active;
+      const r = row ?? buf.cursorY;
+      const c = col ?? buf.cursorX;
       const { width: cellW, height: cellH } = cellSize(live);
       if (cellH <= 0) return;
-      const targetTop = row * cellH;
-      const maxRow = Math.min(live.rows, row + 4);
+      const targetTop = r * cellH;
+      const maxRow = Math.min(live.rows, r + 2);
       const targetBottom = maxRow * cellH;
       const viewH = host.clientHeight;
-      if (targetTop < host.scrollTop) {
-        host.scrollTop = targetTop;
-      } else if (targetBottom > host.scrollTop + viewH) {
-        host.scrollTop = Math.max(0, targetBottom - viewH + 4);
+      if (viewH > 0) {
+        if (targetTop < host.scrollTop) {
+          host.scrollTop = targetTop;
+        } else if (targetBottom > host.scrollTop + viewH) {
+          host.scrollTop = Math.max(0, targetBottom - viewH + 4);
+        }
       }
       if (cellW > 0) {
-        const targetLeft = col * cellW;
+        const targetLeft = c * cellW;
         const viewW = host.clientWidth;
-        if (targetLeft < host.scrollLeft) {
-          host.scrollLeft = targetLeft;
-        } else if (targetLeft + cellW > host.scrollLeft + viewW) {
-          host.scrollLeft = Math.max(0, targetLeft + cellW - viewW + 8);
+        if (viewW > 0) {
+          if (targetLeft < host.scrollLeft) {
+            host.scrollLeft = targetLeft;
+          } else if (targetLeft + cellW * 3 > host.scrollLeft + viewW) {
+            host.scrollLeft = Math.max(0, targetLeft + cellW * 3 - viewW + 8);
+          }
         }
       }
     };
+    scrollCursorIntoViewRef.current = scrollCursorIntoView;
 
     const syncTmuxCursor = (forceBottom = false) => {
       if (applyingSeed) return;
@@ -230,6 +239,22 @@ export default function XtermView({
           /* pane may have closed during resize */
         });
     };
+
+    const cursorDisp = term.onCursorMove(() => {
+      if (applyingSeed) return;
+      const buf = term.buffer.active;
+      if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
+        scrollCursorIntoView(buf.cursorY, buf.cursorX);
+      }
+    });
+
+    const renderDisp = term.onRender(() => {
+      if (applyingSeed) return;
+      const buf = term.buffer.active;
+      if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
+        scrollCursorIntoView(buf.cursorY, buf.cursorX);
+      }
+    });
 
     redrawCaretRef.current = redrawCaret;
     syncTmuxCursorRef.current = syncTmuxCursor;
@@ -265,6 +290,12 @@ export default function XtermView({
           if (focusedRef.current) {
             term.focus();
           }
+          requestAnimationFrame(() => {
+            if (!unmounted && termRef.current) {
+              const buf = termRef.current.buffer.active;
+              scrollCursorIntoView(buf.cursorY, buf.cursorX);
+            }
+          });
         },
         () => {
           applyingSeed = true;
@@ -281,7 +312,15 @@ export default function XtermView({
       const data = typeof transform === "function" ? transform(raw) : raw;
       // Letters and editing keys reveal the prompt. Wheel, mouse, and arrows
       // must not, or a scroll-to-select snaps back down.
-      if (inputFollowsPrompt(data) && !term.hasSelection()) term.scrollToBottom();
+      if (inputFollowsPrompt(data) && !term.hasSelection()) {
+        term.scrollToBottom();
+        requestAnimationFrame(() => {
+          if (!unmounted && termRef.current) {
+            const buf = termRef.current.buffer.active;
+            scrollCursorIntoView(buf.cursorY, buf.cursorX);
+          }
+        });
+      }
       const bytes = Array.from(new TextEncoder().encode(data));
       void paneWrite(paneId, bytes);
     });
@@ -301,6 +340,7 @@ export default function XtermView({
     };
     host.addEventListener("paste", onPaste, true);
 
+    let touchScrollX = 0;
     let touchScrollY = 0;
     let touchAccumPx = 0;
     let touchMulti = false;
@@ -310,17 +350,52 @@ export default function XtermView({
         return;
       }
       touchMulti = false;
+      touchScrollX = ev.touches[0].clientX;
       touchScrollY = ev.touches[0].clientY;
       touchAccumPx = 0;
       onFocusRef.current(paneId);
       void focusPane(paneId);
+      term.focus();
+      requestAnimationFrame(() => {
+        if (!unmounted && termRef.current) {
+          const buf = termRef.current.buffer.active;
+          scrollCursorIntoView(buf.cursorY, buf.cursorX);
+        }
+      });
     };
     const onTouchMove = (ev: TouchEvent) => {
       if (touchMulti || ev.touches.length !== 1) return;
+      const curX = ev.touches[0].clientX;
       const curY = ev.touches[0].clientY;
-      touchAccumPx += touchDragDelta(touchScrollY, curY);
+      const deltaX = curX - touchScrollX;
+      const deltaY = curY - touchScrollY;
+      touchScrollX = curX;
       touchScrollY = curY;
+
+      const host = hostRef.current;
+      const canScrollHostY = host && host.scrollHeight > host.clientHeight;
+      const canScrollHostX = host && host.scrollWidth > host.clientWidth;
+
+      if (canScrollHostY || canScrollHostX) {
+        let consumed = false;
+        if (canScrollHostY) {
+          const prevTop = host.scrollTop;
+          host.scrollTop -= deltaY;
+          if (host.scrollTop !== prevTop) consumed = true;
+        }
+        if (canScrollHostX) {
+          const prevLeft = host.scrollLeft;
+          host.scrollLeft -= deltaX;
+          if (host.scrollLeft !== prevLeft) consumed = true;
+        }
+        if (consumed) {
+          ev.preventDefault();
+          return;
+        }
+      }
+
       const rowH = Math.max(12, cellHeight(term));
+      touchAccumPx += touchDragDelta(touchScrollY, curY);
       if (Math.abs(touchAccumPx) < rowH * 0.75) return;
       const fakeWheel = {
         deltaY: touchAccumPx,
@@ -508,7 +583,16 @@ export default function XtermView({
           seedState.seeded = false;
           void bindPaneOutput(paneId, seedState, {
             seed: paintSeed,
-            write: (bytes) => term.write(bytes),
+            write: (bytes) => {
+              term.write(bytes, () => {
+                if (!unmounted && !applyingSeed) {
+                  const buf = term.buffer.active;
+                  if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
+                    scrollCursorIntoView(buf.cursorY, buf.cursorX);
+                  }
+                }
+              });
+            },
           });
         }, 150);
       }
@@ -518,7 +602,16 @@ export default function XtermView({
         if (unmounted) return;
         void bindPaneOutput(paneId, seedState, {
           seed: paintSeed,
-          write: (bytes) => term.write(bytes),
+          write: (bytes) => {
+            term.write(bytes, () => {
+              if (!unmounted && !applyingSeed) {
+                const buf = term.buffer.active;
+                if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
+                  scrollCursorIntoView(buf.cursorY, buf.cursorX);
+                }
+              }
+            });
+          },
         });
       }, 0);
     };
@@ -529,6 +622,12 @@ export default function XtermView({
 
     const ro = new ResizeObserver(() => {
       doFit();
+      if (!unmounted && termRef.current) {
+        const buf = termRef.current.buffer.active;
+        if (!termRef.current.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
+          scrollCursorIntoView(buf.cursorY, buf.cursorX);
+        }
+      }
     });
     ro.observe(host);
 
@@ -537,6 +636,7 @@ export default function XtermView({
       doFitRef.current = () => {};
       redrawCaretRef.current = () => {};
       syncTmuxCursorRef.current = () => {};
+      scrollCursorIntoViewRef.current = () => {};
       restoreMouseRef.current = () => {};
       if (seedTimer) window.clearTimeout(seedTimer);
       if (cursorTimer) window.clearTimeout(cursorTimer);
@@ -548,6 +648,8 @@ export default function XtermView({
       host.removeEventListener("touchstart", onTouchStart);
       host.removeEventListener("touchmove", onTouchMove);
       ro.disconnect();
+      cursorDisp.dispose();
+      renderDisp.dispose();
       dataDisp.dispose();
       void paneUnsubscribe(paneId);
       terms.delete(paneId);
@@ -561,6 +663,12 @@ export default function XtermView({
     paneColsRef.current = paneCols;
     paneRowsRef.current = paneRows;
     doFitRef.current();
+    requestAnimationFrame(() => {
+      if (termRef.current) {
+        const buf = termRef.current.buffer.active;
+        scrollCursorIntoViewRef.current(buf.cursorY, buf.cursorX);
+      }
+    });
   }, [paneCols, paneRows]);
 
   useEffect(() => {
@@ -568,6 +676,10 @@ export default function XtermView({
     if (!term) return;
     term.options.fontSize = fontSize;
     doFitRef.current();
+    requestAnimationFrame(() => {
+      const buf = term.buffer.active;
+      scrollCursorIntoViewRef.current(buf.cursorY, buf.cursorX);
+    });
   }, [fontSize]);
 
   useEffect(() => {
@@ -585,6 +697,12 @@ export default function XtermView({
       termRef.current?.focus();
       redrawCaretRef.current(true);
       syncTmuxCursorRef.current(true);
+      requestAnimationFrame(() => {
+        if (termRef.current) {
+          const buf = termRef.current.buffer.active;
+          scrollCursorIntoViewRef.current(buf.cursorY, buf.cursorX);
+        }
+      });
     }
   }, [focused, findOpen]);
 

@@ -1962,8 +1962,22 @@ body.is-resizing * {
   color: var(--muted);
   font-size: 12px;
   min-width: 0;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: visible;
   white-space: nowrap;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.status::-webkit-scrollbar {
+  display: none;
+}
+
+.status-env {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .status .sep {
@@ -1974,6 +1988,7 @@ body.is-resizing * {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .status-metrics {
@@ -1981,7 +1996,7 @@ body.is-resizing * {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   overflow: visible;
   font-variant-numeric: tabular-nums;
@@ -1993,13 +2008,14 @@ body.is-resizing * {
   gap: 6px;
   min-width: 0;
   overflow: visible;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
 }
 
 .status-pill-anchor {
   position: relative;
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .status-pill {
@@ -2007,7 +2023,7 @@ body.is-resizing * {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   padding: 2px 7px 2px 5px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.04);
@@ -2833,7 +2849,7 @@ body.is-resizing * {
   display: inline-flex;
   min-width: 0;
   max-width: 64ch;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
 }
 
 .status-usage-text {
@@ -7870,10 +7886,42 @@ div.mini-subagents-head {
   border-top: 1px solid var(--border);
 }
 
+.app.posture-phone-compact .status {
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.app.posture-phone-compact .status-env {
+  display: none;
+}
+
+.app.posture-phone-compact .status-loc {
+  max-width: 140px;
+}
+
+.app.posture-phone-compact .status-quota-card,
+.app.posture-phone-compact .hardware-hud-card {
+  max-width: calc(100vw - 20px);
+  right: auto;
+  left: 50%;
+  transform: translate(-50%, 6px);
+}
+
+.app.posture-phone-compact .status-pill-anchor:hover .status-quota-card,
+.app.posture-phone-compact .status-pill-anchor:focus-within .status-quota-card,
+.app.posture-phone-compact .status-pill-anchor:hover .hardware-hud-card,
+.app.posture-phone-compact .status-pill-anchor:focus-within .hardware-hud-card {
+  transform: translate(-50%, 0);
+}
+
+.app.keyboard-open {
+  padding-bottom: 0;
+}
+
 .app.posture-ipad-pro .term-viewport,
 .app.posture-phone-compact .term-viewport,
 .app.posture-duo-book .term-viewport,
 .app.posture-duo-clamshell .term-viewport {
-  touch-action: none;
+  touch-action: pan-x pan-y;
 }
 

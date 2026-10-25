@@ -559,10 +559,12 @@ export default function StatusBar({
 
   return (
     <footer className="status">
-      <span>{tmux}</span>
-      <span className="sep">·</span>
-      <span>{sock}</span>
-      <span className="sep">·</span>
+      <span className="status-env">
+        <span>{tmux}</span>
+        <span className="sep">·</span>
+        <span>{sock}</span>
+        <span className="sep">·</span>
+      </span>
       <span className="status-loc">{loc}</span>
       <span className="status-metrics">
         {chips.length > 0 && (

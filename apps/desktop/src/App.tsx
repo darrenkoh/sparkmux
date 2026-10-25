@@ -1384,7 +1384,7 @@ export default function App() {
 
   return (
     <div
-      className={`app posture-${posture}${sidebarDrawer ? " sidebar-drawer-open" : ""}`}
+      className={`app posture-${posture}${sidebarDrawer ? " sidebar-drawer-open" : ""}${postureInfo.keyboardInsetBottom > 0 ? " keyboard-open" : ""}`}
       style={{
         height: appShellHeight(postureInfo),
         ["--duo-left" as string]: postureInfo.leftSegmentWidth
