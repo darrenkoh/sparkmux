@@ -7,6 +7,7 @@ import {
   formatCpu,
   formatMemory,
   memoryTone,
+  padCpu,
 } from "./telemetry.ts";
 
 test("memory is shown in MB or GB, and a failed read is a dash", () => {
@@ -50,6 +51,14 @@ test("sparkline path builder produces svg path strings", () => {
   assert.ok(res.strokePath.includes("L 30.0"));
   assert.ok(res.areaPath.endsWith("Z"));
   assert.equal(res.latestPoint?.x, 30);
+});
+
+test("padCpu stabilizes cpu text length to prevent pill jitter", () => {
+  assert.equal(padCpu("CPU 1.2%"), "CPU 1.2%");
+  assert.equal(padCpu("CPU 42%"), "CPU 42%\u00A0");
+  assert.equal(padCpu("CPU 0%"), "CPU 0%\u00A0\u00A0");
+  assert.equal(padCpu("CPU 100%"), "CPU 100%");
+  assert.equal(padCpu("CPU —"), "CPU —\u00A0\u00A0\u00A0");
 });
 
 

@@ -31,6 +31,15 @@ export function formatCpu(percent: number | null | undefined): string {
   return `CPU ${Math.round(percent)}%`;
 }
 
+/**
+ * Pads the CPU formatted string with non-breaking spaces (\u00A0)
+ * so that single-digit and double-digit percentages maintain constant visual width (8 characters).
+ */
+export function padCpu(cpuText: string): string {
+  if (!cpuText || cpuText.length >= 8) return cpuText;
+  return cpuText + "\u00A0".repeat(8 - cpuText.length);
+}
+
 /** Tone status based on CPU load percentage. */
 export function cpuTone(percent: number | null | undefined): TelemetryTone {
   if (percent == null || !Number.isFinite(percent) || percent < 30) return "ok";

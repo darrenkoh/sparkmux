@@ -7,6 +7,7 @@ import {
   formatCpu,
   formatMemory,
   memoryTone,
+  padCpu,
   type AppTelemetry,
   type TelemetryTone,
 } from "./telemetry";
@@ -644,7 +645,7 @@ export default function StatusBar({
               <span className="status-pill-icon hardware-pill-icon" aria-hidden="true">
                 <CpuIcon />
               </span>
-              <span className="status-pill-name">{cpu}</span>
+              <span className="status-pill-name cpu-pill-name">{padCpu(cpu)}</span>
             </span>
             <CpuHistogram values={cpuSeries} tone={cpuToneVal} />
           </span>

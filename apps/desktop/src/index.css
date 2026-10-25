@@ -2599,6 +2599,14 @@ body.is-resizing * {
   height: 12px;
 }
 
+.cpu-pill-name {
+  display: inline-block;
+  min-width: 6.8ch;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+}
+
 .status-pill-head {
   display: inline-flex;
   align-items: center;
