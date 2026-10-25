@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.61
+
+### Improvements & Bug Fixes
+
+- **Prevent Orphaned tmux Client Leaks**: Added `FD_CLOEXEC` to pseudo-terminal master and slave descriptors in `sparkmux-core::ScreenClient`, ensuring that ungraceful app exits or relaunches automatically terminate read-only clients instead of leaking them as orphaned processes on `-L sparkmux`.
+- **Docked Area Map & Telemetry CPU Optimization**: 
+  - Lazily initialized particle generation in `TerrainViewport` to eliminate 50,000 particle allocations per React render.
+  - Automatically pause WebGL animation loop when the window or tab is hidden (`document.visibilitychange`).
+  - Memoized `DockedStatsPanel` and `TerrainViewport` to prevent 1-second telemetry ticks from triggering unnecessary re-renders.
+  - Added in-memory caching to `tab_analytics` to reuse computed metrics across identical poll intervals, and cached storage disk scans with a 30-second TTL.
+- **Web Terminal Mobile Experience**:
+  - Restored natural terminal scrolling and auto-scroll behavior for mobile and tablet browsers.
+  - Added status bar Remote button and desktop menu items to view remote pairing URLs and QR codes anytime.
+
 ## 0.1.60
 
 ### Features & Improvements
