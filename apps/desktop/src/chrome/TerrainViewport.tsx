@@ -31,6 +31,7 @@ import {
   cameraKey,
   decideMapFrame,
   dockedPeakLabel,
+  dockedPresentMode,
   shouldRebuildTerrain,
 } from "./terrainFrame";
 import {
@@ -240,6 +241,26 @@ in float vA;
 out vec4 o;
 void main() {
   o = vec4(uColor * vA, 1.0);
+}
+`;
+
+const VS_BLIT = `#version 300 es
+const vec2 kPos[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+out vec2 vUv;
+void main() {
+  vec2 p = kPos[gl_VertexID];
+  vUv = p * 0.5 + 0.5;
+  gl_Position = vec4(p, 0.0, 1.0);
+}
+`;
+
+const FS_BLIT = `#version 300 es
+precision highp float;
+uniform sampler2D uTex;
+in vec2 vUv;
+out vec4 o;
+void main() {
+  o = texture(uTex, vUv);
 }
 `;
 
@@ -1377,6 +1398,25 @@ export default function TerrainViewport({
 
     const progTerrain = link(VS_TERRAIN, FS_TERRAIN);
     const progContour = link(VS_CONTOUR, FS_CONTOUR);
+    const progBlit = link(VS_BLIT, FS_BLIT);
+    const uBlit = gl.getUniformLocation(progBlit, "uTex");
+    const blitVao = gl.createVertexArray()!;
+    const sceneTex = gl.createTexture()!;
+    const sceneFbo = gl.createFramebuffer()!;
+    const msaaFbo = gl.createFramebuffer()!;
+    const msaaRb = gl.createRenderbuffer()!;
+    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    let sceneW = 0;
+    let sceneH = 0;
+    let sceneReady = false;
+    let useMsaa = false;
+    let bakedKey = "";
+    let lastHudKey = "";
     progTerrainRef.current = progTerrain;
     progContourRef.current = progContour;
 
@@ -1485,6 +1525,7 @@ export default function TerrainViewport({
     const polarLines = makeLineVao();
     bufPolarRef.current = polarLines.buf;
     const radarLines = makeLineVao();
+    const sweepLines = makeLineVao();
 
     // Generate initial geometry
     updateGeometry();
@@ -1537,7 +1578,6 @@ export default function TerrainViewport({
     let frameCount = 0;
     let zoomPulse = false;
     let resetPulse = false;
-    let lastDecor = 0;
     let haloVertCount = 0;
     let radarVertCount = 0;
     let dockTrail: Path2D | null = null;
@@ -1581,18 +1621,10 @@ export default function TerrainViewport({
         animId = requestAnimationFrame(render);
         return;
       }
-      // Docked stays at 30 FPS so the sweep and particles stay smooth without a 60 FPS core.
-      // Fullscreen stays at 60. decideMapFrame still gates rebuilds and one-shot invalidation.
-      const targetFps = dockedRef.current ? 30 : 60;
-      const interval = 1000 / targetFps;
+      // Every display refresh. A 30 FPS cap made the docked sweep stutter.
       const delta = now - clockRef.current.lastRenderTime;
-      if (delta < interval - 2.0) {
-        animId = requestAnimationFrame(render);
-        return;
-      }
-      clockRef.current.lastRenderTime = now - (delta % interval);
-
-      const dt = delta / 1000;
+      clockRef.current.lastRenderTime = now;
+      const dt = Math.min(Math.max(delta, 0) / 1000, 0.1);
       const elapsed = (now - clockRef.current.startTime) / 1000;
       const cam = persistentCam;
 
@@ -1682,8 +1714,51 @@ export default function TerrainViewport({
       const maxFrac = restDock ? decision.globeMaxFrac : scrubProgressRef.current >= 0.98 ? 1.2 : revealed;
 
       const isMono = realismRef.current === "mono";
+      const scanLightBoost = SCAN_INTENSITY_VALUES[scanIntensityRef.current] ?? 0.75;
+      const scanBoost = scanLightBoost * scanFade;
+      const interacting =
+        isDraggingRef.current ||
+        isPlayingRef.current ||
+        zoomPulse ||
+        (dockedRef.current && dockedRotationRef.current);
+      const pictureKey = `${w}|${h}|${cameraKey(cam.azimuth, cam.elevation, cam.radius, cam.target[0], cam.target[1], cam.target[2])}|${desiredSignatureRef.current}|${realismRef.current}|${currentShape}`;
+      if (sceneW !== w || sceneH !== h) {
+        gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+        const texOk = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindRenderbuffer(gl.RENDERBUFFER, msaaRb);
+        gl.renderbufferStorageMultisample(gl.RENDERBUFFER, 4, gl.RGBA8, w, h);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, msaaFbo);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, msaaRb);
+        useMsaa = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        sceneW = w;
+        sceneH = h;
+        sceneReady = texOk;
+        bakedKey = "";
+      }
+      const present = dockedPresentMode({
+        docked: dockedRef.current,
+        interacting,
+        pictureKey,
+        bakedKey,
+      });
+      // Idle dock keeps the sharp field in a texture and composites the ping.
+      const deferMotion = dockedRef.current && !interacting && sceneReady;
+      const baking = deferMotion && present !== "cached";
+      const reliefScan = baking ? 0 : scanBoost;
+
+      if (baking) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, useMsaa ? msaaFbo : sceneFbo);
+        gl.viewport(0, 0, w, h);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
 
       // Bezel, halo, channel rings, and the outward ping stay whole. Relief clips to the scrubber.
+      if (present !== "cached") {
       gl.useProgram(progContour);
       gl.uniformMatrix4fv(uC.uVP, false, matVP);
       gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
@@ -1694,16 +1769,12 @@ export default function TerrainViewport({
       gl.uniform1f(uC.uScanAng, scanAng);
       gl.uniform1f(uC.uMaxFrac, maxFrac);
 
-      const refreshDecor = !dockedRef.current || now - lastDecor >= 120;
-      if (refreshDecor) lastDecor = now;
       if (currentShape === "globe") {
-        if (refreshDecor) {
-          const breath = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * 1.35));
-          const halo = globeHaloVerts(breath);
-          gl.bindBuffer(gl.ARRAY_BUFFER, haloLines.buf);
-          gl.bufferData(gl.ARRAY_BUFFER, halo, gl.DYNAMIC_DRAW);
-          haloVertCount = halo.length / 4;
-        }
+        const breath = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * 1.35));
+        const halo = globeHaloVerts(breath);
+        gl.bindBuffer(gl.ARRAY_BUFFER, haloLines.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, halo, gl.DYNAMIC_DRAW);
+        haloVertCount = halo.length / 4;
         if (haloVertCount > 0) {
           gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.5, isMono ? 1.0 : 0.86, 1.0);
           gl.bindVertexArray(haloLines.vao);
@@ -1734,31 +1805,28 @@ export default function TerrainViewport({
         }
       }
 
-      const scanLightBoost = SCAN_INTENSITY_VALUES[scanIntensityRef.current] ?? 0.75;
-      const scanBoost = scanLightBoost * scanFade;
-
-      // Draw Marching Squares Contours
+      // Draw Marching Squares Contours. A cached dock stores them without the sweep.
       if (contoursCountRef.current > 0) {
         gl.uniform1f(uC.uGlobe, globeOn ? 1 : 0);
         gl.uniform1f(uC.uScanAng, scanAng);
         gl.uniform1f(uC.uMaxFrac, maxFrac);
-        gl.uniform1f(uC.uScanAmount, scanBoost);
+        gl.uniform1f(uC.uScanAmount, reliefScan);
         gl.uniform1f(uC.uMaxX, curMaxX);
         gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.78, isMono ? 1.0 : 1.0, isMono ? 1.0 : 0.94);
         gl.bindVertexArray(vaoContours);
         gl.drawArrays(gl.LINES, 0, contoursCountRef.current);
       }
 
-      // Draw 50k Particles
+      // Full particle field. Docked idle pays this once per picture, at full resolution.
       gl.useProgram(progTerrain);
       gl.uniformMatrix4fv(uT.uVP, false, matVP);
-      gl.uniform1f(uT.uTime, elapsed);
+      gl.uniform1f(uT.uTime, baking ? 1.7 : elapsed);
       gl.uniform1f(uT.uFocus, orbitRadius * 0.9);
       gl.uniform1f(uT.uAperture, 0.5 * (h / 700));
       gl.uniform1f(uT.uDpr, dpr);
       gl.uniform1f(uT.uGain, 0.44);
       gl.uniform1f(uT.uScanX, scanXPos);
-      gl.uniform1f(uT.uScanAmount, scanBoost);
+      gl.uniform1f(uT.uScanAmount, reliefScan);
       gl.uniform1f(uT.uMaxX, curMaxX);
       gl.uniform1f(uT.uReal, isMono ? 0.0 : 1.0);
       gl.uniform1f(uT.uGlobe, globeOn ? 1 : 0);
@@ -1767,15 +1835,36 @@ export default function TerrainViewport({
 
       gl.bindVertexArray(vaoTerrain);
       gl.drawArrays(gl.POINTS, 0, POINT_COUNT);
+      }
+
+      if (baking) {
+        if (useMsaa) {
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msaaFbo);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, sceneFbo);
+          gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, w, h);
+        bakedKey = pictureKey;
+      }
+      if (deferMotion) {
+        gl.disable(gl.BLEND);
+        gl.useProgram(progBlit);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+        gl.uniform1i(uBlit, 0);
+        gl.bindVertexArray(blitVao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE);
+      }
 
       if (currentShape === "globe" && elevFieldRef.current) {
         const field = elevFieldRef.current;
-        if (refreshDecor) {
-          const sweep = globeRadarVerts(clockRef.current.radarFrac, (x, z) => sampleElev(field, x, z));
-          gl.bindBuffer(gl.ARRAY_BUFFER, radarLines.buf);
-          gl.bufferData(gl.ARRAY_BUFFER, sweep, gl.DYNAMIC_DRAW);
-          radarVertCount = sweep.length / 4;
-        }
+        const sweep = globeRadarVerts(clockRef.current.radarFrac, (x, z) => sampleElev(field, x, z));
+        gl.bindBuffer(gl.ARRAY_BUFFER, radarLines.buf);
+        gl.bufferData(gl.ARRAY_BUFFER, sweep, gl.DYNAMIC_DRAW);
+        radarVertCount = sweep.length / 4;
         if (radarVertCount > 0) {
           gl.useProgram(progContour);
           gl.uniformMatrix4fv(uC.uVP, false, matVP);
@@ -1791,7 +1880,58 @@ export default function TerrainViewport({
           gl.drawArrays(gl.LINES, 0, radarVertCount);
         }
       }
+      if (deferMotion && scanLightBoost > 0) {
+        const alpha = Math.min(0.95, 0.55 + 0.35 * scanFade);
+        const pts: number[] = [];
+        if (globeOn) {
+          const ang = timeFracToAngle(scanFrac);
+          const field = elevFieldRef.current;
+          let prev: [number, number, number] | null = null;
+          for (let s = 0; s <= 36; s++) {
+            const rad = (s / 36) * GLOBE_RADIUS;
+            const x = Math.cos(ang) * rad;
+            const z = Math.sin(ang) * rad;
+            const y = (field ? sampleElev(field, x, z) : 0) + 0.08;
+            if (prev) pts.push(prev[0], prev[1], prev[2], alpha, x, y, z, alpha);
+            prev = [x, y, z];
+          }
+        } else {
+          pts.push(scanXPos, 0, 0, alpha, scanXPos, maxAltitude * 1.05, 0, alpha);
+        }
+        if (pts.length >= 8) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, sweepLines.buf);
+          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.DYNAMIC_DRAW);
+          gl.useProgram(progContour);
+          gl.uniformMatrix4fv(uC.uVP, false, matVP);
+          gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
+          gl.uniform1f(uC.uScanX, 0);
+          gl.uniform1f(uC.uScanAmount, 0);
+          gl.uniform1f(uC.uMaxX, 999.0);
+          gl.uniform1f(uC.uGlobe, 0);
+          gl.uniform1f(uC.uScanAng, 0);
+          gl.uniform1f(uC.uMaxFrac, 1.2);
+          gl.uniform3f(uC.uColor, 1.0, 0.86, 0.42);
+          gl.bindVertexArray(sweepLines.vao);
+          gl.drawArrays(gl.LINES, 0, pts.length / 4);
+        }
+      }
       gl.bindVertexArray(null);
+
+      // 2D labels stay put while the docked sweep moves in WebGL.
+      const hudKey = `${pictureKey}|${showTraceRef.current ? 1 : 0}`;
+      if (deferMotion && hudKey === lastHudKey) {
+        zoomPulse = false;
+        resetPulse = false;
+        drawn.width = canvasRect.width;
+        drawn.height = canvasRect.height;
+        drawn.camera = pictureKey.slice(0, pictureKey.indexOf("|", pictureKey.indexOf("|") + 1));
+        drawn.telemetry = desiredSignatureRef.current;
+        drawn.color = realismRef.current;
+        if (speedMultiplier > 0) animId = requestAnimationFrame(render);
+        else loopOn = false;
+        return;
+      }
+      lastHudKey = hudKey;
 
       // 2D HUD Canvas Overlay
       hud.setTransform(dpr, 0, 0, dpr, 0, 0);
