@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ActivityPoint, TabAnalyticsStats } from "../api";
 import {
   CHANNEL_RING_FRAC,
@@ -544,7 +544,7 @@ interface TerrainMeta {
   seamMarks: Array<{ fraction: number; label: string }>;
 }
 
-export default function TerrainViewport({
+function TerrainViewportImpl({
   timeline,
   activeModel,
   sessionName,
@@ -718,9 +718,12 @@ export default function TerrainViewport({
     seamMarks: [],
   });
 
-  // Cached base particles for active baseShape
-  const baseParticlesRef = useRef<BaseParticle[]>(generateBaseParticles(baseShape));
+  // Cached base particles for active baseShape (lazily initialized to avoid 50k particle allocations per render)
+  const baseParticlesRef = useRef<BaseParticle[] | null>(null);
   const baseParticlesShapeRef = useRef<BaseShape>(baseShape);
+  if (baseParticlesRef.current === null) {
+    baseParticlesRef.current = generateBaseParticles(baseShape);
+  }
 
   // WebGL handle refs
   const glRef = useRef<WebGL2RenderingContext | null>(null);
@@ -756,13 +759,16 @@ export default function TerrainViewport({
     if (!gl) return;
 
     const currentShape = baseShapeRef.current;
-    if (baseParticlesShapeRef.current !== currentShape || baseParticlesRef.current.length === 0) {
+    if (baseParticlesShapeRef.current !== currentShape || !baseParticlesRef.current || baseParticlesRef.current.length === 0) {
       baseParticlesRef.current = generateBaseParticles(currentShape);
       baseParticlesShapeRef.current = currentShape;
 
       // Update seed buffer when base shape changes
       if (bufTerrainSeedRef.current) {
-        const seedData = new Float32Array(baseParticlesRef.current.map((p) => p.seed));
+        if (!baseParticlesRef.current) {
+      baseParticlesRef.current = generateBaseParticles(baseShapeRef.current);
+    }
+    const seedData = new Float32Array(baseParticlesRef.current.map((p) => p.seed));
         gl.bindBuffer(gl.ARRAY_BUFFER, bufTerrainSeedRef.current);
         gl.bufferData(gl.ARRAY_BUFFER, seedData, gl.STATIC_DRAW);
       }
@@ -1475,6 +1481,9 @@ export default function TerrainViewport({
     gl.enableVertexAttribArray(2);
     gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 0, 0);
 
+    if (!baseParticlesRef.current) {
+      baseParticlesRef.current = generateBaseParticles(baseShapeRef.current);
+    }
     const seedData = new Float32Array(baseParticlesRef.current.map((p) => p.seed));
     gl.bufferData(gl.ARRAY_BUFFER, seedData, gl.STATIC_DRAW);
 
@@ -1613,6 +1622,10 @@ export default function TerrainViewport({
     };
 
     const render = () => {
+      if (document.hidden) {
+        loopOn = false;
+        return;
+      }
       const now = performance.now();
       const decision = frameDecision();
       if (!(canvasRect.width > 0) || !(canvasRect.height > 0)) {
@@ -2491,6 +2504,14 @@ export default function TerrainViewport({
       wake();
     };
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        clockRef.current.lastRenderTime = performance.now();
+        wake();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     glCanvas.addEventListener("pointerdown", handleDown);
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp);
@@ -2501,6 +2522,7 @@ export default function TerrainViewport({
       wakeRenderRef.current = () => {};
       cancelAnimationFrame(animId);
       resizeObserver.disconnect();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (pendingUpdateRef.current !== null) {
         window.clearTimeout(pendingUpdateRef.current);
         pendingUpdateRef.current = null;
@@ -2962,3 +2984,5 @@ export default function TerrainViewport({
     </section>
   );
 }
+
+export default memo(TerrainViewportImpl);

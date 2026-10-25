@@ -191,7 +191,26 @@ pub fn read_tab_events(session_name: &str, tab_id: &str, max_events: usize) -> V
     events
 }
 
+use std::sync::Mutex;
+use std::time::Instant;
+
+static STORAGE_CACHE: Mutex<Option<(Instant, AnalyticsConfig)>> = Mutex::new(None);
+
 pub fn get_storage_stats() -> AnalyticsConfig {
+    let mut cache = STORAGE_CACHE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if let Some((at, ref conf)) = *cache {
+        if at.elapsed().as_secs() < 30 {
+            return conf.clone();
+        }
+    }
+    let stats = compute_storage_stats();
+    *cache = Some((Instant::now(), stats.clone()));
+    stats
+}
+
+fn compute_storage_stats() -> AnalyticsConfig {
     let enabled = is_enabled();
     let root = match analytics_root() {
         Some(r) => r,

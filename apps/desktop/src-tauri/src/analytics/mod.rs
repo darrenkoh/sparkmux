@@ -21,10 +21,19 @@ use self::storage::{
 use self::subagents::{apply_child_totals, ingest_session};
 use crate::artifacts::default_roots;
 
+#[derive(Clone)]
+struct CachedStats {
+    active_src: Option<String>,
+    cursor_offset: u64,
+    stats: TabAnalyticsStats,
+    lifetime_stats: Option<TabAnalyticsStats>,
+}
+
 #[derive(Default)]
 struct LiveAnalytics {
     by_key: HashMap<String, Cursor>,
     by_path: HashMap<String, Cursor>,
+    stats_cache: HashMap<String, CachedStats>,
 }
 
 static LIVE: Mutex<Option<LiveAnalytics>> = Mutex::new(None);
@@ -230,41 +239,41 @@ pub async fn tab_analytics(
                 if let Some(path) = path_str.clone() {
                     live.by_path.insert(path, cursor.clone());
                 }
-                live.by_key.insert(key, cursor.clone());
+                live.by_key.insert(key.clone(), cursor.clone());
             }
         }
 
-        // Read accumulated events for this session & tab
-        let all_events = read_tab_events(&session_name, &tab_id, 0);
-        drop(guard);
+        // Check if we can reuse cached stats when no new events arrived and cursor offset didn't change
+        let cached = live.stats_cache.get(&key).and_then(|c| {
+            if c.active_src == active_src && c.cursor_offset == cursor.offset {
+                Some((c.stats.clone(), c.lifetime_stats.clone()))
+            } else {
+                None
+            }
+        });
 
-        // Filter events strictly to the active agent session/conversation if one is active,
-        // so metrics are not polluted by prior or other sessions that were run in this tab.
-        let events_to_analyze: Vec<event::Event> = if let Some(ref src) = active_src {
-            all_events
-                .iter()
-                .filter(|ev| ev.s == *src)
-                .cloned()
-                .collect()
+        let (stats, lifetime_stats) = if let Some((cached_stats, cached_lifetime)) = cached {
+            drop(guard);
+            (cached_stats, cached_lifetime)
         } else {
-            all_events.clone()
-        };
+            // Read accumulated events for this session & tab
+            let all_events = read_tab_events(&session_name, &tab_id, 0);
 
-        let active_model = cursor.model.clone();
-        let mut stats = compute_stats(
-            &events_to_analyze,
-            cursor.ctx_used,
-            cursor.ctx_window,
-            cursor.ttft_ms,
-            cursor.lines_added,
-            cursor.lines_removed,
-            &active_model,
-        );
-        apply_child_totals(&mut stats, &cursor);
+            // Filter events strictly to the active agent session/conversation if one is active,
+            // so metrics are not polluted by prior or other sessions that were run in this tab.
+            let events_to_analyze: Vec<event::Event> = if let Some(ref src) = active_src {
+                all_events
+                    .iter()
+                    .filter(|ev| ev.s == *src)
+                    .cloned()
+                    .collect()
+            } else {
+                all_events.clone()
+            };
 
-        let lifetime_stats = if active_src.is_some() && all_events.len() > events_to_analyze.len() {
-            let mut lifetime = compute_stats(
-                &all_events,
+            let active_model = cursor.model.clone();
+            let mut stats = compute_stats(
+                &events_to_analyze,
                 cursor.ctx_used,
                 cursor.ctx_window,
                 cursor.ttft_ms,
@@ -272,10 +281,36 @@ pub async fn tab_analytics(
                 cursor.lines_removed,
                 &active_model,
             );
-            apply_child_totals(&mut lifetime, &cursor);
-            Some(lifetime)
-        } else {
-            Some(stats.clone())
+            apply_child_totals(&mut stats, &cursor);
+
+            let lifetime_stats =
+                if active_src.is_some() && all_events.len() > events_to_analyze.len() {
+                    let mut lifetime = compute_stats(
+                        &all_events,
+                        cursor.ctx_used,
+                        cursor.ctx_window,
+                        cursor.ttft_ms,
+                        cursor.lines_added,
+                        cursor.lines_removed,
+                        &active_model,
+                    );
+                    apply_child_totals(&mut lifetime, &cursor);
+                    Some(lifetime)
+                } else {
+                    Some(stats.clone())
+                };
+
+            live.stats_cache.insert(
+                key.clone(),
+                CachedStats {
+                    active_src: active_src.clone(),
+                    cursor_offset: cursor.offset,
+                    stats: stats.clone(),
+                    lifetime_stats: lifetime_stats.clone(),
+                },
+            );
+            drop(guard);
+            (stats, lifetime_stats)
         };
 
         let mut storage = get_storage_stats();
@@ -310,6 +345,7 @@ pub fn clear_analytics_data() -> Result<(), String> {
     if result.is_ok() {
         live.by_key.clear();
         live.by_path.clear();
+        live.stats_cache.clear();
     }
     result
 }
