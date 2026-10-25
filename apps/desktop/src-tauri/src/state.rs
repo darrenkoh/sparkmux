@@ -88,6 +88,7 @@ pub struct AppState {
     pub inner: Arc<Mutex<Inner>>,
     pub active_target: Arc<std::sync::Mutex<ActiveTarget>>,
     pub events_tx: broadcast::Sender<ServerPushEvent>,
+    pub is_headless: bool,
 }
 
 pub struct Inner {
@@ -113,6 +114,14 @@ impl Default for AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        Self::with_headless(false)
+    }
+
+    pub fn new_headless() -> Self {
+        Self::with_headless(true)
+    }
+
+    pub fn with_headless(is_headless: bool) -> Self {
         let (config, warning) = load_config(ConfigOverrides::default());
         if let Some(w) = warning {
             tracing::warn!("{w}");
@@ -133,6 +142,7 @@ impl AppState {
             })),
             active_target: Arc::new(std::sync::Mutex::new(ActiveTarget::default())),
             events_tx,
+            is_headless,
         }
     }
 }

@@ -42,6 +42,7 @@ pub struct TmuxStatus {
     pub default_session: String,
     pub last_session: Option<String>,
     pub app_version: String,
+    pub is_headless: bool,
     pub error: Option<String>,
     pub hint: Option<String>,
 }
@@ -63,6 +64,7 @@ pub async fn tmux_status_core(state: &AppState) -> Result<TmuxStatus, String> {
             default_session: inner.config.default_session.clone(),
             last_session: inner.config.last_session.clone(),
             app_version: env!("CARGO_PKG_VERSION").into(),
+            is_headless: state.is_headless,
             error: None,
             hint: None,
         };

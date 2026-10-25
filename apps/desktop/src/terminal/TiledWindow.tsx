@@ -30,6 +30,7 @@ export default function TiledWindow({
   onCellSize,
   fontSize,
   paneModes,
+  fixedSize,
 }: {
   node: LayoutNode;
   focusedPane: string | null;
@@ -46,6 +47,7 @@ export default function TiledWindow({
   ) => void;
   fontSize: number;
   paneModes?: ReadonlyMap<string, PaneInputMode>;
+  fixedSize?: boolean;
 }) {
   if ("Pane" in node) {
     const paneId = `%${node.Pane.pane_id}`;
@@ -75,6 +77,8 @@ export default function TiledWindow({
           }
           fontSize={fontSize}
           inputMode={paneModes?.get(paneId)}
+          paneCols={fixedSize ? node.Pane.w : undefined}
+          paneRows={fixedSize ? node.Pane.h : undefined}
         />
       </div>
     );
@@ -109,6 +113,7 @@ export default function TiledWindow({
               onCellSize={onCellSize}
               fontSize={fontSize}
               paneModes={paneModes}
+              fixedSize={fixedSize}
             />
           </div>
         );

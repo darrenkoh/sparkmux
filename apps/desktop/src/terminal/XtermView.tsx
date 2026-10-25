@@ -56,6 +56,8 @@ export default function XtermView({
   onCellSize,
   fontSize,
   inputMode,
+  paneCols,
+  paneRows,
 }: {
   paneId: string;
   focused: boolean;
@@ -63,6 +65,8 @@ export default function XtermView({
   onCellSize?: (w: number, h: number, cols: number, rows: number) => void;
   fontSize: number;
   inputMode?: PaneInputMode;
+  paneCols?: number;
+  paneRows?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -71,6 +75,9 @@ export default function XtermView({
   const onCellSizeRef = useRef(onCellSize);
   const fontSizeRef = useRef(fontSize);
   const inputModeRef = useRef(inputMode);
+  const focusedRef = useRef(focused);
+  const paneColsRef = useRef(paneCols);
+  const paneRowsRef = useRef(paneRows);
   const doFitRef = useRef<() => void>(() => {});
   const redrawCaretRef = useRef<() => void>(() => {});
   const syncTmuxCursorRef = useRef<() => void>(() => {});
@@ -85,6 +92,9 @@ export default function XtermView({
   onCellSizeRef.current = onCellSize;
   fontSizeRef.current = fontSize;
   inputModeRef.current = inputMode;
+  focusedRef.current = focused;
+  paneColsRef.current = paneCols;
+  paneRowsRef.current = paneRows;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -167,7 +177,7 @@ export default function XtermView({
 
     const showCaret = (target: Terminal, forceBottom: boolean) => {
       const buf = target.buffer.active;
-      if (forceBottom || (viewportAtBottom(buf.viewportY, buf.baseY) && !target.hasSelection())) {
+      if (!target.hasSelection() && (forceBottom || viewportAtBottom(buf.viewportY, buf.baseY))) {
         target.scrollToBottom();
       }
       target.refresh(0, Math.max(0, target.rows - 1));
@@ -222,8 +232,12 @@ export default function XtermView({
           seedApplied = true;
           if (unmounted) return;
           doFitRef.current();
-          syncTmuxCursor();
+          term.scrollToBottom();
+          syncTmuxCursor(true);
           restoreMouse();
+          if (focusedRef.current) {
+            term.focus();
+          }
         },
         () => {
           applyingSeed = true;
@@ -302,7 +316,7 @@ export default function XtermView({
           (inputModeRef.current ?? idleMode).mouseSgr,
         );
         void paneWrite(paneId, bytes);
-        term.scrollToBottom();
+        if (!term.hasSelection()) term.scrollToBottom();
         ev.preventDefault();
       } else if (decision.kind === "arrows") {
         const bytes = altScreenArrows(
@@ -311,7 +325,7 @@ export default function XtermView({
           Boolean(term.modes?.applicationCursorKeysMode),
         );
         void paneWrite(paneId, bytes);
-        term.scrollToBottom();
+        if (!term.hasSelection()) term.scrollToBottom();
         ev.preventDefault();
       }
     };
@@ -338,7 +352,7 @@ export default function XtermView({
         void paneWrite(paneId, bytes);
         // The seeded buffer is not Grok's transcript. Keep it pinned so a
         // wheel the webview will not cancel cannot park on a blank row.
-        term.scrollToBottom();
+        if (!term.hasSelection()) term.scrollToBottom();
       } else if (decision.kind === "arrows") {
         const bytes = altScreenArrows(
           decision.lines < 0,
@@ -346,7 +360,7 @@ export default function XtermView({
           Boolean(term.modes?.applicationCursorKeysMode),
         );
         void paneWrite(paneId, bytes);
-        term.scrollToBottom();
+        if (!term.hasSelection()) term.scrollToBottom();
       } else {
         pageLines += decision.lines;
         const now = performance.now();
@@ -372,13 +386,21 @@ export default function XtermView({
         setFindOpen(true);
         return false;
       }
-      if (isMac && ev.metaKey && ev.key === "c") {
+      const isCopyChord =
+        (isMac && ev.metaKey && (ev.key === "c" || ev.key === "C")) ||
+        (!isMac &&
+          ev.ctrlKey &&
+          ((ev.shiftKey && (ev.key === "c" || ev.key === "C")) ||
+            ((ev.key === "c" || ev.key === "C") && term.hasSelection())));
+      if (isCopyChord) {
         if (term.hasSelection()) {
           void clipboardWrite(term.getSelection());
           return false;
         }
-        void paneWrite(paneId, [3]);
-        return false;
+        if (isMac && ev.metaKey) {
+          void paneWrite(paneId, [3]);
+          return false;
+        }
       }
       const pasteChord =
         (isMac && ev.metaKey && ev.key === "v") ||
@@ -410,6 +432,8 @@ export default function XtermView({
       pressed = false;
       const moved = Math.abs(ev.clientX - downX) + Math.abs(ev.clientY - downY) > 3;
       if (moved || term.hasSelection()) return;
+      const buf = term.buffer.active;
+      if (!viewportAtBottom(buf.viewportY, buf.baseY)) return;
       redrawCaret(true);
       syncTmuxCursor(true);
     };
@@ -420,15 +444,26 @@ export default function XtermView({
     let lastRows = 0;
     let seedTimer: number | undefined;
     let cursorTimer: number | undefined;
+    let reseedTimer: number | undefined;
     let subscribed = false;
 
     const doFit = () => {
-      if (applyingSeed || unmounted || host.clientWidth < 2 || host.clientHeight < 2) return;
-      try {
-        fit.fit();
-        reportCell(term, onCellSizeRef.current);
-      } catch {
-        return;
+      if (applyingSeed || unmounted) return;
+      if (paneColsRef.current && paneRowsRef.current) {
+        try {
+          term.resize(paneColsRef.current, paneRowsRef.current);
+          reportCell(term, onCellSizeRef.current);
+        } catch {
+          return;
+        }
+      } else {
+        if (host.clientWidth < 2 || host.clientHeight < 2) return;
+        try {
+          fit.fit();
+          reportCell(term, onCellSizeRef.current);
+        } catch {
+          return;
+        }
       }
       redrawCaret();
       if (term.cols === lastCols && term.rows === lastRows) return;
@@ -440,6 +475,15 @@ export default function XtermView({
         cursorTimer = window.setTimeout(() => {
           if (!unmounted) syncTmuxCursor();
         }, 120);
+        if (reseedTimer) window.clearTimeout(reseedTimer);
+        reseedTimer = window.setTimeout(() => {
+          if (unmounted) return;
+          seedState.seeded = false;
+          void bindPaneOutput(paneId, seedState, {
+            seed: paintSeed,
+            write: (bytes) => term.write(bytes),
+          });
+        }, 150);
       }
       if (subscribed) return;
       subscribed = true;
@@ -469,6 +513,7 @@ export default function XtermView({
       restoreMouseRef.current = () => {};
       if (seedTimer) window.clearTimeout(seedTimer);
       if (cursorTimer) window.clearTimeout(cursorTimer);
+      if (reseedTimer) window.clearTimeout(reseedTimer);
       window.clearTimeout(later);
       host.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("mouseup", onMouseUp);
@@ -484,6 +529,12 @@ export default function XtermView({
       fitRef.current = null;
     };
   }, [paneId]);
+
+  useEffect(() => {
+    paneColsRef.current = paneCols;
+    paneRowsRef.current = paneRows;
+    doFitRef.current();
+  }, [paneCols, paneRows]);
 
   useEffect(() => {
     const term = termRef.current;

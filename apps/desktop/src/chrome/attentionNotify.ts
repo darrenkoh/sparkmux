@@ -1,4 +1,4 @@
-import { isTauriRuntime, rpcInvoke } from "../transport";
+import { isTauriRuntime, rpcInvoke } from "../transport.ts";
 
 export type NoteLabel = "needs_user" | "failed" | "succeeded" | "running";
 

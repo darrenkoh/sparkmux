@@ -56,6 +56,7 @@ test("applyPaneSeed scrolls history and keeps the visible cursor", async () => {
   assert.equal(term.cols, 40);
   assert.equal(term.options.windowsMode, false);
   assert.equal(term.buffer.active.baseY, history.length);
+  assert.equal(term.buffer.active.viewportY, history.length);
   assert.equal(lineText(term, 0), "one");
   assert.equal(lineText(term, 1), "two");
   assert.equal(lineText(term, 2), "W".repeat(40));

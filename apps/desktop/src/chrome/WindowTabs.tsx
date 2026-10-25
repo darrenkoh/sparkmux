@@ -96,10 +96,14 @@ export default function WindowTabs({
               <button
                 type="button"
                 className="window-tab-main"
-                onClick={() => onSelect(win.id)}
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  onSelect(win.id);
+                }}
                 onDoubleClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  e.currentTarget.blur();
                   onSelect(win.id);
                   startRename(win);
                 }}

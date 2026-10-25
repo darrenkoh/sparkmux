@@ -28,6 +28,12 @@ import {
 } from "../ios/mapGestures";
 import { placeDockedNodeLabels, valueAxisFrame, valueAxisStep } from "./terrainHud";
 import {
+  cameraKey,
+  decideMapFrame,
+  dockedPeakLabel,
+  shouldRebuildTerrain,
+} from "./terrainFrame";
+import {
   activityAxis,
   compressedToWall,
   formatGap,
@@ -559,6 +565,15 @@ export default function TerrainViewport({
     persistentAutoRotate = next;
     autoRotateRef.current = next;
     setAutoRotateState(next);
+    wakeRenderRef.current();
+  };
+  // Docked spin is separate. A fullscreen auto-rotate left on must not keep this loop alive.
+  const [dockedRotation, setDockedRotationState] = useState(false);
+  const dockedRotationRef = useRef(false);
+  const setDockedRotation = (next: boolean) => {
+    dockedRotationRef.current = next;
+    setDockedRotationState(next);
+    wakeRenderRef.current();
   };
 
   // Chronological Scrubber & Playback state (1.0 = Latest / Full Terrain)
@@ -706,6 +721,10 @@ export default function TerrainViewport({
 
   const progTerrainRef = useRef<WebGLProgram | null>(null);
   const progContourRef = useRef<WebGLProgram | null>(null);
+  const wakeRenderRef = useRef<() => void>(() => {});
+  const builtSignatureRef = useRef("");
+  const geometryReadyRef = useRef(false);
+  const desiredSignatureRef = useRef("");
 
   const uTRef = useRef<Record<string, WebGLUniformLocation | null>>({});
   const uCRef = useRef<Record<string, WebGLUniformLocation | null>>({});
@@ -1289,6 +1308,8 @@ export default function TerrainViewport({
       timeTicks,
       seamMarks,
     };
+    builtSignatureRef.current = desiredSignatureRef.current;
+    geometryReadyRef.current = builtSignatureRef.current.length > 0;
   };
 
   // Coalesce and throttle geometry recalculation so streaming events don't stutter
@@ -1305,19 +1326,24 @@ export default function TerrainViewport({
       }
       lastUpdateTimeRef.current = now;
       updateGeometry();
+      wakeRenderRef.current();
     } else if (pendingUpdateRef.current === null) {
       pendingUpdateRef.current = window.setTimeout(() => {
         pendingUpdateRef.current = null;
         lastUpdateTimeRef.current = performance.now();
         updateGeometry();
+        wakeRenderRef.current();
       }, 120 - elapsed);
     }
   };
 
   // Rebuild when the visible window moves, not only when the column count changes.
   const dataSignature = `${mapKey}:${timeline?.length ?? 0}:${stats?.total_events ?? 0}:${stats?.user_prompts ?? 0}:${stats?.thinking_blocks ?? 0}:${stats?.assistant_replies ?? 0}:${stats?.tool_calls ?? 0}:${stats?.timeline_start ?? 0}:${stats?.timeline_end ?? 0}:${Math.round(view.compStart ?? view.start)}:${Math.round(view.compEnd ?? view.end)}:${Math.round(axis.spanMs)}:${axis.seams.length}:${baseShape}`;
+  desiredSignatureRef.current = dataSignature;
   useEffect(() => {
-    scheduleGeometryUpdate();
+    if (shouldRebuildTerrain(builtSignatureRef.current, dataSignature)) {
+      scheduleGeometryUpdate();
+    }
   }, [dataSignature]);
 
   // Main WebGL & Render Loop Lifecycle (mounts once and stays continuous)
@@ -1465,8 +1491,8 @@ export default function TerrainViewport({
 
     // Cached canvas dimensions to avoid 60 FPS forced layout reflows (getBoundingClientRect)
     const canvasRect = {
-      width: glCanvas.clientWidth || 800,
-      height: glCanvas.clientHeight || 600,
+      width: Math.round(glCanvas.clientWidth) || 0,
+      height: Math.round(glCanvas.clientHeight) || 0,
       left: 0,
       top: 0,
     };
@@ -1482,37 +1508,86 @@ export default function TerrainViewport({
     };
     updateCanvasRect();
 
+    let wake = () => {};
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         if (entry.target === glCanvas) {
           const cr = entry.contentRect;
-          if (cr.width > 0 && cr.height > 0) {
-            canvasRect.width = cr.width;
-            canvasRect.height = cr.height;
-          }
+          const nextW = Math.round(cr.width);
+          const nextH = Math.round(cr.height);
+          if (!(nextW > 0) || !(nextH > 0)) return;
+          if (nextW === Math.round(canvasRect.width) && nextH === Math.round(canvasRect.height)) return;
+          canvasRect.width = nextW;
+          canvasRect.height = nextH;
           const r = glCanvas.getBoundingClientRect();
           canvasRect.left = r.left;
           canvasRect.top = r.top;
+          wake();
         }
       }
     });
     resizeObserver.observe(glCanvas);
 
-    // Continuous Render Loop (30 FPS in docked mini-map, 60 FPS in fullscreen)
-    let animId: number;
+    // Fullscreen keeps a live loop. A docked map draws one settled frame, then
+    // stops until the picture, the gesture, playback, or docked rotation changes.
+    let animId = 0;
+    let loopOn = false;
     let fps = 60;
     let lastFpsTime = performance.now();
     let frameCount = 0;
+    let zoomPulse = false;
+    let resetPulse = false;
+    let lastDecor = 0;
+    let haloVertCount = 0;
+    let radarVertCount = 0;
+    let dockTrail: Path2D | null = null;
+    let dockTrailKey = "";
+    const drawn = { width: 0, height: 0, camera: "", telemetry: "", color: "" };
+
+    const frameDecision = () => {
+      const cam = persistentCam;
+      const extent = baseShapeRef.current === "globe" ? GLOBE_RADIUS : RECT_HX;
+      return decideMapFrame({
+        docked: dockedRef.current,
+        dragging: isDraggingRef.current,
+        zooming: zoomPulse,
+        playing: isPlayingRef.current,
+        rotationOn: dockedRef.current && dockedRotationRef.current,
+        fullscreenAutoRotate: autoRotateRef.current,
+        telemetry: desiredSignatureRef.current,
+        previousTelemetry: drawn.telemetry,
+        width: canvasRect.width,
+        height: canvasRect.height,
+        previousWidth: drawn.width,
+        previousHeight: drawn.height,
+        camera: cameraKey(cam.azimuth, cam.elevation, cam.radius, cam.target[0], cam.target[1], cam.target[2]),
+        previousCamera: drawn.camera,
+        color: realismRef.current,
+        previousColor: drawn.color,
+        geometryReady: geometryReadyRef.current && builtSignatureRef.current === desiredSignatureRef.current,
+        extent,
+        reset: resetPulse,
+      });
+    };
 
     const render = () => {
-      animId = requestAnimationFrame(render);
-
       const now = performance.now();
+      const decision = frameDecision();
+      if (!(canvasRect.width > 0) || !(canvasRect.height > 0)) {
+        animId = requestAnimationFrame(render);
+        return;
+      }
+      if (!geometryReadyRef.current || builtSignatureRef.current !== desiredSignatureRef.current) {
+        animId = requestAnimationFrame(render);
+        return;
+      }
+      // Docked stays at 30 FPS so the sweep and particles stay smooth without a 60 FPS core.
+      // Fullscreen stays at 60. decideMapFrame still gates rebuilds and one-shot invalidation.
       const targetFps = dockedRef.current ? 30 : 60;
       const interval = 1000 / targetFps;
       const delta = now - clockRef.current.lastRenderTime;
-
       if (delta < interval - 2.0) {
+        animId = requestAnimationFrame(render);
         return;
       }
       clockRef.current.lastRenderTime = now - (delta % interval);
@@ -1528,7 +1603,8 @@ export default function TerrainViewport({
         lastFpsTime = now;
       }
 
-      if (autoRotateRef.current && !isDraggingRef.current) {
+      const spin = dockedRef.current ? dockedRotationRef.current : autoRotateRef.current;
+      if (spin && !isDraggingRef.current) {
         cam.azimuth += 0.08 * Math.min(dt, 0.1);
       }
 
@@ -1583,10 +1659,12 @@ export default function TerrainViewport({
       // X-axis sweep: past (-extentX) to present (+extentX)
       const currentShape = baseShapeRef.current;
       const extentX = currentShape === "globe" ? GLOBE_RADIUS : RECT_HX;
-      // When at or near 100%, expand curMaxX beyond geometry so no edge particles or contour lines are clipped
-      const curMaxX = scrubProgressRef.current >= 0.98
+      const restDock = dockedRef.current && !isPlayingRef.current;
+      // Full reveal while docked so a phase-0 sweep cannot clip the mesh. The highlight still travels.
+      const scrubMaxX = scrubProgressRef.current >= 0.98
         ? extentX + 2.0
         : (scrubProgressRef.current * 2 - 1) * extentX;
+      const curMaxX = restDock ? decision.rectMaxX : scrubMaxX;
 
       if (speedMultiplier > 0 && !isPlayingRef.current) {
         clockRef.current.scanProgress = (clockRef.current.scanProgress + (dt * speedMultiplier) / 7.0) % 1.0;
@@ -1598,10 +1676,10 @@ export default function TerrainViewport({
       const scanXPos = -extentX + scanPhase * (curMaxX - (-extentX));
       const scanFade = speedMultiplier === 0 ? 0.8 : smoothstep(1.0, 0.92, scanPhase) * smoothstep(0.0, 0.04, scanPhase);
       const globeOn = currentShape === "globe";
-      const revealed = scrubProgressRef.current >= 0.98 ? 1 : scrubProgressRef.current;
+      const revealed = restDock ? 1 : scrubProgressRef.current >= 0.98 ? 1 : scrubProgressRef.current;
       const scanFrac = Math.min(1, scanPhase * revealed);
       const scanAng = globeOn ? timeFracToAngle(scanFrac) : 0;
-      const maxFrac = scrubProgressRef.current >= 0.98 ? 1.2 : revealed;
+      const maxFrac = restDock ? decision.globeMaxFrac : scrubProgressRef.current >= 0.98 ? 1.2 : revealed;
 
       const isMono = realismRef.current === "mono";
 
@@ -1616,14 +1694,21 @@ export default function TerrainViewport({
       gl.uniform1f(uC.uScanAng, scanAng);
       gl.uniform1f(uC.uMaxFrac, maxFrac);
 
+      const refreshDecor = !dockedRef.current || now - lastDecor >= 120;
+      if (refreshDecor) lastDecor = now;
       if (currentShape === "globe") {
-        const breath = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * 1.35));
-        const halo = globeHaloVerts(breath);
-        gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.5, isMono ? 1.0 : 0.86, 1.0);
-        gl.bindVertexArray(haloLines.vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, haloLines.buf);
-        gl.bufferData(gl.ARRAY_BUFFER, halo, gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.LINES, 0, halo.length / 4);
+        if (refreshDecor) {
+          const breath = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * 1.35));
+          const halo = globeHaloVerts(breath);
+          gl.bindBuffer(gl.ARRAY_BUFFER, haloLines.buf);
+          gl.bufferData(gl.ARRAY_BUFFER, halo, gl.DYNAMIC_DRAW);
+          haloVertCount = halo.length / 4;
+        }
+        if (haloVertCount > 0) {
+          gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.5, isMono ? 1.0 : 0.86, 1.0);
+          gl.bindVertexArray(haloLines.vao);
+          gl.drawArrays(gl.LINES, 0, haloVertCount);
+        }
         gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.62, isMono ? 1.0 : 0.92, 1.0);
       } else {
         gl.uniform3f(uC.uColor, 1.0, 1.0, 1.0);
@@ -1685,21 +1770,26 @@ export default function TerrainViewport({
 
       if (currentShape === "globe" && elevFieldRef.current) {
         const field = elevFieldRef.current;
-        const sweep = globeRadarVerts(clockRef.current.radarFrac, (x, z) => sampleElev(field, x, z));
-        gl.useProgram(progContour);
-        gl.uniformMatrix4fv(uC.uVP, false, matVP);
-        gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
-        gl.uniform1f(uC.uScanX, scanXPos);
-        gl.uniform1f(uC.uScanAmount, 0);
-        gl.uniform1f(uC.uMaxX, 999.0);
-        gl.uniform1f(uC.uGlobe, 0);
-        gl.uniform1f(uC.uScanAng, scanAng);
-        gl.uniform1f(uC.uMaxFrac, 1.2);
-        gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.28, isMono ? 1.0 : 0.96, 1.0);
-        gl.bindVertexArray(radarLines.vao);
-        gl.bindBuffer(gl.ARRAY_BUFFER, radarLines.buf);
-        gl.bufferData(gl.ARRAY_BUFFER, sweep, gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.LINES, 0, sweep.length / 4);
+        if (refreshDecor) {
+          const sweep = globeRadarVerts(clockRef.current.radarFrac, (x, z) => sampleElev(field, x, z));
+          gl.bindBuffer(gl.ARRAY_BUFFER, radarLines.buf);
+          gl.bufferData(gl.ARRAY_BUFFER, sweep, gl.DYNAMIC_DRAW);
+          radarVertCount = sweep.length / 4;
+        }
+        if (radarVertCount > 0) {
+          gl.useProgram(progContour);
+          gl.uniformMatrix4fv(uC.uVP, false, matVP);
+          gl.uniform3f(uC.uCam, eyeX, eyeY, eyeZ);
+          gl.uniform1f(uC.uScanX, scanXPos);
+          gl.uniform1f(uC.uScanAmount, 0);
+          gl.uniform1f(uC.uMaxX, 999.0);
+          gl.uniform1f(uC.uGlobe, 0);
+          gl.uniform1f(uC.uScanAng, scanAng);
+          gl.uniform1f(uC.uMaxFrac, 1.2);
+          gl.uniform3f(uC.uColor, isMono ? 1.0 : 0.28, isMono ? 1.0 : 0.96, 1.0);
+          gl.bindVertexArray(radarLines.vao);
+          gl.drawArrays(gl.LINES, 0, radarVertCount);
+        }
       }
       gl.bindVertexArray(null);
 
@@ -1717,7 +1807,7 @@ export default function TerrainViewport({
         // Outer golden aura (subtle, thin glow)
         hud.strokeStyle = "rgba(255, 175, 45, 0.22)";
         hud.lineWidth = 2.0;
-        const strokeTrail = () => {
+        const appendTrail = (path: Path2D | null) => {
           let first = true;
           for (const pos of meta.curvedSlopeTrail) {
             if (!Number.isFinite(pos[0])) {
@@ -1734,19 +1824,37 @@ export default function TerrainViewport({
             }
             const sc = project([pos[0], pos[1], pos[2]]);
             if (!sc) { first = true; continue; }
-            if (first) { hud.moveTo(sc[0], sc[1]); first = false; }
-            else { hud.lineTo(sc[0], sc[1]); }
+            if (path) {
+              if (first) path.moveTo(sc[0], sc[1]);
+              else path.lineTo(sc[0], sc[1]);
+            } else if (first) {
+              hud.moveTo(sc[0], sc[1]);
+            } else {
+              hud.lineTo(sc[0], sc[1]);
+            }
+            first = false;
           }
-          hud.stroke();
+          if (!path) hud.stroke();
         };
-        hud.beginPath();
-        strokeTrail();
-
-        // Sharp bright core (refined, delicate tracing line)
-        hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
-        hud.lineWidth = 0.75;
-        hud.beginPath();
-        strokeTrail();
+        if (dockedRef.current) {
+          const trailKey = `${desiredSignatureRef.current}|${rect.width}|${rect.height}|${cameraKey(cam.azimuth, cam.elevation, cam.radius, cam.target[0], cam.target[1], cam.target[2])}|${revealed}|${globeOn}`;
+          if (trailKey !== dockTrailKey) {
+            dockTrailKey = trailKey;
+            dockTrail = new Path2D();
+            appendTrail(dockTrail);
+          }
+          if (dockTrail) hud.stroke(dockTrail);
+          hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
+          hud.lineWidth = 0.75;
+          if (dockTrail) hud.stroke(dockTrail);
+        } else {
+          hud.beginPath();
+          appendTrail(null);
+          hud.strokeStyle = "rgba(255, 205, 65, 0.95)";
+          hud.lineWidth = 0.75;
+          hud.beginPath();
+          appendTrail(null);
+        }
 
         // Render visible milestones with glowing beacons (clean, uncluttered nodes; hover reveals time card)
         for (const m of meta.keyMilestones) {
@@ -1914,7 +2022,7 @@ export default function TerrainViewport({
           return {
             node,
             peak,
-            text: node ? `${CHANNEL_TAGS[idx]} ${node.val}` : "",
+            text: node ? dockedPeakLabel(CHANNEL_TAGS[idx], node.val) : "",
           };
         });
         const visible = slots.flatMap((slot, idx) => (slot.peak ? [{ slot, idx }] : []));
@@ -1935,10 +2043,11 @@ export default function TerrainViewport({
           if (!el || !box) return;
           shown.add(idx);
           const rgb = `rgb(${Math.round(slot.node!.color[0] * 255)}, ${Math.round(slot.node!.color[1] * 255)}, ${Math.round(slot.node!.color[2] * 255)})`;
-          el.style.display = "block";
-          el.style.transform = `translate(${box.x}px, ${box.y}px)`;
-          el.style.borderColor = rgb;
-          el.style.color = "#f8fafc";
+          const nextTransform = `translate(${Math.round(box.x)}px, ${Math.round(box.y)}px)`;
+          if (el.style.display !== "block") el.style.display = "block";
+          if (el.style.transform !== nextTransform) el.style.transform = nextTransform;
+          if (el.style.borderColor !== rgb) el.style.borderColor = rgb;
+          if (el.style.color !== "rgb(248, 250, 252)") el.style.color = "#f8fafc";
           if (el.textContent !== slot.text) el.textContent = slot.text;
         });
         for (let idx = 0; idx < CHANNELS.length; idx++) {
@@ -2073,9 +2182,32 @@ export default function TerrainViewport({
           : `SWEEP X ${scanXPos.toFixed(1)}`;
         hud.fillText(`${sweepReadout}   EVENTS ${statsRef.current?.total_events ?? timelineRef.current?.length ?? 0}   ${fps} FPS`, rect.width - 16, rect.height - 82);
       }
+
+      zoomPulse = false;
+      resetPulse = false;
+      const camNow = persistentCam;
+      drawn.width = canvasRect.width;
+      drawn.height = canvasRect.height;
+      drawn.camera = cameraKey(
+        camNow.azimuth,
+        camNow.elevation,
+        camNow.radius,
+        camNow.target[0],
+        camNow.target[1],
+        camNow.target[2],
+      );
+      drawn.telemetry = desiredSignatureRef.current;
+      drawn.color = realismRef.current;
+      animId = requestAnimationFrame(render);
     };
 
-    animId = requestAnimationFrame(render);
+    wake = () => {
+      if (loopOn) return;
+      loopOn = true;
+      animId = requestAnimationFrame(render);
+    };
+    wakeRenderRef.current = wake;
+    wake();
 
     const activePointers = new Map<number, { x: number; y: number }>();
     let pinchPrevDist = 0;
@@ -2131,6 +2263,7 @@ export default function TerrainViewport({
         isDraggingRef.current = true;
         lastXRef.current = e.clientX;
         lastYRef.current = e.clientY;
+        wake();
         if (e.pointerType === "touch" || e.pointerType === "pen") {
           const hit = findMilestoneAt(e.clientX, e.clientY, milestoneHitRadius(e.pointerType));
           if (hit) setHoveredMilestone(hit);
@@ -2140,6 +2273,7 @@ export default function TerrainViewport({
         pinchPrevDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
         pinchPrevMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
         isDraggingRef.current = false;
+        wake();
       }
     };
 
@@ -2157,6 +2291,7 @@ export default function TerrainViewport({
         }
         pinchPrevDist = dist;
         pinchPrevMid = mid;
+        wake();
         return;
       }
       if (activePointers.size === 1 && isDraggingRef.current) {
@@ -2166,8 +2301,10 @@ export default function TerrainViewport({
         lastYRef.current = e.clientY;
         orbitCamera(persistentCam, dx, dy);
         if (Math.hypot(dx, dy) > 3 && hoveredMilestone) setHoveredMilestone(null);
+        wake();
         return;
       }
+      if (dockedRef.current) return;
       setHoveredMilestone(findMilestoneAt(e.clientX, e.clientY, milestoneHitRadius(e.pointerType)));
     };
 
@@ -2192,11 +2329,14 @@ export default function TerrainViewport({
       } catch {
         /* capture already released */
       }
+      wake();
     };
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
       persistentCam.radius = clamp(persistentCam.radius * Math.exp(e.deltaY * 0.001), 14, 90);
+      zoomPulse = true;
+      wake();
     };
 
     const handleDblClick = () => {
@@ -2204,6 +2344,8 @@ export default function TerrainViewport({
       persistentCam.azimuth = next.azimuth;
       persistentCam.elevation = next.elevation;
       persistentCam.radius = next.radius;
+      resetPulse = true;
+      wake();
     };
 
     glCanvas.addEventListener("pointerdown", handleDown);
@@ -2213,6 +2355,7 @@ export default function TerrainViewport({
     glCanvas.addEventListener("dblclick", handleDblClick);
 
     return () => {
+      wakeRenderRef.current = () => {};
       cancelAnimationFrame(animId);
       resizeObserver.disconnect();
       if (pendingUpdateRef.current !== null) {
@@ -2257,6 +2400,10 @@ export default function TerrainViewport({
     };
   }, []);
 
+  useEffect(() => {
+    wakeRenderRef.current();
+  }, [docked, dockedRotation, baseShape, realism, scanSpeed, showTrace]);
+
   if (docked) {
     return (
       <section className="scifi-panel viewport docked" aria-label="Docked area map">
@@ -2299,13 +2446,13 @@ export default function TerrainViewport({
           </div>
           <button
             type="button"
-            className={`docked-terrain-tool${autoRotate ? " on" : ""}`}
-            aria-pressed={autoRotate}
+            className={`docked-terrain-tool${dockedRotation ? " on" : ""}`}
+            aria-pressed={dockedRotation}
             aria-label="Auto-rotation"
-            onClick={() => setAutoRotate(!autoRotate)}
-            title={autoRotate ? "Pause auto-rotation" : "Turn auto-rotation on"}
+            onClick={() => setDockedRotation(!dockedRotation)}
+            title={dockedRotation ? "Pause auto-rotation" : "Turn auto-rotation on"}
           >
-            {autoRotate ? "ROT ON" : "ROT OFF"}
+            {dockedRotation ? "ROT ON" : "ROT OFF"}
           </button>
         {!hideDockedControls && (
         <>

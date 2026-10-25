@@ -46,7 +46,10 @@ export function applyPaneSeed(
   const { history, visible } = parsePaneSeed(bytes);
   const dump = screenDumpToXterm(visible);
   if (history.length === 0 || term.cols < 2 || term.rows < 1) {
-    term.write(dump, done);
+    term.write(dump, () => {
+      term.scrollToBottom?.();
+      done();
+    });
     return;
   }
 
@@ -71,6 +74,7 @@ export function applyPaneSeed(
   // Reset SGR left over from the history rows before the screen erase.
   term.write(`\x1b[0m${dump}`, () => {
     restoreSize();
+    term.scrollToBottom?.();
     done();
   });
 }

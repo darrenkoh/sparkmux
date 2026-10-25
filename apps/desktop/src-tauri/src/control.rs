@@ -36,7 +36,7 @@ pub async fn connect_core(
     if let Some(ctl) = inner.control.clone() {
         if inner.attached_session.as_deref() == Some(session.as_str()) {
             drop(inner);
-            if app.is_some() {
+            if app.is_some() || state.is_headless {
                 let _ = ctl.refresh_size(cols.max(2), rows.max(1)).await;
             }
             let mut inner = state.inner.lock().await;
@@ -53,7 +53,9 @@ pub async fn connect_core(
             inner.attached_session = Some(session.clone());
             inner.stopped = false;
             drop(inner);
-            let _ = ctl.refresh_size(cols.max(2), rows.max(1)).await;
+            if app.is_some() || state.is_headless {
+                let _ = ctl.refresh_size(cols.max(2), rows.max(1)).await;
+            }
             let mut inner = state.inner.lock().await;
             ensure_screen(&mut inner, &session).await;
             return Ok(());

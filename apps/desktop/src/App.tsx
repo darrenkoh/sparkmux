@@ -344,8 +344,14 @@ export default function App() {
   const lastPushedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   const pushClientSize = useCallback(() => {
+    if (!isTauriRuntime() && (!status || !status.is_headless)) {
+      return;
+    }
     if (sizeTimer.current) window.clearTimeout(sizeTimer.current);
     sizeTimer.current = window.setTimeout(() => {
+      if (!isTauriRuntime() && (!status || !status.is_headless)) {
+        return;
+      }
       if (typeof document !== "undefined" && !document.hasFocus() && lastPushedSizeRef.current !== null) {
         return;
       }
@@ -364,7 +370,7 @@ export default function App() {
       lastPushedSizeRef.current = { cols, rows };
       void windowResize(cols, rows);
     }, 50);
-  }, [hostSize]);
+  }, [hostSize, status]);
 
   const applyWindow = useCallback(
     async (win: TmuxWindow | undefined) => {
@@ -392,8 +398,14 @@ export default function App() {
       }
       const pane = win.panes.find((p) => p.active) ?? win.panes[0];
       if (pane) {
+        chromeFocus.current = "terminal";
         setFocusedPane(pane.id);
         void focusPane(pane.id);
+        const existing = getTerm(pane.id);
+        if (existing) {
+          existing.scrollToBottom();
+          existing.focus();
+        }
       }
     },
     [showToast],
@@ -1506,6 +1518,7 @@ export default function App() {
                     fontSize={fontSize}
                     paneModes={paneInputModes(snap)}
                     onFocus={focusTerminalPane}
+                    fixedSize={!isTauriRuntime() && (!status || !status.is_headless)}
                     onCellSize={(paneId, w, h, cols, rows) => {
                       if (w > 0 && h > 0) {
                         cellRef.current = { w, h };

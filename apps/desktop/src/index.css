@@ -722,7 +722,8 @@ body.is-resizing * {
   min-width: 0;
   position: relative;
   height: 100%;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .artifact-panel {
@@ -1843,13 +1844,15 @@ body.is-resizing * {
 .xterm-host {
   position: absolute;
   inset: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--bg);
 }
 
 .xterm-host .xterm {
   height: 100% !important;
-  width: 100% !important;
+  min-width: 100%;
+  width: max-content !important;
   padding: 0 !important;
 }
 

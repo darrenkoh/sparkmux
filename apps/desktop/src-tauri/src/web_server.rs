@@ -328,7 +328,7 @@ pub fn write_pairing_banner(urls: &[String]) {
 }
 
 pub async fn serve(opts: ServeOptions) -> Result<(), String> {
-    let state = AppState::new();
+    let state = AppState::new_headless();
     let running = open_web(state, opts, true).await?;
     write_pairing_banner(&running.urls);
     match running.task.await {
@@ -872,12 +872,14 @@ async fn dispatch_rpc_inner(
             Ok(Value::Null)
         }
         "window_resize" => {
-            crate::commands::window_resize_core(
-                state,
-                u16_arg(&args, "cols", 80),
-                u16_arg(&args, "rows", 24),
-            )
-            .await?;
+            if state.is_headless {
+                crate::commands::window_resize_core(
+                    state,
+                    u16_arg(&args, "cols", 80),
+                    u16_arg(&args, "rows", 24),
+                )
+                .await?;
+            }
             Ok(Value::Null)
         }
         "pane_cursor" => {
@@ -1119,6 +1121,21 @@ mod tests {
             .error
             .unwrap_or_default()
             .contains("unsupported RPC command"));
+
+        // When connected to the desktop app (!is_headless), window_resize is ignored.
+        let resize_ignored = dispatch_rpc(
+            &state,
+            &tx,
+            &mut subs,
+            RpcRequest {
+                id: 10,
+                cmd: "window_resize".into(),
+                args: json!({ "cols": 60, "rows": 30 }),
+            },
+        )
+        .await;
+        assert!(resize_ignored.ok);
+        assert_eq!(resize_ignored.data, Some(Value::Null));
     }
 
     #[test]

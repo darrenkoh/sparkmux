@@ -124,6 +124,7 @@ export interface TmuxStatus {
   default_session: string;
   last_session: string | null;
   app_version: string;
+  is_headless?: boolean;
   error: string | null;
   hint: string | null;
 }

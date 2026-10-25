@@ -34,6 +34,7 @@ test("the WebSocket frame router reseeds on a second 0x01 instead of appending i
         resets.push(resets.length + 1);
       },
       resize() {},
+      scrollToBottom() {},
       write(data: string, done?: () => void) {
         live.push(data);
         done?.();

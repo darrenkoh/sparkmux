@@ -377,7 +377,11 @@ test("docked panel keeps the action labels and the decluttered map", () => {
   assert.match(terrain.slice(ruler), /valueAxisFrame\(/);
   assert.match(terrain, /className="docked-node-labels"/);
   assert.match(terrain, /placeDockedNodeLabels\(/);
-  assert.match(terrain, /\$\{CHANNEL_TAGS\[idx\]\} \$\{node\.val\}/);
+  assert.match(terrain, /dockedPeakLabel\(CHANNEL_TAGS\[idx\], node\.val\)/);
+  const frame = readFileSync(new URL("./terrainFrame.ts", import.meta.url), "utf8");
+  assert.match(frame, /export function dockedPeakLabel/);
+  assert.match(frame, /return `\$\{tag\} \$\{value\}`/);
+  assert.match(frame, /"USR", "THK", "RPL", "TOL"/);
   assert.match(css, /\.docked-node-label/);
   assert.match(terrain, /aria-label="Area map base shape"/);
   assert.match(terrain, /aria-label="Auto-rotation"/);
