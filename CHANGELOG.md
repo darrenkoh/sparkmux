@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.57
+
+### Improvements
+
+- **Quota Countdown Halos**: Added circular progress halos to model quota pills indicating time elapsed towards quota reset, with urgent glowing indicators as reset approaches.
+- **Micro Hardware Charts in Status Bar**: Integrated live mini-visualizations directly in the status bar pills—a micro histogram for CPU utilization and sparkline for Sparkmux memory footprint, with jitter-free tabular padding.
+- **Sci-Fi Hardware Telemetry HUD Cards**: Hovering over CPU or Memory pills now reveals an interactive HUD card with high-resolution 30-second rolling waveforms, peak utilization telemetry, process metadata, and uptime metrics.
+- **Frequently Used Commands (FUC) Dialog**: Added a quick command catalog accessible via the status bar (`FUC`), featuring curated shell recipes, search commands, list tools, and git workflows that can be executed or copied with a single click.
+
 ## 0.1.56
 
 ### Improvements
