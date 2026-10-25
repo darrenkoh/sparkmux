@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.58
+
+### Improvements
+
+- **Question-mark command button**: The status-bar command catalog is a circled question mark. The tooltip is still Frequently Used Command.
+- **Larger Mini Stat**: Labels, metrics, and controls are larger. Turn, average, and TTFT values are brighter than their labels.
+
 ## 0.1.57
 
 ### Improvements
