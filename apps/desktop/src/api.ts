@@ -1,5 +1,12 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { Channel } from "@tauri-apps/api/core";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+
+import {
+  acceptPaneSubscriptionMessage,
+  type PaneFrameSink,
+  type PaneServerFrame,
+} from "./terminal/paneFrame.ts";
+import { isTauriRuntime, rpcInvoke, rpcListen, wsTransport } from "./transport.ts";
 
 import type { AgentBoardRow } from "./chrome/agentBoard";
 import type {
@@ -12,118 +19,194 @@ import type {
 } from "./types";
 
 export function tmuxStatus(): Promise<TmuxStatus> {
-  return invoke("tmux_status");
+  return rpcInvoke("tmux_status");
 }
 
 export function snapshot(): Promise<Snapshot> {
-  return invoke("snapshot");
+  return rpcInvoke("snapshot");
 }
 
 export function ensureReady(): Promise<Snapshot> {
-  return invoke("ensure_ready");
+  return rpcInvoke("ensure_ready");
 }
 
 export function newSession(name: string): Promise<void> {
-  return invoke("new_session", { name });
+  return rpcInvoke("new_session", { name });
 }
 
 export function renameSession(target: string, newName: string): Promise<void> {
-  return invoke("rename_session", { target, newName });
+  return rpcInvoke("rename_session", { target, newName });
 }
 
 export function killSession(target: string): Promise<void> {
-  return invoke("kill_session", { target });
+  return rpcInvoke("kill_session", { target });
 }
 
 export function newWindow(session: string, name: string): Promise<void> {
-  return invoke("new_window", { session, name });
+  return rpcInvoke("new_window", { session, name });
 }
 
 export function selectWindow(windowId: string): Promise<void> {
-  return invoke("select_window", { windowId });
+  return rpcInvoke("select_window", { windowId });
 }
 
 export function renameWindow(windowId: string, name: string): Promise<void> {
-  return invoke("rename_window", { windowId, name });
+  return rpcInvoke("rename_window", { windowId, name });
 }
 
 export function killWindow(windowId: string): Promise<void> {
-  return invoke("kill_window", { windowId });
+  return rpcInvoke("kill_window", { windowId });
 }
 
 export function killPane(paneId: string): Promise<void> {
-  return invoke("kill_pane", { paneId });
+  return rpcInvoke("kill_pane", { paneId });
 }
 
 export function splitPane(paneId: string, vertical: boolean): Promise<void> {
-  return invoke("split_pane", { paneId, vertical });
+  return rpcInvoke("split_pane", { paneId, vertical });
 }
 
 export function controlConnect(session: string, cols: number, rows: number): Promise<void> {
-  return invoke("control_connect", { session, cols, rows });
+  return rpcInvoke("control_connect", { session, cols, rows });
 }
 
 export function controlDisconnect(): Promise<void> {
-  return invoke("control_disconnect");
+  return rpcInvoke("control_disconnect");
 }
 
-export function paneSubscribe(
+/** A Tauri `Channel` inside the desktop shell, otherwise a plain listener. */
+export type PaneDataListener = {
+  onmessage?: (msg: unknown) => void;
+};
+
+export function createPaneDataListener(): PaneDataListener {
+  if (isTauriRuntime()) {
+    return new Channel<ArrayBuffer | Uint8Array | number[]>() as PaneDataListener;
+  }
+  return {};
+}
+
+/** Registers `listener.onmessage` on the transport. `paneSubscribe` uses this on the web. */
+export function connectPaneListener(
+  transport: { attachPaneHandler(paneId: string, onData: (frame: PaneServerFrame) => void): void },
   paneId: string,
-  onData: Channel<ArrayBuffer | Uint8Array | number[]>,
+  listener: PaneDataListener,
+): void {
+  transport.attachPaneHandler(paneId, (frame) => {
+    listener.onmessage?.(frame);
+  });
+}
+
+/** The pane effect calls this. Outside Tauri it never constructs a Tauri `Channel`. */
+export function bindPaneOutput(
+  paneId: string,
+  state: { seeded: boolean },
+  sink: PaneFrameSink,
 ): Promise<void> {
-  return invoke("pane_subscribe", { paneId, onData });
+  const listener = createPaneDataListener();
+  listener.onmessage = (msg) => acceptPaneSubscriptionMessage(msg, state, sink);
+  return paneSubscribe(paneId, listener);
+}
+
+export function paneSubscribe(paneId: string, onData: PaneDataListener): Promise<void> {
+  if (isTauriRuntime()) {
+    return rpcInvoke("pane_subscribe", { paneId, onData });
+  }
+  connectPaneListener(wsTransport, paneId, onData);
+  return wsTransport.invoke("pane_subscribe", { paneId });
 }
 
 export function paneUnsubscribe(paneId: string): Promise<void> {
-  return invoke("pane_unsubscribe", { paneId });
+  if (isTauriRuntime()) return rpcInvoke("pane_unsubscribe", { paneId });
+  return wsTransport.unsubscribePane(paneId);
 }
 
 export function paneWrite(paneId: string, data: number[]): Promise<void> {
-  return invoke("pane_write", { paneId, data });
+  if (isTauriRuntime()) return rpcInvoke("pane_write", { paneId, data });
+  return wsTransport.sendPaneWriteBinary(paneId, data);
 }
 
 export function windowResize(cols: number, rows: number): Promise<void> {
-  return invoke("window_resize", { cols, rows });
+  return rpcInvoke("window_resize", { cols, rows });
 }
 
 export function paneCursor(paneId: string): Promise<{ y: number; x: number }> {
-  return invoke("pane_cursor", { paneId });
+  return rpcInvoke("pane_cursor", { paneId });
 }
 
 export function focusPane(paneId: string): Promise<void> {
-  return invoke("focus_pane", { paneId });
+  return rpcInvoke("focus_pane", { paneId });
 }
 
 export function stopServer(): Promise<void> {
-  return invoke("stop_server");
+  return rpcInvoke("stop_server");
 }
 
 export function rememberSession(name: string): Promise<void> {
-  return invoke("remember_session", { name });
+  return rpcInvoke("remember_session", { name });
 }
 
 export function parseLayout(layout: string): Promise<LayoutNode> {
-  return invoke("parse_layout", { layout });
+  return rpcInvoke("parse_layout", { layout });
 }
 
 export function attachTargetName(): Promise<string | null> {
-  return invoke("attach_target_name");
+  return rpcInvoke("attach_target_name");
 }
 
-export function pasteIntoPane(paneId: string, bracket: boolean): Promise<void> {
-  return invoke("paste_into_pane", { paneId, bracket });
+export async function pasteIntoPane(paneId: string, bracket: boolean): Promise<void> {
+  if (isTauriRuntime()) {
+    return rpcInvoke("paste_into_pane", { paneId, bracket });
+  }
+  const raw = await navigator.clipboard.readText();
+  if (!raw) return;
+  const clipped = raw.slice(0, 1_048_576);
+  const cleaned = clipped.replace(/\x1b\[200~/g, "").replace(/\x1b\[201~/g, "");
+  const payload = bracket ? `\x1b[200~${cleaned}\x1b[201~` : cleaned;
+  const bytes = Array.from(new TextEncoder().encode(payload));
+  await paneWrite(paneId, bytes);
 }
 
-export function clipboardWrite(text: string): Promise<void> {
-  return invoke("clipboard_write", { text });
+export type WebServeStatus = {
+  running: boolean;
+  urls: string[];
+  qr_url: string;
+  qr_svg: string;
+};
+
+export function webServeToggle(): Promise<WebServeStatus> {
+  return rpcInvoke("web_serve_toggle");
 }
 
-export function openHttpUrl(url: string): Promise<void> {
-  return invoke("open_http_url", { url });
+export async function clipboardWrite(text: string): Promise<void> {
+  if (isTauriRuntime()) {
+    return rpcInvoke("clipboard_write", { text });
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand("copy");
+  document.body.removeChild(area);
+}
+
+export async function openHttpUrl(url: string): Promise<void> {
+  if (isTauriRuntime()) {
+    return rpcInvoke("open_http_url", { url });
+  }
+  if (/^https?:\/\//i.test(url)) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
 }
 
 export function openEditorPath(path: string, cwd: string): Promise<void> {
-  return invoke("open_editor_path", { path, cwd });
+  return rpcInvoke("open_editor_path", { path, cwd });
 }
 
 export interface AgentBoardPane {
@@ -138,7 +221,7 @@ export interface AgentBoardPane {
 }
 
 export function agentBoard(panes: AgentBoardPane[]): Promise<AgentBoardRow[]> {
-  return invoke("agent_board", { panes });
+  return rpcInvoke("agent_board", { panes });
 }
 
 export interface ArtifactEntry {
@@ -165,7 +248,7 @@ export function paneArtifacts(
   title: string,
   pid: number,
 ): Promise<ArtifactFeed> {
-  return invoke("pane_artifacts", { command, cwd, title, pid });
+  return rpcInvoke("pane_artifacts", { command, cwd, title, pid });
 }
 
 export interface ChangeGraphFile {
@@ -209,7 +292,7 @@ export function changeGraph(
   title: string,
   pid: number,
 ): Promise<ChangeGraphResponse> {
-  return invoke("change_graph", { command, cwd, title, pid });
+  return rpcInvoke("change_graph", { command, cwd, title, pid });
 }
 
 export function fileDiff(
@@ -217,7 +300,7 @@ export function fileDiff(
   path: string,
   cwd: string,
 ): Promise<FileDiffResponse> {
-  return invoke("file_diff", { repoId, path, cwd });
+  return rpcInvoke("file_diff", { repoId, path, cwd });
 }
 
 export interface SearchFileTarget {
@@ -237,7 +320,7 @@ export function searchChangedFiles(
   scope: "diff" | "full",
   cwd: string,
 ): Promise<ChangedFileMatch[]> {
-  return invoke("search_changed_files", { targets, query, scope, cwd });
+  return rpcInvoke("search_changed_files", { targets, query, scope, cwd });
 }
 
 export interface GitCommitItem {
@@ -287,7 +370,7 @@ export function gitHistory(
   path?: string | null,
   maxCount?: number | null,
 ): Promise<GitHistoryResponse> {
-  return invoke("git_history", { repoId, cwd, path, maxCount });
+  return rpcInvoke("git_history", { repoId, cwd, path, maxCount });
 }
 
 export function gitCommitDetail(
@@ -295,7 +378,7 @@ export function gitCommitDetail(
   cwd: string,
   commitHash: string,
 ): Promise<GitCommitDetail> {
-  return invoke("git_commit_detail", { repoId, cwd, commitHash });
+  return rpcInvoke("git_commit_detail", { repoId, cwd, commitHash });
 }
 
 export function gitCommitDiff(
@@ -304,7 +387,7 @@ export function gitCommitDiff(
   commitHash: string,
   path: string,
 ): Promise<FileDiffResponse> {
-  return invoke("git_commit_diff", { repoId, cwd, commitHash, path });
+  return rpcInvoke("git_commit_diff", { repoId, cwd, commitHash, path });
 }
 
 export interface ChronicleFile {
@@ -374,7 +457,7 @@ export function chronicleSession(
   title: string,
   pid: number,
 ): Promise<ChronicleSession> {
-  return invoke("chronicle_session", { command, cwd, title, pid });
+  return rpcInvoke("chronicle_session", { command, cwd, title, pid });
 }
 
 export function chronicleHologram(
@@ -384,11 +467,11 @@ export function chronicleHologram(
   pid: number,
   stationId: string,
 ): Promise<ChronicleHologram> {
-  return invoke("chronicle_hologram", { command, cwd, title, pid, stationId });
+  return rpcInvoke("chronicle_hologram", { command, cwd, title, pid, stationId });
 }
 
 export function clearChronicleCache(): Promise<void> {
-  return invoke("clear_chronicle_cache");
+  return rpcInvoke("clear_chronicle_cache");
 }
 
 export interface ActivityPoint {
@@ -533,7 +616,7 @@ export function tabAnalytics(
   title: string,
   pid: number,
 ): Promise<TabAnalyticsResponse> {
-  return invoke("tab_analytics", {
+  return rpcInvoke("tab_analytics", {
     sessionName,
     tabId,
     command,
@@ -544,19 +627,19 @@ export function tabAnalytics(
 }
 
 export function setAnalyticsEnabled(enabled: boolean): Promise<void> {
-  return invoke("set_analytics_enabled", { enabled });
+  return rpcInvoke("set_analytics_enabled", { enabled });
 }
 
 export function clearAnalyticsData(): Promise<void> {
-  return invoke("clear_analytics_data");
+  return rpcInvoke("clear_analytics_data");
 }
 
 export function analyticsConfig(): Promise<AnalyticsConfig> {
-  return invoke("analytics_config");
+  return rpcInvoke("analytics_config");
 }
 
 export function appTelemetry(): Promise<AppTelemetry> {
-  return invoke("app_telemetry");
+  return rpcInvoke("app_telemetry");
 }
 
 export function llmUsage(
@@ -565,7 +648,7 @@ export function llmUsage(
   cwd: string,
   pid: number,
 ): Promise<LlmUsage> {
-  return invoke("llm_usage", { command, title, cwd, pid });
+  return rpcInvoke("llm_usage", { command, title, cwd, pid });
 }
 
 export function toBytes(msg: ArrayBuffer | Uint8Array | number[]): Uint8Array {
@@ -600,23 +683,23 @@ export function screenDumpToXterm(bytes: Uint8Array): string {
 export async function listenLayoutChange(
   handler: (payload: LayoutChangePayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<LayoutChangePayload>("layout-change", (e) => handler(e.payload));
+  return rpcListen<LayoutChangePayload>("layout-change", handler);
 }
 
 export async function listenTreeDirty(handler: () => void): Promise<UnlistenFn> {
-  return listen("tree-dirty", () => handler());
+  return rpcListen("tree-dirty", () => handler());
 }
 
 export async function listenControlExit(handler: () => void): Promise<UnlistenFn> {
-  return listen("control-exit", () => handler());
+  return rpcListen("control-exit", () => handler());
 }
 
 export async function listenServerStopped(handler: () => void): Promise<UnlistenFn> {
-  return listen("server-stopped", () => handler());
+  return rpcListen("server-stopped", () => handler());
 }
 
 export async function listenMenu(handler: (id: string) => void): Promise<UnlistenFn> {
-  return listen<string>("menu", (e) => handler(e.payload));
+  return rpcListen<string>("menu", handler);
 }
 
 export interface ActiveTarget {
@@ -631,23 +714,27 @@ export interface ActiveTarget {
 }
 
 export function syncActiveTarget(target: ActiveTarget): Promise<void> {
-  return invoke("sync_active_target", { target });
+  return rpcInvoke("sync_active_target", { target });
 }
 
 export function getActiveTarget(): Promise<ActiveTarget> {
-  return invoke("get_active_target");
+  return rpcInvoke("get_active_target");
 }
 
-export function openPopoutWindow(
+export async function openPopoutWindow(
   kind: "stats" | "gits",
   target?: ActiveTarget,
 ): Promise<void> {
-  return invoke("open_popout_window", { kind, target: target ?? null });
+  if (target) await syncActiveTarget(target).catch(() => {});
+  if (isTauriRuntime()) {
+    return rpcInvoke("open_popout_window", { kind, target: target ?? null });
+  }
+  window.open(`/?window=${kind}`, `sparkmux-${kind}`, "noopener");
 }
 
 export async function listenActiveTargetChanged(
   handler: (target: ActiveTarget) => void,
 ): Promise<UnlistenFn> {
-  return listen<ActiveTarget>("active-target-changed", (e) => handler(e.payload));
+  return rpcListen<ActiveTarget>("active-target-changed", handler);
 }
 

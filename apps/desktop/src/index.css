@@ -3030,6 +3030,47 @@ body.is-resizing * {
   margin-top: 14px;
 }
 
+.modal.web-serve-modal {
+  max-width: 560px;
+}
+
+.web-serve-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.web-serve-qr img {
+  width: 220px;
+  height: 220px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.web-serve-qr p {
+  margin: 0;
+}
+
+.web-serve-url {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 8px 0;
+}
+
+.web-serve-url code {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  background: #0d0f12;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, "Ubuntu Mono", "DejaVu Sans Mono", monospace;
   font-size: 12px;
@@ -7432,5 +7473,248 @@ div.mini-subagents-head {
 .open-editor {
   flex: 0 0 auto;
   margin-left: auto;
+}
+
+/* iOS PWA, iPhone Duo postures, and large iPad touch targets */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+.app {
+  padding-top: var(--safe-top);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  padding-bottom: var(--safe-bottom);
+}
+
+.term-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stage-extras {
+  display: contents;
+}
+
+.splitter,
+.dock-splitter,
+.scifi-terrain-canvas {
+  touch-action: none;
+}
+
+.splitter {
+  position: relative;
+}
+
+.splitter::before,
+.dock-splitter-w::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -10px;
+  right: -10px;
+  z-index: 10;
+}
+
+.dock-splitter {
+  position: relative;
+}
+
+.dock-splitter-h::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10px;
+  bottom: -10px;
+  z-index: 10;
+}
+
+.touch-keybar-wrap {
+  display: flex;
+  flex-direction: column;
+  background: #12151b;
+  border-top: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+  flex: 0 0 auto;
+}
+
+.touch-keybar,
+.touch-keybar-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.touch-keybar::-webkit-scrollbar,
+.touch-keybar-sub::-webkit-scrollbar {
+  display: none;
+}
+
+.touch-keybar-sub {
+  background: #0d0f12;
+  border-bottom: 1px solid var(--border);
+}
+
+.tk-btn,
+.tk-posture-select,
+.sidebar-drawer-btn,
+.pane-pills button,
+.companion-switch button {
+  flex: 0 0 auto;
+  min-width: 36px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: 1px solid #2a2f3a;
+  background: #1a1f29;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.tk-btn.latched,
+.pane-pills button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.tk-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex: 0 0 1px;
+  margin: 0 2px;
+}
+
+.pane-pills,
+.companion-switch {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  background: #10141b;
+  border-bottom: 1px solid var(--border);
+}
+
+.duo-hinge-spacer {
+  flex: 0 0 auto;
+  background: #07080a;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  pointer-events: none;
+}
+
+.app.posture-duo-book .term-column {
+  flex: 0 0 var(--duo-left, 50%);
+  width: var(--duo-left, 50%);
+}
+
+.app.posture-duo-book .companion-deck,
+.app.posture-duo-clamshell .companion-deck {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0b0d11;
+}
+
+.app.posture-duo-clamshell .term-stage {
+  flex-direction: column;
+}
+
+.app.posture-duo-clamshell .companion-deck {
+  order: 0;
+  flex: 0 0 var(--duo-top, 44%);
+  height: var(--duo-top, 44%);
+}
+
+.app.posture-duo-clamshell .term-column {
+  order: 1;
+}
+
+.app.posture-duo-book .companion-deck .scifi-hud-overlay,
+.app.posture-duo-clamshell .companion-deck .scifi-hud-overlay,
+.app.posture-duo-book .companion-deck .graph-overlay,
+.app.posture-duo-clamshell .companion-deck .graph-overlay,
+.app.posture-phone-compact .companion-sheet .scifi-hud-overlay,
+.app.posture-phone-compact .companion-sheet .graph-overlay {
+  position: absolute;
+  inset: 40px 0 0 0;
+}
+
+.app.posture-duo-book .companion-deck .scifi-hud-frame.fullscreen,
+.app.posture-duo-clamshell .companion-deck .scifi-hud-frame.fullscreen,
+.app.posture-phone-compact .companion-sheet .scifi-hud-frame.fullscreen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+
+.app.posture-phone-compact .splitter,
+.app.posture-duo-book .splitter {
+  display: none;
+}
+
+.app.posture-phone-compact .sidebar-slot,
+.app.posture-duo-book .sidebar-slot {
+  position: fixed;
+  top: var(--safe-top);
+  bottom: var(--safe-bottom);
+  left: 0;
+  z-index: 200;
+  width: min(320px, 86vw);
+  flex-basis: auto;
+  box-shadow: 12px 0 32px rgba(0, 0, 0, 0.65);
+  transform: translateX(-105%);
+  background: var(--sidebar);
+}
+
+.app.posture-phone-compact .sidebar-slot.drawer-open,
+.app.posture-duo-book .sidebar-slot.drawer-open,
+.app.sidebar-drawer-open .sidebar-slot {
+  transform: translateX(0);
+}
+
+.app.posture-phone-compact .companion-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--safe-bottom);
+  height: min(78vh, calc(100% - var(--safe-top)));
+  z-index: 180;
+  background: #0d0f12;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.app.posture-ipad-pro .term-viewport,
+.app.posture-phone-compact .term-viewport,
+.app.posture-duo-book .term-viewport,
+.app.posture-duo-clamshell .term-viewport {
+  touch-action: none;
 }
 

@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use crate::attention::{self, AttentionLabel, LabelToken};
 use crate::control;
 use crate::error::{map_error, too_old};
-use crate::state::{persist_last_session, ActiveTarget, AppState};
+use crate::state::{persist_last_session, ActiveTarget, AppState, ServerPushEvent};
 use crate::window_label;
 
 /// A stuck tmux server must not pin the UI. Blocking `TmuxClient::run` calls
@@ -46,8 +46,7 @@ pub struct TmuxStatus {
     pub hint: Option<String>,
 }
 
-#[tauri::command]
-pub async fn tmux_status(state: State<'_, AppState>) -> Result<TmuxStatus, String> {
+pub async fn tmux_status_core(state: &AppState) -> Result<TmuxStatus, String> {
     let (mut status, client) = {
         let mut inner = state.inner.lock().await;
         let socket_name = inner
@@ -107,8 +106,7 @@ pub async fn tmux_status(state: State<'_, AppState>) -> Result<TmuxStatus, Strin
     Ok(status)
 }
 
-#[tauri::command]
-pub async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
+pub async fn snapshot_core(state: &AppState) -> Result<Snapshot, String> {
     let client = {
         let mut inner = state.inner.lock().await;
         inner.ensure_client()?.clone()
@@ -117,7 +115,7 @@ pub async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
     match off_lock(move || listed.snapshot().map_err(|e| map_error(&e))).await {
         Ok(mut snap) => {
             apply_auto_labels(client, &mut snap).await;
-            annotate_attention(&state, snap).await
+            annotate_attention(state, snap).await
         }
         Err(msg) if msg.starts_with("server-down") => Ok(sparkmux_core::Snapshot::empty()),
         Err(msg) => Err(msg),
@@ -166,8 +164,7 @@ async fn apply_auto_labels(client: TmuxClient, snap: &mut Snapshot) {
     }
 }
 
-#[tauri::command]
-pub async fn ensure_ready(state: State<'_, AppState>) -> Result<Snapshot, String> {
+pub async fn ensure_ready_core(state: &AppState) -> Result<Snapshot, String> {
     let (client, spawn, default_session) = {
         let mut inner = state.inner.lock().await;
         let spawn = inner.spawn.clone();
@@ -188,7 +185,7 @@ pub async fn ensure_ready(state: State<'_, AppState>) -> Result<Snapshot, String
         inner.stopped = false;
     }
     apply_auto_labels(client, &mut snap).await;
-    annotate_attention(&state, snap).await
+    annotate_attention(state, snap).await
 }
 
 struct AttentionRead {
@@ -360,8 +357,7 @@ async fn annotate_attention(state: &AppState, mut snap: Snapshot) -> Result<Snap
     Ok(snap)
 }
 
-#[tauri::command]
-pub async fn new_session(state: State<'_, AppState>, name: String) -> Result<(), String> {
+pub async fn new_session_core(state: &AppState, name: String) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("session name is required".into());
@@ -384,9 +380,8 @@ pub async fn new_session(state: State<'_, AppState>, name: String) -> Result<(),
     Ok(())
 }
 
-#[tauri::command]
-pub async fn rename_session(
-    state: State<'_, AppState>,
+pub async fn rename_session_core(
+    state: &AppState,
     target: String,
     new_name: String,
 ) -> Result<(), String> {
@@ -403,8 +398,7 @@ pub async fn rename_session(
     .await
 }
 
-#[tauri::command]
-pub async fn kill_session(state: State<'_, AppState>, target: String) -> Result<(), String> {
+pub async fn kill_session_core(state: &AppState, target: String) -> Result<(), String> {
     let client = {
         let inner = state.inner.lock().await;
         inner.client()?.clone()
@@ -412,9 +406,8 @@ pub async fn kill_session(state: State<'_, AppState>, target: String) -> Result<
     off_lock(move || client.kill_session(&target).map_err(|e| map_error(&e))).await
 }
 
-#[tauri::command]
-pub async fn new_window(
-    state: State<'_, AppState>,
+pub async fn new_window_core(
+    state: &AppState,
     session: String,
     name: String,
 ) -> Result<(), String> {
@@ -443,8 +436,7 @@ pub async fn new_window(
     .await
 }
 
-#[tauri::command]
-pub async fn select_window(state: State<'_, AppState>, window_id: String) -> Result<(), String> {
+pub async fn select_window_core(state: &AppState, window_id: String) -> Result<(), String> {
     let client = {
         let inner = state.inner.lock().await;
         inner.client()?.clone()
@@ -452,9 +444,8 @@ pub async fn select_window(state: State<'_, AppState>, window_id: String) -> Res
     off_lock(move || client.select_window(&window_id).map_err(|e| map_error(&e))).await
 }
 
-#[tauri::command]
-pub async fn rename_window(
-    state: State<'_, AppState>,
+pub async fn rename_window_core(
+    state: &AppState,
     window_id: String,
     name: String,
 ) -> Result<(), String> {
@@ -471,8 +462,7 @@ pub async fn rename_window(
     .await
 }
 
-#[tauri::command]
-pub async fn kill_window(state: State<'_, AppState>, window_id: String) -> Result<(), String> {
+pub async fn kill_window_core(state: &AppState, window_id: String) -> Result<(), String> {
     let client = {
         let inner = state.inner.lock().await;
         inner.client()?.clone()
@@ -480,8 +470,7 @@ pub async fn kill_window(state: State<'_, AppState>, window_id: String) -> Resul
     off_lock(move || client.kill_window(&window_id).map_err(|e| map_error(&e))).await
 }
 
-#[tauri::command]
-pub async fn kill_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), String> {
+pub async fn kill_pane_core(state: &AppState, pane_id: String) -> Result<(), String> {
     let client = {
         let inner = state.inner.lock().await;
         inner.client()?.clone()
@@ -489,9 +478,8 @@ pub async fn kill_pane(state: State<'_, AppState>, pane_id: String) -> Result<()
     off_lock(move || client.kill_pane(&pane_id).map_err(|e| map_error(&e))).await
 }
 
-#[tauri::command]
-pub async fn split_pane(
-    state: State<'_, AppState>,
+pub async fn split_pane_core(
+    state: &AppState,
     pane_id: String,
     vertical: bool,
 ) -> Result<(), String> {
@@ -515,12 +503,12 @@ pub async fn control_connect(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    control::connect(&app, &state, session, cols, rows).await
+    control::connect_core(Some(&app), &state, session, cols, rows).await
 }
 
 #[tauri::command]
 pub async fn control_disconnect(state: State<'_, AppState>) -> Result<(), String> {
-    control::disconnect(&state).await
+    control::disconnect_core(&state).await
 }
 
 #[tauri::command]
@@ -538,12 +526,7 @@ pub async fn pane_unsubscribe(state: State<'_, AppState>, pane_id: String) -> Re
     Ok(())
 }
 
-#[tauri::command]
-pub async fn pane_write(
-    state: State<'_, AppState>,
-    pane_id: String,
-    data: Vec<u8>,
-) -> Result<(), String> {
+pub async fn pane_write_core(state: &AppState, pane_id: &str, data: &[u8]) -> Result<(), String> {
     let ctl = {
         let inner = state.inner.lock().await;
         inner
@@ -551,13 +534,21 @@ pub async fn pane_write(
             .clone()
             .ok_or_else(|| "control client is not connected".to_string())?
     };
-    ctl.send_keys_raw(&pane_id, &data)
+    ctl.send_keys_raw(pane_id, data)
         .await
         .map_err(|e| map_error(&e))
 }
 
 #[tauri::command]
-pub async fn window_resize(state: State<'_, AppState>, cols: u16, rows: u16) -> Result<(), String> {
+pub async fn pane_write(
+    state: State<'_, AppState>,
+    pane_id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    pane_write_core(&state, &pane_id, &data).await
+}
+
+pub async fn window_resize_core(state: &AppState, cols: u16, rows: u16) -> Result<(), String> {
     let ctl = {
         let inner = state.inner.lock().await;
         inner.control.clone()
@@ -576,11 +567,7 @@ pub struct PaneCursor {
     pub x: u16,
 }
 
-#[tauri::command]
-pub async fn pane_cursor(
-    state: State<'_, AppState>,
-    pane_id: String,
-) -> Result<PaneCursor, String> {
+pub async fn pane_cursor_core(state: &AppState, pane_id: String) -> Result<PaneCursor, String> {
     let (ctl, client) = {
         let inner = state.inner.lock().await;
         (inner.control.clone(), inner.client()?.clone())
@@ -602,8 +589,7 @@ pub async fn pane_cursor(
     Ok(PaneCursor { y, x })
 }
 
-#[tauri::command]
-pub async fn focus_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), String> {
+pub async fn focus_pane_core(state: &AppState, pane_id: String) -> Result<(), String> {
     let client = {
         let inner = state.inner.lock().await;
         inner.client()?.clone()
@@ -611,9 +597,8 @@ pub async fn focus_pane(state: State<'_, AppState>, pane_id: String) -> Result<(
     off_lock(move || client.select_pane(&pane_id).map_err(|e| map_error(&e))).await
 }
 
-#[tauri::command]
-pub async fn stop_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    control::disconnect(&state).await?;
+pub async fn stop_server_core(app: Option<&AppHandle>, state: &AppState) -> Result<(), String> {
+    control::disconnect_core(state).await?;
     let client = {
         let inner = state.inner.lock().await;
         inner.client.clone()
@@ -623,12 +608,20 @@ pub async fn stop_server(app: AppHandle, state: State<'_, AppState>) -> Result<(
     }
     let mut inner = state.inner.lock().await;
     inner.stopped = true;
-    let _ = app.emit("server-stopped", ());
+    drop(inner);
+    let _ = state.events_tx.send(ServerPushEvent::ServerStopped);
+    if let Some(app) = app {
+        let _ = app.emit("server-stopped", ());
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn remember_session(state: State<'_, AppState>, name: String) -> Result<(), String> {
+pub async fn stop_server(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    stop_server_core(Some(&app), &state).await
+}
+
+pub async fn remember_session_core(state: &AppState, name: String) -> Result<(), String> {
     let name = sparkmux_core::session_name(&name)
         .map_err(|e| map_error(&e))?
         .to_string();
@@ -643,8 +636,7 @@ pub fn parse_layout(layout: String) -> Result<LayoutNode, String> {
     parse_window_layout(&layout).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn attach_target_name(state: State<'_, AppState>) -> Result<Option<String>, String> {
+pub async fn attach_target_name_core(state: &AppState) -> Result<Option<String>, String> {
     let (last, default, client) = {
         let mut inner = state.inner.lock().await;
         let last = inner.config.last_session.clone();
@@ -704,6 +696,110 @@ pub fn clipboard_write(text: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn tmux_status(state: State<'_, AppState>) -> Result<TmuxStatus, String> {
+    tmux_status_core(&state).await
+}
+
+#[tauri::command]
+pub async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
+    snapshot_core(&state).await
+}
+
+#[tauri::command]
+pub async fn ensure_ready(state: State<'_, AppState>) -> Result<Snapshot, String> {
+    ensure_ready_core(&state).await
+}
+
+#[tauri::command]
+pub async fn new_session(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    new_session_core(&state, name).await
+}
+
+#[tauri::command]
+pub async fn rename_session(
+    state: State<'_, AppState>,
+    target: String,
+    new_name: String,
+) -> Result<(), String> {
+    rename_session_core(&state, target, new_name).await
+}
+
+#[tauri::command]
+pub async fn kill_session(state: State<'_, AppState>, target: String) -> Result<(), String> {
+    kill_session_core(&state, target).await
+}
+
+#[tauri::command]
+pub async fn new_window(
+    state: State<'_, AppState>,
+    session: String,
+    name: String,
+) -> Result<(), String> {
+    new_window_core(&state, session, name).await
+}
+
+#[tauri::command]
+pub async fn select_window(state: State<'_, AppState>, window_id: String) -> Result<(), String> {
+    select_window_core(&state, window_id).await
+}
+
+#[tauri::command]
+pub async fn rename_window(
+    state: State<'_, AppState>,
+    window_id: String,
+    name: String,
+) -> Result<(), String> {
+    rename_window_core(&state, window_id, name).await
+}
+
+#[tauri::command]
+pub async fn kill_window(state: State<'_, AppState>, window_id: String) -> Result<(), String> {
+    kill_window_core(&state, window_id).await
+}
+
+#[tauri::command]
+pub async fn kill_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), String> {
+    kill_pane_core(&state, pane_id).await
+}
+
+#[tauri::command]
+pub async fn split_pane(
+    state: State<'_, AppState>,
+    pane_id: String,
+    vertical: bool,
+) -> Result<(), String> {
+    split_pane_core(&state, pane_id, vertical).await
+}
+
+#[tauri::command]
+pub async fn window_resize(state: State<'_, AppState>, cols: u16, rows: u16) -> Result<(), String> {
+    window_resize_core(&state, cols, rows).await
+}
+
+#[tauri::command]
+pub async fn pane_cursor(
+    state: State<'_, AppState>,
+    pane_id: String,
+) -> Result<PaneCursor, String> {
+    pane_cursor_core(&state, pane_id).await
+}
+
+#[tauri::command]
+pub async fn focus_pane(state: State<'_, AppState>, pane_id: String) -> Result<(), String> {
+    focus_pane_core(&state, pane_id).await
+}
+
+#[tauri::command]
+pub async fn remember_session(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    remember_session_core(&state, name).await
+}
+
+#[tauri::command]
+pub async fn attach_target_name(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    attach_target_name_core(&state).await
+}
+
 fn check_version(client: &sparkmux_core::TmuxClient) -> Result<(), String> {
     let v = client.version().map_err(|e| map_error(&e))?;
     if !v.is_supported() {
@@ -712,10 +808,9 @@ fn check_version(client: &sparkmux_core::TmuxClient) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn sync_active_target(
-    app: AppHandle,
-    state: State<'_, AppState>,
+pub fn sync_active_target_core(
+    app: Option<&AppHandle>,
+    state: &AppState,
     target: ActiveTarget,
 ) -> Result<(), String> {
     let changed = {
@@ -731,18 +826,36 @@ pub fn sync_active_target(
         }
     };
     if changed {
-        let _ = app.emit("active-target-changed", &target);
+        if let Some(app) = app {
+            let _ = app.emit("active-target-changed", &target);
+        }
+        let _ = state
+            .events_tx
+            .send(ServerPushEvent::ActiveTargetChanged(target));
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn get_active_target(state: State<'_, AppState>) -> Result<ActiveTarget, String> {
+pub fn sync_active_target(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: ActiveTarget,
+) -> Result<(), String> {
+    sync_active_target_core(Some(&app), &state, target)
+}
+
+pub fn get_active_target_core(state: &AppState) -> Result<ActiveTarget, String> {
     let guard = state
         .active_target
         .lock()
         .map_err(|_| "active target lock poisoned".to_string())?;
     Ok(guard.clone())
+}
+
+#[tauri::command]
+pub fn get_active_target(state: State<'_, AppState>) -> Result<ActiveTarget, String> {
+    get_active_target_core(&state)
 }
 
 #[tauri::command]

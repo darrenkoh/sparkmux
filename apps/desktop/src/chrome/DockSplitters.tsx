@@ -13,17 +13,18 @@ export function DockWidthSplitter({
   const widthRef = useRef(width);
   widthRef.current = width;
 
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault();
+      const target = e.currentTarget;
+      target.setPointerCapture(e.pointerId);
       const startX = e.clientX;
       const startW = widthRef.current;
       const prevSelect = document.body.style.userSelect;
       document.body.style.userSelect = "none";
       document.body.classList.add("is-resizing");
 
-      const move = (ev: MouseEvent) => {
-        // Dragging left (negative deltaX) widens the right docked container
+      const move = (ev: PointerEvent) => {
         const delta = startX - ev.clientX;
         const maxW = Math.min(960, Math.max(340, window.innerWidth - 280));
         const next = Math.min(maxW, Math.max(DOCK_MIN_WIDTH, startW + delta));
@@ -31,14 +32,16 @@ export function DockWidthSplitter({
       };
 
       const up = () => {
-        document.removeEventListener("mousemove", move);
-        document.removeEventListener("mouseup", up);
+        target.removeEventListener("pointermove", move);
+        target.removeEventListener("pointerup", up);
+        target.removeEventListener("pointercancel", up);
         document.body.style.userSelect = prevSelect;
         document.body.classList.remove("is-resizing");
       };
 
-      document.addEventListener("mousemove", move);
-      document.addEventListener("mouseup", up);
+      target.addEventListener("pointermove", move);
+      target.addEventListener("pointerup", up);
+      target.addEventListener("pointercancel", up);
     },
     [onWidth],
   );
@@ -50,7 +53,7 @@ export function DockWidthSplitter({
       aria-orientation="vertical"
       aria-label="Resize dock width"
       title="Drag to resize dock width (Double-click to reset)"
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       onDoubleClick={() => onWidth(DOCK_DEFAULT_WIDTH)}
     >
       <span className="dock-splitter-rule" aria-hidden="true" />
@@ -70,34 +73,37 @@ export function DockHeightSplitter({
   const ratioRef = useRef(ratio);
   ratioRef.current = ratio;
 
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault();
       const container = containerRef.current;
       if (!container) return;
+      const target = e.currentTarget;
+      target.setPointerCapture(e.pointerId);
       const rect = container.getBoundingClientRect();
       const prevSelect = document.body.style.userSelect;
       document.body.style.userSelect = "none";
       document.body.classList.add("is-resizing");
 
-      const move = (ev: MouseEvent) => {
+      const move = (ev: PointerEvent) => {
         const totalHeight = rect.height;
         if (totalHeight <= 40) return;
         const offsetY = ev.clientY - rect.top;
-        // Clamp split ratio so each pane gets at least 15% (or min 90px)
         const next = Math.min(0.85, Math.max(0.15, offsetY / totalHeight));
         onRatio(next);
       };
 
       const up = () => {
-        document.removeEventListener("mousemove", move);
-        document.removeEventListener("mouseup", up);
+        target.removeEventListener("pointermove", move);
+        target.removeEventListener("pointerup", up);
+        target.removeEventListener("pointercancel", up);
         document.body.style.userSelect = prevSelect;
         document.body.classList.remove("is-resizing");
       };
 
-      document.addEventListener("mousemove", move);
-      document.addEventListener("mouseup", up);
+      target.addEventListener("pointermove", move);
+      target.addEventListener("pointerup", up);
+      target.addEventListener("pointercancel", up);
     },
     [containerRef, onRatio],
   );
@@ -109,7 +115,7 @@ export function DockHeightSplitter({
       aria-orientation="horizontal"
       aria-label="Resize panels height split"
       title="Drag to resize panels height split (Double-click to reset)"
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       onDoubleClick={() => onRatio(0.5)}
     >
       <span className="dock-splitter-rule" aria-hidden="true" />

@@ -2,10 +2,17 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { isTauriRuntime } from "./transport";
+import { appShellHeight } from "./ios/posture";
+import { pinchFontSize } from "./ios/touchKeys";
+import { useDevicePosture } from "./ios/useDevicePosture";
+import TouchKeyBar from "./ios/TouchKeyBar";
+
 import {
   agentBoard,
   attachTargetName,
   clipboardWrite,
+  webServeToggle,
   appTelemetry,
   llmUsage,
   paneWrite,
@@ -101,7 +108,8 @@ type Dialog =
   | { kind: "close-session"; name: string; tabs: number }
   | { kind: "stop"; socket: string; count: number }
   | { kind: "help" }
-  | { kind: "recipes" };
+  | { kind: "recipes" }
+  | { kind: "web-serve"; urls: string[]; qrUrl: string; qrSvg: string };
 
 function namedSession(name: string | null | undefined): string | null {
   const trimmed = name?.trim() ?? "";
@@ -177,6 +185,12 @@ export default function App() {
     if (Number.isFinite(raw) && raw >= FONT_MIN && raw <= FONT_MAX) return raw;
     return FONT_DEFAULT;
   });
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const postureInfo = useDevicePosture();
+  const [zoomedPaneId, setZoomedPaneId] = useState<string | null>(null);
+  const [phoneTiled, setPhoneTiled] = useState(false);
+  const [sidebarDrawer, setSidebarDrawer] = useState(false);
   const sidebarDisplay = sidebarCollapsed ? 0 : sidebarWidth;
   const cellRef = useRef({ w: 8, h: 16 });
   const paneFitRef = useRef(new Map<string, { cols: number; rows: number }>());
@@ -322,6 +336,8 @@ export default function App() {
   const applyWindow = useCallback(
     async (win: TmuxWindow | undefined) => {
       paneFitRef.current.clear();
+      setZoomedPaneId(null);
+      setPhoneTiled(false);
       if (!win) {
         setVisibleWindowId(null);
         setLayout(null);
@@ -383,10 +399,14 @@ export default function App() {
         requestAnimationFrame(() => pushClientSize());
       });
       const title = win ? `Sparkmux — ${session}:${win.name}` : `Sparkmux — ${session}`;
-      try {
-        await getCurrentWindow().setTitle(title);
-      } catch {
-        /* ACL optional */
+      if (isTauriRuntime()) {
+        try {
+          await getCurrentWindow().setTitle(title);
+        } catch {
+          /* ACL optional */
+        }
+      } else {
+        document.title = title;
       }
     },
     [applyWindow, pixelClientSize, pushClientSize],
@@ -560,6 +580,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
+    if (!isTauriRuntime()) return;
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         const payload = event.payload;
@@ -604,8 +625,32 @@ export default function App() {
     });
     ro.observe(host);
     pushClientSize();
+    let pinchStart = 0;
+    let pinchSize = fontSizeRef.current;
+    const onTouchStart = (ev: TouchEvent) => {
+      if (ev.touches.length === 2) {
+        pinchStart = Math.hypot(
+          ev.touches[0].clientX - ev.touches[1].clientX,
+          ev.touches[0].clientY - ev.touches[1].clientY,
+        );
+        pinchSize = fontSizeRef.current;
+      }
+    };
+    const onTouchMove = (ev: TouchEvent) => {
+      if (ev.touches.length !== 2 || pinchStart < 10) return;
+      ev.preventDefault();
+      const dist = Math.hypot(
+        ev.touches[0].clientX - ev.touches[1].clientX,
+        ev.touches[0].clientY - ev.touches[1].clientY,
+      );
+      setFontSize(pinchFontSize(pinchSize, dist / pinchStart));
+    };
+    host.addEventListener("touchstart", onTouchStart, { passive: true });
+    host.addEventListener("touchmove", onTouchMove, { passive: false });
     return () => {
       ro.disconnect();
+      host.removeEventListener("touchstart", onTouchStart);
+      host.removeEventListener("touchmove", onTouchMove);
       if (t) window.clearTimeout(t);
     };
   }, [pushClientSize, attachedSession, visibleWindowId]);
@@ -677,6 +722,9 @@ export default function App() {
           }
           break;
         }
+        case "web-serve":
+          await toggleWebServer();
+          break;
         default:
           break;
       }
@@ -685,6 +733,21 @@ export default function App() {
     }
   }
   onMenuRef.current = onMenu;
+
+  async function toggleWebServer() {
+    const status = await webServeToggle();
+    if (status.running) {
+      setDialog({
+        kind: "web-serve",
+        urls: status.urls,
+        qrUrl: status.qr_url,
+        qrSvg: status.qr_svg,
+      });
+      return;
+    }
+    setDialog((current) => (current?.kind === "web-serve" ? null : current));
+    showToast("iPhone and iPad server stopped. Sessions stay up.");
+  }
 
   async function doCopy() {
     const pane = focusedRef.current;
@@ -1069,6 +1132,21 @@ export default function App() {
     }
   }, [snap, attachedSession, visibleWindowId]);
   const showTiles = !error && !empty && layout && attachedSession;
+  const posture = postureInfo.posture;
+  const drawerNav = posture === "phone-compact" || posture === "duo-book";
+  const deck = posture === "duo-book" || posture === "duo-clamshell";
+  const showKeybar = postureInfo.isTouch || posture !== "desktop";
+  const sheet =
+    posture === "phone-compact" && (outputOpen || statsDocked || analyticsOpen || graphOpen);
+  const visiblePanes = visibleWin?.panes ?? [];
+  useEffect(() => {
+    if (posture !== "phone-compact" || phoneTiled || visiblePanes.length < 2) return;
+    if (zoomedPaneId) return;
+    const id = focusedPane && visiblePanes.some((pane) => pane.id === focusedPane)
+      ? focusedPane
+      : visiblePanes[0]?.id;
+    if (id) setZoomedPaneId(id);
+  }, [posture, phoneTiled, visiblePanes, zoomedPaneId, focusedPane]);
   const isDockOpen = Boolean(showTiles) && (outputOpen || statsDocked);
 
   useEffect(() => {
@@ -1181,12 +1259,49 @@ export default function App() {
     }
   }
 
+  const renderTabs = () => (
+    <WindowTabs
+      windows={attached?.windows ?? []}
+      visibleWindowId={visibleWindowId}
+      onSelect={(windowId) => {
+        const win = attached?.windows.find((w) => w.id === windowId);
+        if (win) {
+          setSelection({
+            kind: "window",
+            id: win.id,
+            name: win.name,
+            sessionName: attachedSession ?? "",
+          });
+          void applyWindow(win);
+        }
+      }}
+      onNewTab={() => {
+        void createNewTab();
+      }}
+      onCloseTab={(windowId) => requestCloseTab(windowId)}
+      onRenameTab={(windowId, name) => {
+        void renameTab(windowId, name);
+      }}
+    />
+  );
+
   return (
-    <div className="app">
+    <div
+      className={`app posture-${posture}${sidebarDrawer ? " sidebar-drawer-open" : ""}`}
+      style={{
+        height: appShellHeight(postureInfo),
+        ["--duo-left" as string]: postureInfo.leftSegmentWidth
+          ? `${postureInfo.leftSegmentWidth}px`
+          : undefined,
+        ["--duo-top" as string]: postureInfo.topSegmentHeight
+          ? `${postureInfo.topSegmentHeight}px`
+          : undefined,
+      }}
+    >
       <div className="body">
         <div
-          className={`sidebar-slot ${sidebarCollapsed ? "collapsed" : ""}`}
-          style={{ width: sidebarDisplay, flexBasis: sidebarDisplay }}
+          className={`sidebar-slot ${drawerNav ? (sidebarDrawer ? "drawer-open" : "drawer-shut") : sidebarCollapsed ? "collapsed" : ""}`}
+          style={drawerNav ? undefined : { width: sidebarDisplay, flexBasis: sidebarDisplay }}
           onMouseDown={() => {
             chromeFocus.current = "sidebar";
           }}
@@ -1297,34 +1412,54 @@ export default function App() {
             />
           ) : showTiles ? (
             <>
-              <WindowTabs
-                windows={attached?.windows ?? []}
-                visibleWindowId={visibleWindowId}
-                onSelect={(windowId) => {
-                  const win = attached?.windows.find((w) => w.id === windowId);
-                  if (win) {
-                    setSelection({
-                      kind: "window",
-                      id: win.id,
-                      name: win.name,
-                      sessionName: attachedSession ?? "",
-                    });
-                    void applyWindow(win);
-                  }
-                }}
-                onNewTab={() => {
-                  void createNewTab();
-                }}
-                onCloseTab={(windowId) => requestCloseTab(windowId)}
-                onRenameTab={(windowId, name) => {
-                  void renameTab(windowId, name);
-                }}
-              />
+              {!deck && renderTabs()}
               <div className="term-stage">
+                <div className="term-column">
+                  {deck && renderTabs()}
+                  {drawerNav && (
+                    <button
+                      type="button"
+                      className="sidebar-drawer-btn"
+                      onClick={() => setSidebarDrawer((open) => !open)}
+                    >
+                      Sessions
+                    </button>
+                  )}
+                  {posture === "phone-compact" && visiblePanes.length > 1 && (
+                    <div className="pane-pills" role="tablist" aria-label="Panes">
+                      {visiblePanes.map((pane) => (
+                        <button
+                          key={pane.id}
+                          type="button"
+                          className={zoomedPaneId === pane.id ? "active" : ""}
+                          onClick={() => {
+                            setPhoneTiled(false);
+                            setZoomedPaneId(pane.id);
+                          }}
+                        >
+                          {pane.id} {pane.command}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPhoneTiled((tiled) => !tiled);
+                          setZoomedPaneId((current) => (current ? null : focusedPane ?? visiblePanes[0]?.id ?? null));
+                        }}
+                      >
+                        {phoneTiled || !zoomedPaneId ? "Zoom" : "Tile"}
+                      </button>
+                    </div>
+                  )}
                 <div className="term-viewport" ref={hostRef}>
                   <TiledWindow
                     node={layout}
                     focusedPane={focusedPane}
+                    zoomedPaneId={zoomedPaneId}
+                    onToggleZoomPane={(paneId) => {
+                      setPhoneTiled(false);
+                      setZoomedPaneId((current) => (current === paneId ? null : paneId));
+                    }}
                     dropTarget={dropPane}
                     fontSize={fontSize}
                     paneModes={paneInputModes(snap)}
@@ -1340,7 +1475,56 @@ export default function App() {
                     }}
                   />
                 </div>
-
+                {showKeybar && (
+                  <TouchKeyBar
+                    paneId={focusedPane}
+                    zoomedPaneId={zoomedPaneId}
+                    onToggleZoomPane={(paneId) => {
+                      setPhoneTiled(false);
+                      setZoomedPaneId((current) => (current === paneId ? null : paneId));
+                    }}
+                    posture={posture}
+                    postureOverride={postureInfo.postureOverride}
+                    onChangePostureOverride={postureInfo.setPostureOverride}
+                    sendBytes={(paneId, bytes) => {
+                      void paneWrite(paneId, bytes);
+                    }}
+                  />
+                )}
+                </div>
+                {posture === "duo-book" && (
+                  <div
+                    className="duo-hinge-spacer"
+                    style={{ width: Math.max(8, postureInfo.hingeRect?.width ?? 12) }}
+                    aria-hidden="true"
+                  />
+                )}
+                <div className={deck ? "companion-deck" : sheet ? "companion-sheet" : "stage-extras"}>
+                {deck && (
+                  <div className="companion-switch" role="tablist" aria-label="Companion deck">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGraphOpen(false);
+                        setAnalyticsOpen(true);
+                      }}
+                    >
+                      3D map
+                    </button>
+                    <button type="button" onClick={() => setOutputOpen(true)}>
+                      Output
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAnalyticsOpen(false);
+                        setGraphOpen(true);
+                      }}
+                    >
+                      Gits
+                    </button>
+                  </div>
+                )}
                 {isDockOpen && (
                   <>
                     <DockWidthSplitter
@@ -1507,6 +1691,7 @@ export default function App() {
                     onPopOut={popOutGits}
                   />
                 )}
+                </div>
               </div>
             </>
           ) : failMsg ? (
@@ -1715,6 +1900,8 @@ export default function App() {
             <dd>⌘+ ⌘- ⌘0 / Ctrl+ ± 0</dd>
             <dt>Quit</dt>
             <dd>⌘Q — detaches only</dd>
+            <dt>iPhone and iPad</dt>
+            <dd>Sparkmux menu, or File on Linux. Start and stop the phone page</dd>
           </dl>
           <p className="hint">
             Prefix keys are not emulated here; they still work in a real attach.
@@ -1722,6 +1909,57 @@ export default function App() {
             time.
           </p>
           <div className="modal-actions">
+            <button className="primary" onClick={() => setDialog(null)}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === "web-serve" && (
+        <Modal
+          title="iPhone and iPad"
+          className="web-serve-modal"
+          onClose={() => setDialog(null)}
+        >
+          {dialog.qrSvg && (
+            <div className="web-serve-qr">
+              <img
+                alt="QR code for the iPhone pairing address"
+                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(dialog.qrSvg)}`}
+              />
+              <p>
+                {dialog.qrUrl.includes("127.0.0.1")
+                  ? "This code only opens on this computer."
+                  : "Scan with the iPhone camera."}
+              </p>
+            </div>
+          )}
+          <p>
+            An address on 127.0.0.1 is this computer. In Safari, use Share, then Add to Home Screen.
+          </p>
+          {dialog.urls.map((url) => (
+            <div key={url} className="web-serve-url">
+              <code>{url}</code>
+              <button
+                type="button"
+                onClick={() =>
+                  void clipboardWrite(url)
+                    .then(() => showToast("Copied."))
+                    .catch((err) => showToast(String(err)))
+                }
+              >
+                Copy
+              </button>
+            </div>
+          ))}
+          <p className="hint">Stopping this server leaves your tmux sessions running.</p>
+          <div className="modal-actions">
+            <button
+              className="danger"
+              onClick={() => void toggleWebServer().catch((err) => showToast(String(err)))}
+            >
+              Stop server
+            </button>
             <button className="primary" onClick={() => setDialog(null)}>
               Close
             </button>

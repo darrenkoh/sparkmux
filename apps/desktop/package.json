@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:shipped": "node --experimental-strip-types --test src/ios/iosLogic.test.ts src/terminal/paneFrame.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev"

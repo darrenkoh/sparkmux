@@ -5,9 +5,9 @@ import { placeDockedNodeLabels, valueAxisFrame, valueAxisStep } from "./terrainH
 
 test("fullscreen VALUE ruler keeps its toolbar inset", () => {
   const frame = valueAxisFrame(640, false);
-  assert.equal(frame.top, 70);
-  assert.equal(frame.bottom, 590);
-  assert.equal(frame.labelY, 62);
+  assert.equal(frame.top, 78);
+  assert.equal(frame.bottom, 550);
+  assert.equal(frame.labelY, 70);
   assert.equal(frame.showTicks, true);
 });
 

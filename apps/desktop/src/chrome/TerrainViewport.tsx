@@ -18,6 +18,14 @@ import {
   type ElevField,
   type RingPeak,
 } from "./globeSensor";
+import {
+  isDoubleTap,
+  milestoneHitRadius,
+  orbitCamera,
+  panCameraTarget,
+  pinchRadius,
+  resetCamera,
+} from "../ios/mapGestures";
 import { placeDockedNodeLabels, valueAxisFrame, valueAxisStep } from "./terrainHud";
 import {
   activityAxis,
@@ -1455,7 +1463,42 @@ export default function TerrainViewport({
     // Generate initial geometry
     updateGeometry();
 
-    // Continuous 60 FPS Render Loop
+    // Cached canvas dimensions to avoid 60 FPS forced layout reflows (getBoundingClientRect)
+    const canvasRect = {
+      width: glCanvas.clientWidth || 800,
+      height: glCanvas.clientHeight || 600,
+      left: 0,
+      top: 0,
+    };
+
+    const updateCanvasRect = () => {
+      const r = glCanvas.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        canvasRect.width = r.width;
+        canvasRect.height = r.height;
+      }
+      canvasRect.left = r.left;
+      canvasRect.top = r.top;
+    };
+    updateCanvasRect();
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target === glCanvas) {
+          const cr = entry.contentRect;
+          if (cr.width > 0 && cr.height > 0) {
+            canvasRect.width = cr.width;
+            canvasRect.height = cr.height;
+          }
+          const r = glCanvas.getBoundingClientRect();
+          canvasRect.left = r.left;
+          canvasRect.top = r.top;
+        }
+      }
+    });
+    resizeObserver.observe(glCanvas);
+
+    // Continuous Render Loop (30 FPS in docked mini-map, 60 FPS in fullscreen)
     let animId: number;
     let fps = 60;
     let lastFpsTime = performance.now();
@@ -1465,7 +1508,8 @@ export default function TerrainViewport({
       animId = requestAnimationFrame(render);
 
       const now = performance.now();
-      const interval = 1000 / 60;
+      const targetFps = dockedRef.current ? 30 : 60;
+      const interval = 1000 / targetFps;
       const delta = now - clockRef.current.lastRenderTime;
 
       if (delta < interval - 2.0) {
@@ -1489,7 +1533,7 @@ export default function TerrainViewport({
       }
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const rect = glCanvas.getBoundingClientRect();
+      const rect = canvasRect;
       const w = Math.max(1, Math.round(rect.width * dpr));
       const h = Math.max(1, Math.round(rect.height * dpr));
 
@@ -2033,72 +2077,121 @@ export default function TerrainViewport({
 
     animId = requestAnimationFrame(render);
 
-    const handleDown = (e: PointerEvent) => {
-      isDraggingRef.current = true;
-      lastXRef.current = e.clientX;
-      lastYRef.current = e.clientY;
-      glCanvas.setPointerCapture(e.pointerId);
-    };
+    const activePointers = new Map<number, { x: number; y: number }>();
+    let pinchPrevDist = 0;
+    let pinchPrevMid: { x: number; y: number } | null = null;
+    let lastTapTime = 0;
+    let lastTapPos = { x: 0, y: 0 };
 
-    const handleMove = (e: PointerEvent) => {
-      if (isDraggingRef.current) {
-        const dx = e.clientX - lastXRef.current;
-        const dy = e.clientY - lastYRef.current;
-        lastXRef.current = e.clientX;
-        lastYRef.current = e.clientY;
-
-        persistentCam.azimuth -= dx * 0.005;
-        persistentCam.elevation = clamp(persistentCam.elevation + dy * 0.004, 0.06, 1.35);
-        if (hoveredMilestone) setHoveredMilestone(null);
-        return;
-      }
-
-      // Check hover proximity to milestones
-      const rect = glCanvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
+    const findMilestoneAt = (clientX: number, clientY: number, hitRadius: number) => {
+      const rect = canvasRect;
+      const mouseX = clientX - rect.left;
+      const mouseY = clientY - rect.top;
       const cam = persistentCam;
       const orbitRadius = dockedRef.current ? cam.radius * (40 / 46) : cam.radius;
       const eyeX = cam.target[0] + orbitRadius * Math.cos(cam.elevation) * Math.sin(cam.azimuth);
       const eyeY = cam.target[1] + orbitRadius * Math.sin(cam.elevation);
       const eyeZ = cam.target[2] + orbitRadius * Math.cos(cam.elevation) * Math.cos(cam.azimuth);
-      const matProj = perspective(38 * (Math.PI / 180), rect.width / rect.height, 0.5, 260.0);
+      const matProj = perspective(38 * (Math.PI / 180), rect.width / Math.max(1, rect.height), 0.5, 260.0);
       const matView = lookAt([eyeX, eyeY, eyeZ], cam.target);
       const matVP = multiply(matProj, matView);
-
-      let found: { info: MilestoneInfo; screenX: number; screenY: number } | null = null;
-      if (showTraceRef.current) {
-        const extentX = baseShapeRef.current === "globe" ? GLOBE_RADIUS : RECT_HX;
-        const curMaxX = scrubProgressRef.current >= 0.98
-          ? extentX + 2.0
-          : (scrubProgressRef.current * 2 - 1) * extentX;
-
-        const globeHover = baseShapeRef.current === "globe";
-        const revealedHover = scrubProgressRef.current >= 0.98 ? 1 : scrubProgressRef.current;
-        for (const m of terrainMetaRef.current.keyMilestones) {
-          const pastHead = globeHover
-            ? (m.tNorm + 1) / 2 > revealedHover + 0.008
-            : m.x > curMaxX + 0.2;
-          if (pastHead) continue;
-          const pt = projectPoint(matVP, [m.x, m.y, m.z], rect.width, rect.height);
-          if (pt) {
-            const dist = Math.hypot(pt[0] - mouseX, pt[1] - mouseY);
-            if (dist < 18) {
-              found = { info: m, screenX: pt[0], screenY: pt[1] };
-              break;
-            }
-          }
+      if (!showTraceRef.current) return null;
+      const extentX = baseShapeRef.current === "globe" ? GLOBE_RADIUS : RECT_HX;
+      const curMaxX = scrubProgressRef.current >= 0.98
+        ? extentX + 2.0
+        : (scrubProgressRef.current * 2 - 1) * extentX;
+      const globeHover = baseShapeRef.current === "globe";
+      const revealedHover = scrubProgressRef.current >= 0.98 ? 1 : scrubProgressRef.current;
+      for (const m of terrainMetaRef.current.keyMilestones) {
+        const pastHead = globeHover
+          ? (m.tNorm + 1) / 2 > revealedHover + 0.008
+          : m.x > curMaxX + 0.2;
+        if (pastHead) continue;
+        const pt = projectPoint(matVP, [m.x, m.y, m.z], rect.width, rect.height);
+        if (pt && Math.hypot(pt[0] - mouseX, pt[1] - mouseY) < hitRadius) {
+          return { info: m, screenX: pt[0], screenY: pt[1] };
         }
       }
-      setHoveredMilestone(found);
+      return null;
+    };
+
+    const handleDown = (e: PointerEvent) => {
+      updateCanvasRect();
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      glCanvas.setPointerCapture(e.pointerId);
+      if (activePointers.size === 1) {
+        const now = performance.now();
+        if (isDoubleTap(lastTapTime, now, lastTapPos.x, lastTapPos.y, e.clientX, e.clientY)) {
+          handleDblClick();
+          lastTapTime = 0;
+          return;
+        }
+        lastTapTime = now;
+        lastTapPos = { x: e.clientX, y: e.clientY };
+        isDraggingRef.current = true;
+        lastXRef.current = e.clientX;
+        lastYRef.current = e.clientY;
+        if (e.pointerType === "touch" || e.pointerType === "pen") {
+          const hit = findMilestoneAt(e.clientX, e.clientY, milestoneHitRadius(e.pointerType));
+          if (hit) setHoveredMilestone(hit);
+        }
+      } else if (activePointers.size === 2) {
+        const pts = Array.from(activePointers.values());
+        pinchPrevDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        pinchPrevMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        isDraggingRef.current = false;
+      }
+    };
+
+    const handleMove = (e: PointerEvent) => {
+      if (activePointers.has(e.pointerId)) {
+        activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      if (activePointers.size === 2) {
+        const pts = Array.from(activePointers.values());
+        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        persistentCam.radius = pinchRadius(persistentCam.radius, pinchPrevDist, dist);
+        if (pinchPrevMid) {
+          panCameraTarget(persistentCam, mid.x - pinchPrevMid.x, mid.y - pinchPrevMid.y);
+        }
+        pinchPrevDist = dist;
+        pinchPrevMid = mid;
+        return;
+      }
+      if (activePointers.size === 1 && isDraggingRef.current) {
+        const dx = e.clientX - lastXRef.current;
+        const dy = e.clientY - lastYRef.current;
+        lastXRef.current = e.clientX;
+        lastYRef.current = e.clientY;
+        orbitCamera(persistentCam, dx, dy);
+        if (Math.hypot(dx, dy) > 3 && hoveredMilestone) setHoveredMilestone(null);
+        return;
+      }
+      setHoveredMilestone(findMilestoneAt(e.clientX, e.clientY, milestoneHitRadius(e.pointerType)));
     };
 
     const handleUp = (e: PointerEvent) => {
-      isDraggingRef.current = false;
+      activePointers.delete(e.pointerId);
+      if (activePointers.size < 2) {
+        pinchPrevDist = 0;
+        pinchPrevMid = null;
+      }
+      if (activePointers.size === 1) {
+        const remaining = activePointers.values().next().value;
+        if (remaining) {
+          lastXRef.current = remaining.x;
+          lastYRef.current = remaining.y;
+          isDraggingRef.current = true;
+        }
+      } else if (activePointers.size === 0) {
+        isDraggingRef.current = false;
+      }
       try {
         glCanvas.releasePointerCapture(e.pointerId);
-      } catch {}
+      } catch {
+        /* capture already released */
+      }
     };
 
     const handleWheel = (e: WheelEvent) => {
@@ -2107,9 +2200,10 @@ export default function TerrainViewport({
     };
 
     const handleDblClick = () => {
-      persistentCam.azimuth = 0.38;
-      persistentCam.elevation = 0.48;
-      persistentCam.radius = baseShapeRef.current === "globe" ? 54 : 46;
+      const next = resetCamera(baseShapeRef.current === "globe" ? "globe" : "rect");
+      persistentCam.azimuth = next.azimuth;
+      persistentCam.elevation = next.elevation;
+      persistentCam.radius = next.radius;
     };
 
     glCanvas.addEventListener("pointerdown", handleDown);
@@ -2120,6 +2214,7 @@ export default function TerrainViewport({
 
     return () => {
       cancelAnimationFrame(animId);
+      resizeObserver.disconnect();
       if (pendingUpdateRef.current !== null) {
         window.clearTimeout(pendingUpdateRef.current);
         pendingUpdateRef.current = null;

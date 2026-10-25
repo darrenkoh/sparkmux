@@ -51,6 +51,21 @@ enum Commands {
     Version,
     /// Print binary, socket, and session status
     Doctor,
+    /// Serve the installable web app for iPhone Duo and iPad.
+    ///
+    /// `--bind` defaults to `0.0.0.0` so a LAN or Tailscale address can open
+    /// the page. Pass `--bind 127.0.0.1` for loopback only.
+    Serve {
+        /// Port to listen on.
+        #[arg(short, long, default_value_t = 7420)]
+        port: u16,
+        /// Bind address. Default `0.0.0.0` (LAN and Tailscale). Use `127.0.0.1` for loopback only.
+        #[arg(short, long, default_value = "0.0.0.0")]
+        bind: String,
+        /// Bearer token. Defaults to `SPARKMUX_WEB_TOKEN` or a saved 32-byte token.
+        #[arg(long, env = "SPARKMUX_WEB_TOKEN")]
+        token: Option<String>,
+    },
 }
 
 fn main() -> eyre::Result<ExitCode> {
@@ -72,9 +87,18 @@ fn main() -> eyre::Result<ExitCode> {
         Some(Commands::Dump) => cmd_dump(&cfg),
         Some(Commands::Version) => Ok(cmd_version(&cfg)),
         Some(Commands::Doctor) => cmd_doctor(&cfg),
+        Some(Commands::Serve { port, bind, token }) => {
+            sparkmux_desktop_lib::serve_blocking(sparkmux_desktop_lib::ServeOptions {
+                bind,
+                port,
+                token,
+            })
+            .map_err(|err| eyre::eyre!(err))?;
+            Ok(ExitCode::SUCCESS)
+        }
         None => {
             eprintln!(
-                "sparkmux {} — desktop app is the UI.\n\nUsage: sparkmux <COMMAND>\n\nCommands:\n  dump      Print the session tree as JSON\n  version   sparkmux + tmux version\n  doctor    Socket and session status\n\nOptions:\n  -L, --socket-name <NAME>  tmux -L (default: sparkmux)\n      --system              Use the default tmux server\n",
+                "sparkmux {} — desktop app is the UI.\n\nUsage: sparkmux <COMMAND>\n\nCommands:\n  dump      Print the session tree as JSON\n  version   sparkmux + tmux version\n  doctor    Socket and session status\n  serve     Web/PWA server (default bind 0.0.0.0:7420; use --bind 127.0.0.1 for loopback)\n\nOptions:\n  -L, --socket-name <NAME>  tmux -L (default: sparkmux)\n      --system              Use the default tmux server\n",
                 env!("CARGO_PKG_VERSION")
             );
             Ok(ExitCode::from(2))

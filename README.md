@@ -17,7 +17,8 @@
   <b>Your Prompts</b> &bull;
   <b>3D Area Map &amp; Mini Stat</b> &bull;
   <b>Stats HUD</b> &bull;
-  <b>Gits</b>
+  <b>Gits</b> &bull;
+  <b>iPhone &amp; iPad</b>
 </p>
 
 ---
@@ -48,6 +49,10 @@
   - [Linux (ARM64 / DGX Spark)](#linux-arm64--dgx-spark)
   - [Build from Source](#build-from-source)
   - [Updates](#updates)
+- [iPhone and iPad](#-iphone-and-ipad)
+  - [Start the page](#start-the-page)
+  - [Layouts](#layouts)
+  - [Touch](#touch)
 - [CLI Reference](#-cli-reference)
 - [Keyboard Shortcuts](#-keyboard-shortcuts)
 - [Configuration](#-configuration)
@@ -65,6 +70,7 @@ Modern terminal multiplexers were created decades before autonomous AI coding ag
 - **True tiled panes**: Each pane is a real xterm.js terminal. Geometry comes from tmux `window_layout`. Live bytes come from control mode (`%output` and `send-keys -H`).
 - **Read-only agent follower**: Prompts, thinking, tools, replies, tokens, and file edits are read from the CLI's own transcript on this machine.
 - **Telemetry you can dock or pop out**: Mini Stat and the 3D Area Map sit beside the terminal. Stats and Gits open full-screen, or in their own windows.
+- **Phone and tablet**: `sparkmux-desktop --serve` hosts that same UI as a Home Screen web app. The phone opens a page; tmux and the agent CLIs stay on the host. See [iPhone and iPad](#-iphone-and-ipad).
 
 Follow the focused pane from another terminal with:
 
@@ -198,7 +204,7 @@ flowchart TD
     Agents -.->|"Read-only"| Follower
 ```
 
-All tmux I/O goes through `sparkmux-core`. The desktop app does not spawn `tmux` on its own.
+All tmux I/O goes through `sparkmux-core`. The desktop app does not spawn `tmux` on its own. The [iPhone and iPad](#-iphone-and-ipad) page is this UI served over HTTP, still on `-L sparkmux`.
 
 ---
 
@@ -275,9 +281,88 @@ A packaged build checks GitHub Releases on launch and offers **Later** or **Upda
 
 ---
 
+## 📱 iPhone and iPad
+
+The phone or tablet page is the Sparkmux UI, served from the Mac or Linux machine that owns `tmux -L sparkmux`. tmux, git, and the agent CLIs keep running on that machine. Closing the page leaves those sessions up.
+
+### Start the page
+
+In the desktop app, choose **Start iPhone and iPad Server**. On macOS that item is in the Sparkmux menu. On Linux it is in File. The window lists the addresses. **Stop iPhone and iPad Server** closes the page and leaves your tmux sessions running.
+
+From a terminal on the host:
+
+```bash
+# Installed app, with no window. Listens on every interface, port 7420.
+sparkmux-desktop --serve
+
+# macOS app bundle
+/Applications/Sparkmux.app/Contents/MacOS/sparkmux-desktop --serve
+
+# Diagnostic CLI, when `sparkmux` is on your PATH
+sparkmux serve
+```
+
+To keep the desktop window open and serve the page at the same time (port 7420):
+
+```bash
+SPARKMUX_SERVE=1 sparkmux-desktop
+```
+
+On startup the terminal prints a pairing URL for this computer, then the same page on each other IPv4 address. The QR code uses a phone address: Wi-Fi (`192.168.x.x`) when one exists, otherwise another private or Tailscale address. The desktop menu shows that same code. `127.0.0.1` opens on this computer. Bind a specific address when the phone should use that one:
+
+```bash
+sparkmux-desktop --serve --bind 100.64.1.2 --port 7420
+```
+
+The first successful visit stores a sign-in cookie named `sparkmux_session` and removes `?token=` from the address bar. In Safari, use **Share → Add to Home Screen** for a full-screen icon. Later launches stay signed in for 30 days.
+
+A page opened without the token shows a pairing form. Type the token from the printed URL.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--port`, `-p` | `7420` | Listen port |
+| `--bind`, `-b` | `0.0.0.0` | Listen address. The default accepts a phone on the LAN or an address already on the host, such as Tailscale. `--bind 127.0.0.1` keeps the page on this machine. |
+| `--token` | saved token, or a new one | Bearer token. `SPARKMUX_WEB_TOKEN` sets the same value. |
+
+With no `--token` and no `SPARKMUX_WEB_TOKEN`, the server reuses `web_token` in the config directory and creates that file on the first run. The value is 64 hex characters (32 random bytes). `--token` and `SPARKMUX_WEB_TOKEN` apply to the current run and leave that file as it is. Treat the printed URL as a secret: anyone who can open it can type into your panes.
+
+Stopping the serve process closes the page. The tmux server stays up. Start serve again and the same sessions are there.
+
+### Layouts
+
+The page picks a layout from the screen. Open **tmux** on the key bar and use **Layout** to keep a choice across reloads.
+
+| Layout | When | What you see |
+|---|---|---|
+| Duo Book | iPhone Duo folded side by side, or a square unfolded touch screen | Tabs, tiled terminal, and the key bar on the left. Map, output, and gits on the right. The hinge stays clear. **Sessions** opens the sidebar over the left side. |
+| Duo Clamshell | iPhone Duo folded top and bottom | Map and telemetry on top. Terminal and key bar below. |
+| Phone | A touch screen narrower than 680px | **Sessions** opens the sidebar. A window with several panes shows one pane at a time; **Tile** brings the others back. Output, stats, and gits open as a sheet along the bottom. |
+| iPad | A wider touch screen | The three-column desktop layout, with larger splitter targets. `?window=stats` and `?window=gits` open those views on their own. |
+
+The on-screen keyboard shortens the page to the visible area so the terminal reflows above the keys.
+
+### Touch
+
+The key bar sits under the terminal on every phone and tablet layout.
+
+| Key | Action |
+|---|---|
+| esc, tab, shift-tab | Send that key |
+| ctrl, opt | Latch, then the next key. ctrl then c sends interrupt. opt prefixes Esc. |
+| arrows | Cursor keys, including application-cursor mode |
+| paste | Clipboard into the focused pane |
+| hide | Dismiss the on-screen keyboard |
+| tmux | Split horizontal, split vertical, zoom or unzoom the pane, ^C, ^D, ^Z, ^L, and the layout picker |
+
+One finger dragged on a terminal scrolls that pane. A two-finger pinch sets the terminal font between 11 and 22.
+
+On the area map, one finger orbits. Two fingers zoom and pan. A tap pins a milestone. A double-tap resets the camera.
+
+---
+
 ## 💻 CLI Reference
 
-`sparkmux` is a small diagnostic CLI. The desktop app is the product UI.
+`sparkmux` is a small diagnostic CLI. `serve` hosts the [iPhone and iPad](#-iphone-and-ipad) page. The desktop app is the product UI on a desktop, and `sparkmux-desktop --serve` hosts the same page with no window.
 
 ```bash
 # Socket, tmux version, and session status
@@ -295,6 +380,11 @@ sparkmux --system dump
 # Another socket name, or an explicit socket path
 sparkmux -L my-socket dump
 sparkmux -S /tmp/my.sock doctor
+
+# iPhone / iPad page. See "iPhone and iPad" above.
+sparkmux serve
+sparkmux serve --bind 127.0.0.1
+sparkmux serve --port 7420 --token "$SPARKMUX_WEB_TOKEN"
 ```
 
 `SPARKMUX_TMUX` or `--tmux-bin` selects the tmux binary. `--config` selects a config file.
@@ -357,6 +447,8 @@ last_session = ""
 ```
 
 A session you name from **New Session** is created under that name.
+
+The iPhone and iPad pairing token, when the server generates one, is stored beside this file as `web_token`.
 
 ---
 

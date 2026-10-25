@@ -3,7 +3,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { Channel } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 
@@ -13,15 +12,16 @@ import {
   pasteIntoPane,
   focusPane,
   paneCursor,
-  paneSubscribe,
+  bindPaneOutput,
   paneUnsubscribe,
   paneWrite,
-  toBytes,
 } from "../api";
 import { cursorCup } from "./cursorCup";
 import { findNext, findPrevious, matchLineColumn } from "./scrollbackSearch";
 import { isEmulatorReport } from "./emulatorReports";
+
 import { applyPaneSeed } from "./paneSeed";
+import { touchDragDelta } from "../ios/touchKeys";
 import {
   altScreenArrows,
   decideWheel,
@@ -197,7 +197,7 @@ export default function XtermView({
     redrawCaretRef.current = redrawCaret;
     syncTmuxCursorRef.current = syncTmuxCursor;
 
-    let seeded = false;
+    const seedState = { seeded: false };
     // The text seed calls reset(), which drops mouse tracking. Restore only
     // after that paint so a tab switch still delivers clicks to Grok.
     let seedApplied = false;
@@ -211,37 +211,33 @@ export default function XtermView({
     };
     restoreMouseRef.current = restoreMouse;
 
-    const channel = new Channel<ArrayBuffer | Uint8Array | number[]>();
-    channel.onmessage = (msg) => {
-      const bytes = toBytes(msg);
-      if (!seeded) {
-        seeded = true;
-        applyPaneSeed(
-          term,
-          bytes,
-          () => {
-            applyingSeed = false;
-            host.style.visibility = "";
-            seedApplied = true;
-            if (unmounted) return;
-            doFitRef.current();
-            syncTmuxCursor();
-            restoreMouse();
-          },
-          () => {
-            applyingSeed = true;
-            host.style.visibility = "hidden";
-          },
-        );
-        return;
-      }
-      term.write(bytes);
+    const paintSeed = (bytes: Uint8Array) => {
+      seedState.seeded = true;
+      applyPaneSeed(
+        term,
+        bytes,
+        () => {
+          applyingSeed = false;
+          host.style.visibility = "";
+          seedApplied = true;
+          if (unmounted) return;
+          doFitRef.current();
+          syncTmuxCursor();
+          restoreMouse();
+        },
+        () => {
+          applyingSeed = true;
+          host.style.visibility = "hidden";
+        },
+      );
     };
-
-    const dataDisp = term.onData((data) => {
+    const dataDisp = term.onData((raw) => {
       // tmux already answered the query that produced this. A second reply
       // is typed into the select prompt and the options redraw out of order.
-      if (isEmulatorReport(data)) return;
+      if (isEmulatorReport(raw)) return;
+      const transform = (window as Window & { __sparkmuxConsumeModifiers?: (data: string) => string })
+        .__sparkmuxConsumeModifiers;
+      const data = typeof transform === "function" ? transform(raw) : raw;
       // Letters and editing keys reveal the prompt. Wheel, mouse, and arrows
       // must not, or a scroll-to-select snaps back down.
       if (inputFollowsPrompt(data) && !term.hasSelection()) term.scrollToBottom();
@@ -263,6 +259,64 @@ export default function XtermView({
       pasteNow();
     };
     host.addEventListener("paste", onPaste, true);
+
+    let touchScrollY = 0;
+    let touchAccumPx = 0;
+    let touchMulti = false;
+    const onTouchStart = (ev: TouchEvent) => {
+      if (ev.touches.length !== 1) {
+        touchMulti = true;
+        return;
+      }
+      touchMulti = false;
+      touchScrollY = ev.touches[0].clientY;
+      touchAccumPx = 0;
+      onFocusRef.current(paneId);
+      void focusPane(paneId);
+    };
+    const onTouchMove = (ev: TouchEvent) => {
+      if (touchMulti || ev.touches.length !== 1) return;
+      const curY = ev.touches[0].clientY;
+      touchAccumPx += touchDragDelta(touchScrollY, curY);
+      touchScrollY = curY;
+      const rowH = Math.max(12, cellHeight(term));
+      if (Math.abs(touchAccumPx) < rowH * 0.75) return;
+      const fakeWheel = {
+        deltaY: touchAccumPx,
+        deltaMode: 0,
+        shiftKey: false,
+        clientX: ev.touches[0].clientX,
+        clientY: ev.touches[0].clientY,
+      } as WheelEvent;
+      touchAccumPx = 0;
+      const decision = decideWheel(wheelContext(term, fakeWheel, inputModeRef.current ?? idleMode));
+      if (decision.kind === "scroll") {
+        term.scrollLines(decision.lines);
+        ev.preventDefault();
+      } else if (decision.kind === "report") {
+        const pos = cellFromWheel(term, fakeWheel);
+        const bytes = wheelReport(
+          decision.up,
+          pos.col,
+          pos.row,
+          (inputModeRef.current ?? idleMode).mouseSgr,
+        );
+        void paneWrite(paneId, bytes);
+        term.scrollToBottom();
+        ev.preventDefault();
+      } else if (decision.kind === "arrows") {
+        const bytes = altScreenArrows(
+          decision.lines < 0,
+          Math.abs(decision.lines),
+          Boolean(term.modes?.applicationCursorKeysMode),
+        );
+        void paneWrite(paneId, bytes);
+        term.scrollToBottom();
+        ev.preventDefault();
+      }
+    };
+    host.addEventListener("touchstart", onTouchStart, { passive: true });
+    host.addEventListener("touchmove", onTouchMove, { passive: false });
 
     // Page Up/Down while a draft is showing. A trackpad emits a wheel event
     // per frame; one page per event would fly through the transcript.
@@ -391,7 +445,10 @@ export default function XtermView({
       subscribed = true;
       seedTimer = window.setTimeout(() => {
         if (unmounted) return;
-        void paneSubscribe(paneId, channel);
+        void bindPaneOutput(paneId, seedState, {
+          seed: paintSeed,
+          write: (bytes) => term.write(bytes),
+        });
       }, 0);
     };
 
@@ -416,6 +473,8 @@ export default function XtermView({
       host.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("mouseup", onMouseUp);
       host.removeEventListener("paste", onPaste, true);
+      host.removeEventListener("touchstart", onTouchStart);
+      host.removeEventListener("touchmove", onTouchMove);
       ro.disconnect();
       dataDisp.dispose();
       void paneUnsubscribe(paneId);

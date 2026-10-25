@@ -23,6 +23,8 @@ export function paneInputModes(snap: Snapshot): Map<string, PaneInputMode> {
 export default function TiledWindow({
   node,
   focusedPane,
+  zoomedPaneId = null,
+  onToggleZoomPane,
   dropTarget,
   onFocus,
   onCellSize,
@@ -31,6 +33,8 @@ export default function TiledWindow({
 }: {
   node: LayoutNode;
   focusedPane: string | null;
+  zoomedPaneId?: string | null;
+  onToggleZoomPane?: (paneId: string) => void;
   dropTarget: string | null;
   onFocus: (paneId: string) => void;
   onCellSize?: (
@@ -47,11 +51,17 @@ export default function TiledWindow({
     const paneId = `%${node.Pane.pane_id}`;
     const focused = focusedPane === paneId;
     const dropping = dropTarget === paneId;
+    const hiddenByZoom = Boolean(zoomedPaneId && zoomedPaneId !== paneId);
     return (
       <div
         key={paneId}
         data-pane-id={paneId}
-        className={`tile-leaf pane-frame${focused ? " focused" : ""}${dropping ? " drop-target" : ""}`}
+        style={hiddenByZoom ? { display: "none" } : undefined}
+        className={`tile-leaf pane-frame${focused ? " focused" : ""}${dropping ? " drop-target" : ""}${zoomedPaneId === paneId ? " zoomed" : ""}`}
+        onDoubleClick={(event) => {
+          if (event.target instanceof HTMLElement && event.target.closest(".pane-find")) return;
+          onToggleZoomPane?.(paneId);
+        }}
       >
         <XtermView
           key={paneId}
@@ -77,15 +87,23 @@ export default function TiledWindow({
       {split.children.map((child, i) => {
         const size = nodeSize(child, split.dir === "LeftRight");
         const pct = parentSize > 0 ? (size / parentSize) * 100 : 100 / split.children.length;
+        const containsZoomed = zoomedPaneId ? subtreeHasPane(child, zoomedPaneId) : true;
         return (
           <div
             key={leafKey(child, i)}
             className="tile-child"
-            style={{ flex: `${pct} 1 0%`, minWidth: 0, minHeight: 0 }}
+            style={{
+              flex: zoomedPaneId ? (containsZoomed ? "1 1 100%" : "0 0 0%") : `${pct} 1 0%`,
+              display: zoomedPaneId && !containsZoomed ? "none" : undefined,
+              minWidth: 0,
+              minHeight: 0,
+            }}
           >
             <TiledWindow
               node={child}
               focusedPane={focusedPane}
+              zoomedPaneId={zoomedPaneId}
+              onToggleZoomPane={onToggleZoomPane}
               dropTarget={dropTarget}
               onFocus={onFocus}
               onCellSize={onCellSize}
@@ -97,6 +115,11 @@ export default function TiledWindow({
       })}
     </div>
   );
+}
+
+function subtreeHasPane(node: LayoutNode, targetPaneId: string): boolean {
+  if ("Pane" in node) return `%${node.Pane.pane_id}` === targetPaneId;
+  return node.Split.children.some((child) => subtreeHasPane(child, targetPaneId));
 }
 
 function nodeSize(node: LayoutNode, horizontal: boolean): number {

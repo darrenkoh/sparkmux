@@ -15,7 +15,7 @@ pub fn is_relaunching() -> bool {
 #[tauri::command]
 pub async fn relaunch_after_update(app: AppHandle) {
     let state = app.state::<AppState>();
-    if let Err(err) = crate::control::disconnect(&state).await {
+    if let Err(err) = crate::control::disconnect_core(&state).await {
         tracing::warn!(error = %err, "disconnect before update relaunch failed");
     }
     RELAUNCHING.store(true, Ordering::SeqCst);

@@ -33,3 +33,10 @@ tauri-plugin-updater = "2"
 toml = { workspace = true }
 libc = "0.2"
 tauri-plugin-notification = "2"
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower-http = { version = "0.6", features = ["set-header"] }
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+mime_guess = "2"
+rand = "0.8"
+subtle = "2"
+qrcode = "0.14"

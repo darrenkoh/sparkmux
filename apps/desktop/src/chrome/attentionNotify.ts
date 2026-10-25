@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime, rpcInvoke } from "../transport";
 
 export type NoteLabel = "needs_user" | "failed" | "succeeded" | "running";
 
@@ -58,7 +58,13 @@ export function postAttentionNotification(input: {
   if (!notificationAllowed(false, input.hidden, input.previous, input.next)) {
     return Promise.resolve();
   }
-  return invoke("post_attention_notification", {
+  if (!isTauriRuntime()) {
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+      new Notification("Sparkmux", { body: input.body || "An agent is waiting on you" });
+    }
+    return Promise.resolve();
+  }
+  return rpcInvoke("post_attention_notification", {
     hidden: input.hidden,
     previous: input.previous,
     next: input.next,

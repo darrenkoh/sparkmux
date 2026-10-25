@@ -1,4 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+
+import { isTauriRuntime } from "../transport";
 import { useCallback, useEffect, useState } from "react";
 
 import {
@@ -78,6 +80,10 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
 
   useEffect(() => {
     const title = formatPopoutWindowTitle(kind, resolved, isPinned);
+    if (!isTauriRuntime()) {
+      document.title = title;
+      return;
+    }
     void getCurrentWindow()
       .setTitle(title)
       .catch(() => {});
@@ -95,6 +101,10 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
   }, [resolved.session_name, resolved.tab_id, resolved.focused_pane]);
 
   const handleClose = useCallback(() => {
+    if (!isTauriRuntime()) {
+      window.close();
+      return;
+    }
     void getCurrentWindow()
       .close()
       .catch(() => {

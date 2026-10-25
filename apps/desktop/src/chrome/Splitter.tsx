@@ -37,17 +37,19 @@ export default function Splitter({
   widthRef.current = width;
   collapsedRef.current = collapsed;
 
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       if ((e.target as HTMLElement).closest(".splitter-toggle")) return;
       e.preventDefault();
+      const target = e.currentTarget;
+      target.setPointerCapture(e.pointerId);
       const startX = e.clientX;
       const startW = collapsedRef.current ? 0 : widthRef.current;
       const prevSelect = document.body.style.userSelect;
       document.body.style.userSelect = "none";
       document.body.classList.add("is-resizing");
 
-      const move = (ev: MouseEvent) => {
+      const move = (ev: PointerEvent) => {
         const raw = startW + ev.clientX - startX;
         if (raw < COLLAPSE_PX) {
           onCollapsed(true);
@@ -57,13 +59,15 @@ export default function Splitter({
         onWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, raw)));
       };
       const up = () => {
-        document.removeEventListener("mousemove", move);
-        document.removeEventListener("mouseup", up);
+        target.removeEventListener("pointermove", move);
+        target.removeEventListener("pointerup", up);
+        target.removeEventListener("pointercancel", up);
         document.body.style.userSelect = prevSelect;
         document.body.classList.remove("is-resizing");
       };
-      document.addEventListener("mousemove", move);
-      document.addEventListener("mouseup", up);
+      target.addEventListener("pointermove", move);
+      target.addEventListener("pointerup", up);
+      target.addEventListener("pointercancel", up);
     },
     [onWidth, onCollapsed],
   );
@@ -76,7 +80,7 @@ export default function Splitter({
       aria-valuenow={collapsed ? 0 : Math.round(width)}
       aria-valuemin={0}
       aria-valuemax={SIDEBAR_MAX}
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
       onDoubleClick={() => onCollapsed(!collapsedRef.current)}
     >
       <span className="splitter-rule" aria-hidden="true" />

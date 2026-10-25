@@ -17,12 +17,67 @@ mod relaunch;
 mod ssh_bind;
 mod state;
 mod telemetry;
+mod web_protocol;
+mod web_server;
 mod window_label;
 
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
 use crate::state::AppState;
+
+pub use web_server::ServeOptions;
+
+/// Headless `sparkmux serve` / `sparkmux-desktop --serve`. No GUI window.
+pub fn serve_blocking(opts: ServeOptions) -> Result<(), String> {
+    init_tracing();
+    analytics::storage::init_config();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| err.to_string())?;
+    runtime.block_on(web_server::serve(opts))
+}
+
+pub fn serve_options_from_env(args: &[String]) -> Option<ServeOptions> {
+    if !args.iter().any(|arg| arg == "--serve") {
+        return None;
+    }
+    let mut bind = "0.0.0.0".to_string();
+    let mut port = 7420_u16;
+    let mut token = std::env::var("SPARKMUX_WEB_TOKEN").ok();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        let next = args.get(index + 1).cloned();
+        if let Some(value) = arg.strip_prefix("--bind=") {
+            bind = value.to_string();
+        } else if arg == "--bind" {
+            if let Some(value) = next {
+                bind = value;
+                index += 1;
+            }
+        } else if let Some(value) = arg.strip_prefix("--port=") {
+            if let Ok(parsed) = value.parse() {
+                port = parsed;
+            }
+        } else if arg == "--port" || arg == "-p" {
+            if let Some(value) = next.and_then(|text| text.parse().ok()) {
+                port = value;
+                index += 1;
+            }
+        } else if let Some(value) = arg.strip_prefix("--token=") {
+            token = Some(value.to_string());
+        } else if arg == "--token" {
+            if let Some(value) = next {
+                token = Some(value);
+                index += 1;
+            }
+        }
+        index += 1;
+    }
+    Some(ServeOptions { bind, port, token })
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,6 +87,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::new())
+        .manage(web_server::WebServeSlot::default())
         .invoke_handler(tauri::generate_handler![
             commands::tmux_status,
             commands::snapshot,
@@ -83,6 +139,7 @@ pub fn run() {
             commands::sync_active_target,
             commands::get_active_target,
             commands::open_popout_window,
+            web_server::web_serve_toggle,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -102,6 +159,24 @@ pub fn run() {
             llm_usage::init_agy_usage();
             let menu = menu::build(app.handle())?;
             app.set_menu(menu)?;
+            if std::env::var("SPARKMUX_SERVE").ok().as_deref() == Some("1") {
+                let opts = serve_options_from_env(&["--serve".into()]).unwrap_or(ServeOptions {
+                    bind: "0.0.0.0".into(),
+                    port: 7420,
+                    token: None,
+                });
+                let app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let slot = app.state::<web_server::WebServeSlot>();
+                    match slot.start(opts).await {
+                        Ok(status) => {
+                            web_server::write_pairing_banner(&status.urls);
+                            web_server::set_web_menu_label(&app, status.running);
+                        }
+                        Err(err) => tracing::error!(%err, "web server stopped"),
+                    }
+                });
+            }
             Ok(())
         })
         .on_menu_event(|app, event| {

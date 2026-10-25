@@ -5,7 +5,8 @@ use tauri::menu::{
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use crate::state::AppState;
+use crate::state::{AppState, ServerPushEvent};
+use crate::web_server::{WEB_SERVE_MENU_ID, WEB_SERVE_MENU_START};
 
 static EXITING: AtomicBool = AtomicBool::new(false);
 
@@ -15,8 +16,11 @@ pub fn quit_detach(app: &AppHandle) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        if let Some(slot) = app.try_state::<crate::web_server::WebServeSlot>() {
+            let _ = slot.stop().await;
+        }
         let state = app.state::<AppState>();
-        let _ = crate::control::disconnect(&state).await;
+        let _ = crate::control::disconnect_core(&state).await;
         app.exit(0);
     });
 }
@@ -70,6 +74,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         Some(if mac { "Cmd+Shift+/" } else { "F1" }),
     )?;
     let check_update = item(app, "check-update", "Check for Updates…", None)?;
+    let web_serve = item(app, WEB_SERVE_MENU_ID, WEB_SERVE_MENU_START, None)?;
 
     let file = if mac {
         SubmenuBuilder::new(app, "File")
@@ -84,6 +89,8 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&new_window)
             .separator()
             .item(&close_tab)
+            .separator()
+            .item(&web_serve)
             .separator()
             .item(&quit)
             .build()?
@@ -144,6 +151,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         let app_menu = SubmenuBuilder::new(app, "Sparkmux")
             .item(&about)
             .item(&check_update)
+            .item(&web_serve)
             .separator()
             .item(&hide)
             .item(&hide_others)
@@ -185,11 +193,18 @@ pub fn on_event(app: &AppHandle, id: &str) {
                 }
             }
             let _ = app.emit_to("main", "menu", "close-tab");
+            push_menu(app, "close-tab");
         }
         other => {
             let _ = app.emit_to("main", "menu", other);
+            push_menu(app, other);
         }
     }
+}
+
+fn push_menu(app: &AppHandle, id: &str) {
+    let state = app.state::<AppState>();
+    let _ = state.events_tx.send(ServerPushEvent::Menu(id.to_string()));
 }
 
 #[cfg(test)]
@@ -203,5 +218,8 @@ mod tests {
         assert!(!menu.contains("\"stop-server\""));
         assert!(!menu.contains("\"start\""));
         assert!(!menu.contains("SubmenuBuilder::new(app, \"tmux\")"));
+        assert!(menu.contains("WEB_SERVE_MENU_ID"));
+        assert!(menu.contains("WEB_SERVE_MENU_START"));
+        assert!(menu.contains(".item(&web_serve)"));
     }
 }
