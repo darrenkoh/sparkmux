@@ -1399,6 +1399,8 @@ export default function TerrainViewport({
     const progTerrain = link(VS_TERRAIN, FS_TERRAIN);
     const progContour = link(VS_CONTOUR, FS_CONTOUR);
     const progBlit = link(VS_BLIT, FS_BLIT);
+    const blitOk = Boolean(gl.getProgramParameter(progBlit, gl.LINK_STATUS));
+    if (!blitOk) console.error(gl.getProgramInfoLog(progBlit));
     const uBlit = gl.getUniformLocation(progBlit, "uTex");
     const blitVao = gl.createVertexArray()!;
     const sceneTex = gl.createTexture()!;
@@ -1747,7 +1749,7 @@ export default function TerrainViewport({
         bakedKey,
       });
       // Idle dock keeps the sharp field in a texture and composites the ping.
-      const deferMotion = dockedRef.current && !interacting && sceneReady;
+      const deferMotion = dockedRef.current && !interacting && sceneReady && blitOk;
       const baking = deferMotion && present !== "cached";
       const reliefScan = baking ? 0 : scanBoost;
 
@@ -1924,7 +1926,7 @@ export default function TerrainViewport({
         resetPulse = false;
         drawn.width = canvasRect.width;
         drawn.height = canvasRect.height;
-        drawn.camera = pictureKey.slice(0, pictureKey.indexOf("|", pictureKey.indexOf("|") + 1));
+        drawn.camera = cameraKey(cam.azimuth, cam.elevation, cam.radius, cam.target[0], cam.target[1], cam.target[2]);
         drawn.telemetry = desiredSignatureRef.current;
         drawn.color = realismRef.current;
         if (speedMultiplier > 0) animId = requestAnimationFrame(render);
@@ -2022,7 +2024,7 @@ export default function TerrainViewport({
       const playheadAlpha = scanLightBoost > 0
         ? Math.min(0.5, 0.28 * (scanLightBoost / 0.75)) * scanFade
         : 0;
-      if (playheadAlpha > 0.005) {
+      if (playheadAlpha > 0.005 && !deferMotion) {
         hud.strokeStyle = `rgba(255, 220, 100, ${playheadAlpha})`;
         hud.lineWidth = 0.75;
         hud.beginPath();
@@ -2338,7 +2340,8 @@ export default function TerrainViewport({
       );
       drawn.telemetry = desiredSignatureRef.current;
       drawn.color = realismRef.current;
-      animId = requestAnimationFrame(render);
+      if (!deferMotion || speedMultiplier > 0) animId = requestAnimationFrame(render);
+      else loopOn = false;
     };
 
     wake = () => {
@@ -2510,12 +2513,19 @@ export default function TerrainViewport({
 
       gl.deleteProgram(progTerrain);
       gl.deleteProgram(progContour);
+      gl.deleteProgram(progBlit);
+      gl.deleteTexture(sceneTex);
+      gl.deleteFramebuffer(sceneFbo);
+      gl.deleteFramebuffer(msaaFbo);
+      gl.deleteRenderbuffer(msaaRb);
+      gl.deleteVertexArray(blitVao);
       gl.deleteVertexArray(vaoTerrain);
       gl.deleteVertexArray(vaoContours);
       gl.deleteVertexArray(vaoBaseGrid);
       gl.deleteVertexArray(haloLines.vao);
       gl.deleteVertexArray(polarLines.vao);
       gl.deleteVertexArray(radarLines.vao);
+      gl.deleteVertexArray(sweepLines.vao);
       gl.deleteBuffer(bPos);
       gl.deleteBuffer(bCol);
       gl.deleteBuffer(bSeed);
@@ -2524,6 +2534,7 @@ export default function TerrainViewport({
       gl.deleteBuffer(haloLines.buf);
       gl.deleteBuffer(polarLines.buf);
       gl.deleteBuffer(radarLines.buf);
+      gl.deleteBuffer(sweepLines.buf);
 
       glRef.current = null;
       vaoTerrainRef.current = null;
