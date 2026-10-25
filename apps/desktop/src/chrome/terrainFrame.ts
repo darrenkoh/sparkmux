@@ -114,3 +114,20 @@ export function decideMapFrame(input: MapFrameInput): MapFrameDecision {
     globeMaxFrac: reveal.globeMaxFrac,
   };
 }
+
+/**
+ * Docked idle keeps the last full-resolution picture and only composites the
+ * moving sweep. Dragging, playback, and docked rotation draw the field live.
+ * A picture change (size, camera, telemetry, color, shape) draws live once,
+ * then caches again. Fullscreen always draws live.
+ */
+export function dockedPresentMode(input: {
+  docked: boolean;
+  interacting: boolean;
+  pictureKey: string;
+  bakedKey: string;
+}): "live" | "cached" {
+  if (!input.docked || input.interacting) return "live";
+  if (input.bakedKey.length === 0 || input.bakedKey !== input.pictureKey) return "live";
+  return "cached";
+}

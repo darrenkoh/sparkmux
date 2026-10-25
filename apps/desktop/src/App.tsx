@@ -6,7 +6,6 @@ import { isTauriRuntime } from "./transport";
 import { appShellHeight } from "./ios/posture";
 import { pinchFontSize } from "./ios/touchKeys";
 import { useDevicePosture } from "./ios/useDevicePosture";
-import TouchKeyBar from "./ios/TouchKeyBar";
 
 import {
   agentBoard,
@@ -1189,7 +1188,6 @@ export default function App() {
   const posture = postureInfo.posture;
   const drawerNav = posture === "phone-compact" || posture === "duo-book";
   const deck = posture === "duo-book" || posture === "duo-clamshell";
-  const showKeybar = postureInfo.isTouch || posture !== "desktop";
   const sheet =
     posture === "phone-compact" && (outputOpen || statsDocked || analyticsOpen || graphOpen);
   const visiblePanes = visibleWin?.panes ?? [];
@@ -1529,22 +1527,6 @@ export default function App() {
                     }}
                   />
                 </div>
-                {showKeybar && (
-                  <TouchKeyBar
-                    paneId={focusedPane}
-                    zoomedPaneId={zoomedPaneId}
-                    onToggleZoomPane={(paneId) => {
-                      setPhoneTiled(false);
-                      setZoomedPaneId((current) => (current === paneId ? null : paneId));
-                    }}
-                    posture={posture}
-                    postureOverride={postureInfo.postureOverride}
-                    onChangePostureOverride={postureInfo.setPostureOverride}
-                    sendBytes={(paneId, bytes) => {
-                      void paneWrite(paneId, bytes);
-                    }}
-                  />
-                )}
                 </div>
                 {posture === "duo-book" && (
                   <div

@@ -6,6 +6,7 @@ import {
   cameraKey,
   decideMapFrame,
   dockedPeakLabel,
+  dockedPresentMode,
   restReveal,
   shouldRebuildTerrain,
   type MapFrameInput,
@@ -129,6 +130,30 @@ test("a docked spectral or mono change redraws once from idle and does not keep 
   assert.equal(same.requestRedraw, false);
   assert.equal(same.scheduleFollowUp, false);
   assert.equal(same.settled, true);
+});
+
+test("a settled docked picture is reused until the view or the gesture changes", () => {
+  const pictureKey = "800|420|cam|sig|color|globe";
+  assert.equal(
+    dockedPresentMode({ docked: true, interacting: false, pictureKey, bakedKey: pictureKey }),
+    "cached",
+  );
+  assert.equal(
+    dockedPresentMode({ docked: true, interacting: false, pictureKey, bakedKey: "" }),
+    "live",
+  );
+  assert.equal(
+    dockedPresentMode({ docked: true, interacting: false, pictureKey, bakedKey: "800|420|cam|other|color|globe" }),
+    "live",
+  );
+  assert.equal(
+    dockedPresentMode({ docked: true, interacting: true, pictureKey, bakedKey: pictureKey }),
+    "live",
+  );
+  assert.equal(
+    dockedPresentMode({ docked: false, interacting: false, pictureKey, bakedKey: pictureKey }),
+    "live",
+  );
 });
 
 test("docked peak labels use USR THK RPL TOL and that frame's value", () => {
