@@ -1296,117 +1296,132 @@ export default function AnalyticsHud({
                   <small>SESSION ECONOMY · {turnCount} TURNS</small>
                 </header>
                 <div className="body context-body">
-                  <div className="meters-group">
-                    <div
-                      className="context-meter"
-                      title={`Prompt Cache: ${formatNum(st?.total_cache_read_tokens ?? 0)} tokens read · ${formatNum(st?.total_cache_write_tokens ?? 0)} tokens written (${cacheHitRate.toFixed(1)}% hit rate across ${formatNum(promptTokens)} prompt tokens)`}
-                    >
-                      <div className="meter-label">
-                        <span>CACHE HIT EFFICIENCY</span>
-                        <span style={{ color: "#3dd68c", fontWeight: 600 }}>
-                          {cacheHitRate.toFixed(1)}%
-                          <span className="meter-subtext">
-                            ({formatNum(st?.total_cache_read_tokens ?? 0)} READ · {formatNum(st?.total_cache_write_tokens ?? 0)} WROTE)
-                          </span>
-                        </span>
-                      </div>
-                      <div className="meter-bar">
-                        <div
-                          className="meter-fill cache-fill"
-                          style={{
-                            width: `${Math.min(100, Math.max(0, cacheHitRate))}%`,
-                          }}
-                        />
-                      </div>
+                  {/* Card 1 (Top-Left): Cache Hit Efficiency */}
+                  <div
+                    className="context-card"
+                    title={`Prompt Cache: ${formatNum(st?.total_cache_read_tokens ?? 0)} tokens read · ${formatNum(st?.total_cache_write_tokens ?? 0)} tokens written (${cacheHitRate.toFixed(1)}% hit rate across ${formatNum(promptTokens)} prompt tokens)`}
+                  >
+                    <div className="card-header">
+                      <small>01 · CACHE HIT EFFICIENCY</small>
+                      <span className="card-stat-main" style={{ color: "#3dd68c" }}>
+                        {cacheHitRate.toFixed(1)}%
+                      </span>
                     </div>
-
-                    <div
-                      className="context-meter"
-                      title={`Context Buffer Utilization: ${formatNum(contextTokens)} / ${formatNum(contextWindow)} tokens (${contextUsagePct.toFixed(1)}%). Remaining headroom: ${formatNum(Math.max(0, contextWindow - contextTokens))} tokens.`}
-                    >
-                      <div className="meter-label">
-                        <span>CONTEXT CAPACITY</span>
-                        <span
-                          style={{
-                            color:
-                              contextUsagePct > 85 ? "#f87171" : contextUsagePct > 70 ? "#facc15" : "#38bdf8",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {contextUsagePct.toFixed(1)}%
-                          <span className="meter-subtext">
-                            ({formatNum(contextTokens)} / {formatNum(contextWindow)})
-                          </span>
-                        </span>
-                      </div>
-                      <div className="meter-bar">
-                        <div
-                          className={`meter-fill ${
-                            contextUsagePct > 85
-                              ? "context-fill-alert"
-                              : contextUsagePct > 70
-                                ? "context-fill-warn"
-                                : "context-fill"
-                          }`}
-                          style={{
-                            width: `${contextUsagePct}%`,
-                          }}
-                        />
-                      </div>
+                    <div className="meter-bar">
+                      <div
+                        className="meter-fill cache-fill"
+                        style={{
+                          width: `${Math.min(100, Math.max(0, cacheHitRate))}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="card-footer">
+                      <span>{formatNum(st?.total_cache_read_tokens ?? 0)} READ</span>
+                      <span>{formatNum(st?.total_cache_write_tokens ?? 0)} WROTE</span>
                     </div>
                   </div>
 
-                  <div className="kpis-sub">
-                    <div title={`Session Cost: ${formatUsd(estCost)} · Cache Savings: ${formatUsd(estSavings)}`}>
-                      <small>EST. COST / SAVED</small>
-                      <div className="kpi-value-row">
-                        <b style={{ color: "#facc15" }}>{formatUsd(estCost)}</b>
-                        {estSavings > 0 && (
-                          <span className="savings-badge" title={`Saved ${formatUsd(estSavings)} via prompt cache hits`}>
-                            +{formatUsd(estSavings)}
-                          </span>
-                        )}
-                      </div>
-                      <span className="kpi-sub-detail">
+                  {/* Card 2 (Top-Right): Context Capacity */}
+                  <div
+                    className="context-card"
+                    title={`Context Buffer Utilization: ${formatNum(contextTokens)} / ${formatNum(contextWindow)} tokens (${contextUsagePct.toFixed(1)}%). Remaining headroom: ${formatNum(Math.max(0, contextWindow - contextTokens))} tokens.`}
+                  >
+                    <div className="card-header">
+                      <small>02 · CONTEXT CAPACITY</small>
+                      <span
+                        className="card-stat-main"
+                        style={{
+                          color:
+                            contextUsagePct > 85 ? "#f87171" : contextUsagePct > 70 ? "#facc15" : "#38bdf8",
+                        }}
+                      >
+                        {contextUsagePct.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="meter-bar">
+                      <div
+                        className={`meter-fill ${
+                          contextUsagePct > 85
+                            ? "context-fill-alert"
+                            : contextUsagePct > 70
+                              ? "context-fill-warn"
+                              : "context-fill"
+                        }`}
+                        style={{
+                          width: `${contextUsagePct}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="card-footer">
+                      <span>{formatNum(contextTokens)} USED</span>
+                      <span>{formatNum(contextWindow)} MAX</span>
+                    </div>
+                  </div>
+
+                  {/* Card 3 (Bottom-Left): Session Economy */}
+                  <div
+                    className="context-card"
+                    title={`Total estimated session cost: ${formatUsd(estCost)} · Cache savings: ${formatUsd(estSavings)}`}
+                  >
+                    <div className="card-header">
+                      <small>03 · SESSION ECONOMY</small>
+                      {estSavings > 0 && (
+                        <span className="savings-badge" title={`Saved ${formatUsd(estSavings)} via prompt cache hits`}>
+                          +{formatUsd(estSavings)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="card-body-val">
+                      <b style={{ color: "#facc15" }}>{formatUsd(estCost)}</b>
+                      <span className="card-sub-tag">EST. COST</span>
+                    </div>
+                    <div className="card-footer">
+                      <span>
                         {st?.total_cache_read_tokens
                           ? `${((estSavings / Math.max(0.001, estCost + estSavings)) * 100).toFixed(0)}% saved via cache`
                           : "Uncached baseline"}
                       </span>
                     </div>
+                  </div>
 
-                    <div title={`TTFT: ${formatMs(ttftMs)} · Avg turn: ${formatMs(avgTurnMs)} · Max turn: ${formatMs(maxTurnMs)} · Velocity: ${outputTokensPerSec > 0 ? `${outputTokensPerSec} tok/s` : "n/a"}`}>
-                      <small>TTFT & TURN TIME</small>
-                      <div className="kpi-value-row">
-                        <b>{formatMs(avgTurnMs)}</b>
-                        {ttftMs > 0 && (
-                          <span className="ttft-badge" title={`Time To First Token: ${formatMs(ttftMs)}`}>
-                            TTFT {formatMs(ttftMs)}
-                          </span>
-                        )}
-                      </div>
-                      <span className="kpi-sub-detail">
-                        MAX {formatMs(maxTurnMs)} {outputTokensPerSec > 0 ? `· ${outputTokensPerSec} tok/s` : ""}
-                      </span>
-                    </div>
-
-                    <div title={`Lines added: ${st?.lines_added ?? 0} · Lines removed: ${st?.lines_removed ?? 0} · Net: ${netDiff >= 0 ? `+${netDiff}` : netDiff} · Churn: ${totalEdits} lines across ${turnCount} turns (${editVelocity} l/turn)`}>
-                      <small>TOOL FILE EDITS</small>
-                      <b style={{ color: "#3dd68c" }}>
-                        +{st?.lines_added ?? 0} / -{st?.lines_removed ?? 0}
-                        <span className="net-diff-tag">
-                          ({netDiff >= 0 ? `+${netDiff}` : netDiff} net)
+                  {/* Card 4 (Bottom-Right): Latency & Code Delta */}
+                  <div
+                    className="context-card"
+                    title={`TTFT: ${formatMs(ttftMs)} · Avg turn: ${formatMs(avgTurnMs)} · Max turn: ${formatMs(maxTurnMs)} · Edits: +${st?.lines_added ?? 0}/-${st?.lines_removed ?? 0} (${netDiff >= 0 ? `+${netDiff}` : netDiff} net) · Churn: ${totalEdits} lines (${editVelocity} l/turn)`}
+                  >
+                    <div className="card-header">
+                      <small>04 · LATENCY & CODE DELTA</small>
+                      {ttftMs > 0 && (
+                        <span className="ttft-badge" title={`Time To First Token: ${formatMs(ttftMs)}`}>
+                          TTFT {formatMs(ttftMs)}
                         </span>
-                      </b>
-                      {totalEdits > 0 ? (
-                        <div className="diff-bar" title={`Additions: ${addRatio.toFixed(0)}% · Deletions: ${(100 - addRatio).toFixed(0)}%`}>
-                          <div className="diff-bar-add" style={{ width: `${addRatio}%` }} />
-                          <div className="diff-bar-del" style={{ width: `${100 - addRatio}%` }} />
-                        </div>
-                      ) : null}
-                      <span className="kpi-sub-detail">
-                        CHURN {totalEdits} lines · {editVelocity} l/turn
-                      </span>
+                      )}
                     </div>
+                    <div className="card-split-row">
+                      <div className="split-col">
+                        <b>{formatMs(avgTurnMs)}</b>
+                        <span className="split-sub">AVG ({turnCount}T)</span>
+                      </div>
+                      <div className="split-col right">
+                        <b style={{ color: "#3dd68c" }}>
+                          +{st?.lines_added ?? 0}/-{st?.lines_removed ?? 0}
+                        </b>
+                        <span className="split-sub">
+                          {netDiff >= 0 ? `+${netDiff}` : netDiff} net
+                        </span>
+                      </div>
+                    </div>
+                    {totalEdits > 0 ? (
+                      <div className="diff-bar" title={`Additions: ${addRatio.toFixed(0)}% · Deletions: ${(100 - addRatio).toFixed(0)}% · Churn: ${totalEdits} lines (${editVelocity} l/turn)`}>
+                        <div className="diff-bar-add" style={{ width: `${addRatio}%` }} />
+                        <div className="diff-bar-del" style={{ width: `${100 - addRatio}%` }} />
+                      </div>
+                    ) : (
+                      <div className="card-footer">
+                        <span>MAX {formatMs(maxTurnMs)}</span>
+                        <span>{outputTokensPerSec > 0 ? `${outputTokensPerSec} tok/s` : "IDLE"}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </section>

@@ -4246,49 +4246,67 @@ code {
   color: #fff;
 }
 
-/* Context Buffer & Economy Panel */
+/* Context Buffer & Economy Panel (2x2 Balanced Deck) */
 .context-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 8px;
+  padding: 8px 10px;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.context-card {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 8px 12px;
-  gap: 8px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  padding: 7px 9px;
+  min-width: 0;
+  overflow: hidden;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
-.meters-group {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+.context-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.14);
 }
-.context-meter {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.meter-label {
+
+.card-header {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  color: rgba(255, 255, 255, 0.75);
+  min-width: 0;
 }
-.meter-subtext {
-  font-size: 9.5px;
-  font-weight: 400;
+.card-header small {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-stat-main {
+  font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.45);
-  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
+
 .meter-bar {
   width: 100%;
-  height: 6px;
+  height: 5px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.14);
   position: relative;
   overflow: hidden;
   border-radius: 1px;
+  margin: 3px 0;
 }
 .meter-fill {
   height: 100%;
@@ -4306,41 +4324,69 @@ code {
 .meter-fill.context-fill-alert {
   background: linear-gradient(90deg, #dc2626, #f87171);
 }
-.net-diff-tag {
-  font-size: 11px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.7);
-  margin-left: 4px;
+
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 8.5px;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.kpis-sub {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1.25fr;
-  gap: 8px;
-  padding-top: 5px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-.kpis-sub small {
-  display: block;
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
-  color: rgba(255, 255, 255, 0.6);
-  margin-bottom: 2px;
-}
-.kpis-sub b {
-  display: block;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: #fff;
-}
-.kpi-value-row {
+.card-body-val {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  margin: 2px 0;
 }
+.card-body-val b {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  line-height: 1;
+}
+.card-sub-tag {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.06em;
+}
+
+.card-split-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin: 1px 0;
+}
+.split-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.split-col.right {
+  align-items: flex-end;
+}
+.split-col b {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.split-sub {
+  font-size: 8.5px;
+  color: rgba(255, 255, 255, 0.42);
+  letter-spacing: 0.04em;
+  margin-top: 1px;
+}
+
 .savings-badge {
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 600;
   color: #3dd68c;
   background: rgba(61, 214, 140, 0.12);
@@ -4350,7 +4396,7 @@ code {
   letter-spacing: 0.03em;
 }
 .ttft-badge {
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 600;
   color: #38bdf8;
   background: rgba(56, 189, 248, 0.12);
@@ -4359,16 +4405,7 @@ code {
   padding: 0 4px;
   letter-spacing: 0.03em;
 }
-.kpi-sub-detail {
-  display: block;
-  font-size: 9.5px;
-  color: rgba(255, 255, 255, 0.42);
-  letter-spacing: 0.03em;
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+
 .diff-bar {
   display: flex;
   width: 100%;
@@ -4376,7 +4413,7 @@ code {
   background: rgba(255, 255, 255, 0.06);
   border-radius: 1px;
   overflow: hidden;
-  margin-top: 4px;
+  margin-top: 3px;
 }
 .diff-bar-add {
   height: 100%;
