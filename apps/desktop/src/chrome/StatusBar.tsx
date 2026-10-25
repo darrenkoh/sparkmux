@@ -1,6 +1,15 @@
+import { useEffect, useState } from "react";
 import type { LlmUsage, TmuxStatus } from "../types";
 import { usageChips, type UsageChip } from "./llmUsage";
-import { formatCpu, formatMemory, type AppTelemetry } from "./telemetry";
+import {
+  buildSparklinePaths,
+  cpuTone,
+  formatCpu,
+  formatMemory,
+  memoryTone,
+  type AppTelemetry,
+  type TelemetryTone,
+} from "./telemetry";
 
 function ModelIconCore({ model }: { model?: string }) {
   const lower = (model ?? "").toLowerCase();
@@ -63,10 +72,11 @@ export function ModelHaloIcon({
   title?: string;
 }) {
   const hasTime = timeFraction != null;
-  const fraction = Math.min(1, Math.max(0, timeFraction ?? 1));
+  // Progress towards reset: 0 at window start, fills up to 1.0 at reset time
+  const elapsed = Math.min(1, Math.max(0, 1 - (timeFraction ?? 1)));
   const r = 7;
   const circumference = 2 * Math.PI * r;
-  const strokeDashoffset = circumference * (1 - fraction);
+  const strokeDashoffset = circumference * (1 - elapsed);
   const isUrgent = timeRemainingMs != null && timeRemainingMs <= 3600_000 && timeRemainingMs > 0;
 
   return (
@@ -204,6 +214,230 @@ function ModelQuotaCard({ chip }: { chip: UsageChip }) {
   );
 }
 
+function CpuIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="hardware-icon"
+    >
+      <rect x="4" y="4" width="8" height="8" rx="1.5" />
+      <rect x="6.5" y="6.5" width="3" height="3" fill="currentColor" opacity="0.6" stroke="none" />
+      <line x1="6" y1="1.5" x2="6" y2="4" />
+      <line x1="10" y1="1.5" x2="10" y2="4" />
+      <line x1="6" y1="12" x2="6" y2="14.5" />
+      <line x1="10" y1="12" x2="10" y2="14.5" />
+      <line x1="1.5" y1="6" x2="4" y2="6" />
+      <line x1="1.5" y1="10" x2="4" y2="10" />
+      <line x1="12" y1="6" x2="14.5" y2="6" />
+      <line x1="12" y1="10" x2="14.5" y2="10" />
+    </svg>
+  );
+}
+
+function RamIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="hardware-icon"
+    >
+      <rect x="2" y="4.5" width="12" height="7" rx="1" />
+      <rect x="3.8" y="6" width="2" height="2.8" fill="currentColor" opacity="0.6" stroke="none" />
+      <rect x="7" y="6" width="2" height="2.8" fill="currentColor" opacity="0.6" stroke="none" />
+      <rect x="10.2" y="6" width="2" height="2.8" fill="currentColor" opacity="0.6" stroke="none" />
+      <line x1="3.5" y1="11.5" x2="3.5" y2="13" />
+      <line x1="6" y1="11.5" x2="6" y2="13" />
+      <line x1="8.5" y1="11.5" x2="8.5" y2="13" />
+      <line x1="11" y1="11.5" x2="11" y2="13" />
+    </svg>
+  );
+}
+
+function MiniSparkline({
+  values,
+  tone,
+  minVal,
+  maxVal,
+}: {
+  values: number[];
+  tone: TelemetryTone;
+  minVal?: number;
+  maxVal?: number;
+}) {
+  const width = 26;
+  const height = 10;
+  const series =
+    values.length >= 2 ? values : values.length === 1 ? [values[0], values[0]] : [0, 0];
+  const { strokePath, areaPath } = buildSparklinePaths(series, width, height, { minVal, maxVal });
+
+  return (
+    <span className={`status-sparkline ${tone}`} aria-hidden="true">
+      <svg viewBox={`0 0 ${width} ${height}`}>
+        <line x1="0" y1={height - 0.5} x2={width} y2={height - 0.5} className="status-sparkline-track" />
+        {areaPath && <path d={areaPath} className="status-sparkline-fill" />}
+        {strokePath && <path d={strokePath} className="status-sparkline-stroke" />}
+      </svg>
+    </span>
+  );
+}
+
+function HardwareHudCard({
+  type,
+  cpuPercent,
+  memoryBytes,
+  history,
+}: {
+  type: "cpu" | "memory";
+  cpuPercent: number | null | undefined;
+  memoryBytes: number | null | undefined;
+  history: Array<{ time: number; cpu: number; memory: number }>;
+}) {
+  const isCpu = type === "cpu";
+  const tone = isCpu ? cpuTone(cpuPercent) : memoryTone(memoryBytes);
+  const memoryStr = formatMemory(memoryBytes);
+  const cpuStr = formatCpu(cpuPercent);
+
+  const cpuValues = history.map((h) => h.cpu);
+  const memMbValues = history.map((h) => h.memory / (1024 * 1024));
+
+  const peakCpu = cpuValues.length > 0 ? Math.max(...cpuValues) : (cpuPercent ?? 0);
+  const avgCpu =
+    cpuValues.length > 0
+      ? cpuValues.reduce((a, b) => a + b, 0) / cpuValues.length
+      : (cpuPercent ?? 0);
+
+  const peakMemMb =
+    memMbValues.length > 0
+      ? Math.max(...memMbValues)
+      : memoryBytes
+        ? memoryBytes / (1024 * 1024)
+        : 0;
+  const avgMemMb =
+    memMbValues.length > 0
+      ? memMbValues.reduce((a, b) => a + b, 0) / memMbValues.length
+      : peakMemMb;
+
+  const chartWidth = 246;
+  const chartHeight = 44;
+  const activeSeries = isCpu ? cpuValues : memMbValues;
+  const maxVal = isCpu
+    ? Math.max(10, Math.ceil(peakCpu * 1.25))
+    : Math.max(50, Math.ceil(peakMemMb * 1.25));
+  const minVal = 0;
+  const { strokePath, areaPath, latestPoint } = buildSparklinePaths(
+    activeSeries.length >= 2 ? activeSeries : [0, 0],
+    chartWidth,
+    chartHeight,
+    { minVal, maxVal },
+  );
+
+  const badgeText = tone === "ok" ? "OPTIMAL" : tone === "warn" ? "ELEVATED" : "HIGH LOAD";
+
+  return (
+    <div className={`hardware-hud-card ${tone}`} role="tooltip" aria-hidden="true">
+      <div className="hardware-hud-header">
+        <div className="hardware-hud-title">
+          <span className="hardware-hud-icon">
+            {isCpu ? <CpuIcon /> : <RamIcon />}
+          </span>
+          <span className="hardware-hud-name">
+            {isCpu ? "CPU ENGINE TELEMETRY" : "MEMORY TELEMETRY"}
+          </span>
+        </div>
+        <div className="hardware-hud-badge">
+          <span className="badge-tag">STATUS</span>
+          <span className="badge-val">{badgeText}</span>
+        </div>
+      </div>
+
+      <div className="hardware-hud-chart-wrap">
+        <div className="chart-meta-row">
+          <span className="chart-label">
+            {isCpu ? "CPU LOAD (30s REAL-TIME)" : "RESIDENT SET SIZE (RSS)"}
+          </span>
+          <span className="chart-current">
+            {isCpu ? `${(cpuPercent ?? 0).toFixed(1)}%` : memoryStr}
+          </span>
+        </div>
+        <svg className="hardware-hud-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`}>
+          <defs>
+            <linearGradient id={`grad-hw-${type}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="currentColor" stopOpacity="0.32" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          <line
+            x1="0"
+            y1={chartHeight * 0.25}
+            x2={chartWidth}
+            y2={chartHeight * 0.25}
+            className="hud-grid-line"
+          />
+          <line
+            x1="0"
+            y1={chartHeight * 0.5}
+            x2={chartWidth}
+            y2={chartHeight * 0.5}
+            className="hud-grid-line"
+          />
+          <line
+            x1="0"
+            y1={chartHeight * 0.75}
+            x2={chartWidth}
+            y2={chartHeight * 0.75}
+            className="hud-grid-line"
+          />
+          {areaPath && <path d={areaPath} fill={`url(#grad-hw-${type})`} />}
+          {strokePath && <path d={strokePath} className="hud-chart-stroke" />}
+          {latestPoint && (
+            <circle cx={latestPoint.x} cy={latestPoint.y} r="2.5" className="hud-chart-point" />
+          )}
+        </svg>
+      </div>
+
+      <div className="hardware-hud-grid">
+        <div className="hud-stat-cell">
+          <span className="stat-label">CURRENT</span>
+          <span className="stat-val">{isCpu ? cpuStr.replace("CPU ", "") : memoryStr}</span>
+        </div>
+        <div className="hud-stat-cell">
+          <span className="stat-label">30s AVG</span>
+          <span className="stat-val">
+            {isCpu ? `${avgCpu.toFixed(1)}%` : `${Math.round(avgMemMb)} MB`}
+          </span>
+        </div>
+        <div className="hud-stat-cell">
+          <span className="stat-label">PEAK</span>
+          <span className="stat-val">
+            {isCpu ? `${peakCpu.toFixed(1)}%` : `${Math.round(peakMemMb)} MB`}
+          </span>
+        </div>
+      </div>
+
+      <div className="hardware-hud-meta">
+        <span>Process: <b>sparkmux-desktop</b></span>
+        <span>Polling: <b>1.0s delta</b></span>
+      </div>
+
+      <div className="hardware-hud-footer">
+        <span className="telemetry-tag">◈ SYS-TELEMETRY</span>
+        <span className="age-tag">live stream</span>
+      </div>
+    </div>
+  );
+}
+
 export default function StatusBar({
   status,
   session,
@@ -238,6 +472,29 @@ export default function StatusBar({
   const memory = formatMemory(telemetry?.memory_bytes);
   const cpu = formatCpu(telemetry?.cpu_percent);
   const chips = usageChips(usage, Date.now());
+
+  const [telemetryHistory, setTelemetryHistory] = useState<
+    Array<{ time: number; cpu: number; memory: number }>
+  >([]);
+
+  useEffect(() => {
+    if (!telemetry) return;
+    const sample = {
+      time: Date.now(),
+      cpu: telemetry.cpu_percent ?? 0,
+      memory: telemetry.memory_bytes ?? 0,
+    };
+    setTelemetryHistory((prev) => {
+      const next = [...prev, sample];
+      return next.length > 30 ? next.slice(next.length - 30) : next;
+    });
+  }, [telemetry]);
+
+  const memTone = memoryTone(telemetry?.memory_bytes);
+  const cpuToneVal = cpuTone(telemetry?.cpu_percent);
+  const cpuSeries = telemetryHistory.map((s) => s.cpu);
+  const memSeries = telemetryHistory.map((s) => s.memory / (1024 * 1024));
+
   return (
     <footer className="status">
       <span>{tmux}</span>
@@ -298,16 +555,56 @@ export default function StatusBar({
           </span>
         )}
         {chips.length > 0 && <span className="sep">·</span>}
-        <span title={`Sparkmux memory: ${memory}`} aria-label={`Sparkmux memory: ${memory}`}>
-          {memory}
-        </span>
+        <div className="status-pill-anchor">
+          <span
+            className={`status-pill status-hardware ${memTone}`}
+            tabIndex={0}
+            title={`Sparkmux memory: ${memory}`}
+            aria-label={`Sparkmux memory: ${memory}`}
+          >
+            <span className="status-pill-head">
+              <span className="status-pill-icon hardware-pill-icon" aria-hidden="true">
+                <RamIcon />
+              </span>
+              <span className="status-pill-name">{memory}</span>
+            </span>
+            <MiniSparkline values={memSeries} tone={memTone} />
+          </span>
+          <HardwareHudCard
+            type="memory"
+            cpuPercent={telemetry?.cpu_percent}
+            memoryBytes={telemetry?.memory_bytes}
+            history={telemetryHistory}
+          />
+        </div>
         <span className="sep">·</span>
-        <span
-          title={`Sparkmux CPU: ${cpu}, percent of one core`}
-          aria-label={`Sparkmux CPU: ${cpu}`}
-        >
-          {cpu}
-        </span>
+        <div className="status-pill-anchor">
+          <span
+            className={`status-pill status-hardware ${cpuToneVal}`}
+            tabIndex={0}
+            title={`Sparkmux CPU: ${cpu}, percent of one core`}
+            aria-label={`Sparkmux CPU: ${cpu}`}
+          >
+            <span className="status-pill-head">
+              <span className="status-pill-icon hardware-pill-icon" aria-hidden="true">
+                <CpuIcon />
+              </span>
+              <span className="status-pill-name">{cpu}</span>
+            </span>
+            <MiniSparkline
+              values={cpuSeries}
+              tone={cpuToneVal}
+              minVal={0}
+              maxVal={100}
+            />
+          </span>
+          <HardwareHudCard
+            type="cpu"
+            cpuPercent={telemetry?.cpu_percent}
+            memoryBytes={telemetry?.memory_bytes}
+            history={telemetryHistory}
+          />
+        </div>
       </span>
       <button
         type="button"
@@ -346,11 +643,11 @@ export default function StatusBar({
       <button
         type="button"
         className="status-recipes"
-        aria-label="Recipes"
-        title="Insert a folder, find, or grep command"
+        aria-label="Frequently Used Command"
+        title="Frequently Used Command"
         onClick={onRecipes}
       >
-        Recipes
+        FUC
       </button>
     </footer>
   );

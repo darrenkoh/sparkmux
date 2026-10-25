@@ -45,7 +45,7 @@ export default function RecipesDialog({
   }
 
   return (
-    <Modal title="Recipes" onClose={onClose} className="recipe-modal">
+    <Modal title="Frequently Used Command" onClose={onClose} className="recipe-modal">
       <p className="recipe-folder">Folder: {shownFolder}</p>
       <div className="recipe-list" role="listbox" aria-label="Shell recipes">
         {RECIPES.map((item) => (

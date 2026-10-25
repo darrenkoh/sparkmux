@@ -2308,6 +2308,259 @@ body.is-resizing * {
   color: rgba(255, 255, 255, 0.4);
 }
 
+/* Sci-Fi Hardware HUD Popup Card */
+.hardware-hud-card {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  right: 0;
+  width: 260px;
+  padding: 10px 12px 9px;
+  background: rgba(12, 15, 20, 0.94);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), 0 0 18px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+              visibility 0.18s ease;
+  z-index: 1000;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Hover bridge between pill and card */
+.hardware-hud-card::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 12px;
+}
+
+.status-pill-anchor:hover .hardware-hud-card,
+.status-pill-anchor:focus-within .hardware-hud-card {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.hardware-hud-card.ok {
+  border-color: rgba(61, 214, 140, 0.35);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 16px rgba(61, 214, 140, 0.15);
+}
+.hardware-hud-card.warn {
+  border-color: rgba(232, 168, 73, 0.4);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 16px rgba(232, 168, 73, 0.18);
+}
+.hardware-hud-card.hot {
+  border-color: rgba(240, 113, 120, 0.45);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.85), 0 0 18px rgba(240, 113, 120, 0.22);
+}
+
+.hardware-hud-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 7px;
+  margin-bottom: 8px;
+}
+
+.hardware-hud-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--fg);
+}
+
+.hardware-hud-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+.hardware-hud-card.ok .hardware-hud-icon { color: var(--ok); }
+.hardware-hud-card.warn .hardware-hud-icon { color: #e8a849; }
+.hardware-hud-card.hot .hardware-hud-icon { color: var(--danger); }
+
+.hardware-hud-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.hardware-hud-badge .badge-tag {
+  color: rgba(255, 255, 255, 0.4);
+}
+.hardware-hud-card.ok .badge-val { color: var(--ok); }
+.hardware-hud-card.warn .badge-val { color: #e8a849; }
+.hardware-hud-card.hot .badge-val { color: var(--danger); }
+
+.hardware-hud-chart-wrap {
+  margin-bottom: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 6px 8px 4px;
+}
+
+.chart-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 4px;
+  letter-spacing: 0.03em;
+}
+.chart-meta-row .chart-current {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.hardware-hud-chart {
+  width: 100%;
+  height: 44px;
+  display: block;
+}
+
+.hud-grid-line {
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.8;
+}
+
+.hud-chart-stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hardware-hud-card.ok .hud-chart-stroke { stroke: var(--ok); color: var(--ok); }
+.hardware-hud-card.warn .hud-chart-stroke { stroke: #e8a849; color: #e8a849; }
+.hardware-hud-card.hot .hud-chart-stroke { stroke: var(--danger); color: var(--danger); }
+
+.hud-chart-point {
+  fill: #fff;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+.hardware-hud-card.ok .hud-chart-point { stroke: var(--ok); }
+.hardware-hud-card.warn .hud-chart-point { stroke: #e8a849; }
+.hardware-hud-card.hot .hud-chart-point { stroke: var(--danger); }
+
+.hardware-hud-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.hud-stat-cell {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hud-stat-cell .stat-label {
+  font-size: 8.5px;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.04em;
+}
+
+.hud-stat-cell .stat-val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.hardware-hud-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.5);
+  padding: 4px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.hardware-hud-meta b {
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+}
+
+.hardware-hud-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.5);
+  letter-spacing: 0.05em;
+}
+.hardware-hud-footer .telemetry-tag {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* Micro Sparkline in the Status Bar Pill */
+.status-sparkline {
+  display: inline-flex;
+  align-items: center;
+  width: 26px;
+  height: 10px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.status-sparkline svg {
+  width: 26px;
+  height: 10px;
+  display: block;
+}
+.status-sparkline-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-dasharray: 2 2;
+}
+.status-sparkline-fill {
+  fill: currentColor;
+  opacity: 0.18;
+}
+.status-sparkline-stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hardware-pill-icon {
+  width: 12px;
+  height: 12px;
+}
+.hardware-icon {
+  width: 12px;
+  height: 12px;
+}
+
 .status-pill-head {
   display: inline-flex;
   align-items: center;

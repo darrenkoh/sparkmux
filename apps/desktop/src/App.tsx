@@ -1705,8 +1705,8 @@ export default function App() {
             <dd>⌘C ⌘V / Ctrl+Shift+V</dd>
             <dt>Drop a file</dt>
             <dd>Pastes its path into the prompt</dd>
-            <dt>Recipes</dt>
-            <dd>Status bar. Inserts a folder, find, or grep command. You press Enter</dd>
+            <dt>FUC</dt>
+            <dd>Frequently Used Command. Inserts a folder, find, or grep command. You press Enter</dd>
             <dt>Output</dt>
             <dd>Status bar. Follows the latest Grok, Claude, or Antigravity reply. Auto scroll can be turned off</dd>
             <dt>Split</dt>
