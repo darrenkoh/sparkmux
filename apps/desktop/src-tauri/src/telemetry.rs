@@ -224,7 +224,8 @@ mod tests {
         assert!(bar.contains("Sparkmux memory:"));
         assert!(bar.contains("Sparkmux CPU:"));
         assert!(bar.contains("aria-label=\"Frequently Used Command\""));
-        assert!(bar.contains("FUC"));
+        assert!(bar.contains("status-recipes-icon"));
+        assert!(!bar.contains("FUC"));
         assert!(!bar.contains("Command helper"));
         let app = include_str!("../../src/App.tsx");
         assert!(app.contains("kind: \"recipes\""));

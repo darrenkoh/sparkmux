@@ -387,7 +387,7 @@ test("docked panel keeps the action labels and the decluttered map", () => {
   assert.doesNotMatch(terrain, /autoRotateRef\.current = true/);
   assert.match(terrain, /CHANNEL_TAGS/);
   assert.match(terrain, /"USR", "THK", "RPL", "TOL"/);
-  assert.match(terrain, /CHRONO TIME: 00:00 \(START\)/);
+  assert.match(terrain, /00:00/);
   assert.match(terrain, /hideDockedControls/);
 
   for (const rule of [

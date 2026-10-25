@@ -147,9 +147,15 @@ export default function DockedStatsPanel({
           <span className={`mini-live-pill${agent.isLive ? " live" : ""}`}>
             {agent.isLive ? "LIVE" : "IDLE"}
           </span>
-          <span>TURNS: {agent.turnCount}</span>
-          <span>AVG: {formatDuration(agent.avgTurnMs)}</span>
-          <span>TTFT: {formatMs(Math.round(agent.ttftMs))}</span>
+          <span className="mini-agent-metric">
+            TURNS: <span className="mini-agent-val">{agent.turnCount}</span>
+          </span>
+          <span className="mini-agent-metric">
+            AVG: <span className="mini-agent-val">{formatDuration(agent.avgTurnMs)}</span>
+          </span>
+          <span className="mini-agent-metric">
+            TTFT: <span className="mini-agent-val">{formatMs(Math.round(agent.ttftMs))}</span>
+          </span>
         </div>
 
         <div className="mini-channels-card">

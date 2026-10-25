@@ -698,7 +698,17 @@ export default function StatusBar({
         title="Frequently Used Command"
         onClick={onRecipes}
       >
-        FUC
+        <svg className="status-recipes-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" strokeWidth="1.2" />
+          <path
+            d="M6.15 6.15a1.85 1.85 0 1 1 2.95 1.5c-.62.32-.95.78-.95 1.4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+          />
+          <circle cx="8.15" cy="11.45" r="0.7" fill="currentColor" />
+        </svg>
       </button>
     </footer>
   );
