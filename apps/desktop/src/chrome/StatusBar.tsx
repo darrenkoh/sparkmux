@@ -264,6 +264,61 @@ function RamIcon() {
   );
 }
 
+function CpuHistogram({
+  values,
+  tone,
+  barCount = 8,
+}: {
+  values: number[];
+  tone: TelemetryTone;
+  barCount?: number;
+}) {
+  const width = 26;
+  const height = 10;
+  const gap = 1.2;
+  const barWidth = (width - (barCount - 1) * gap) / barCount;
+
+  const slice = values.slice(-barCount);
+  const bars: number[] = Array(Math.max(0, barCount - slice.length))
+    .fill(0)
+    .concat(slice);
+
+  return (
+    <span className={`status-histogram ${tone}`} aria-hidden="true">
+      <svg viewBox={`0 0 ${width} ${height}`}>
+        {bars.map((val, idx) => {
+          const x = idx * (barWidth + gap);
+          const clamped = Math.max(0, Math.min(100, val));
+          const barH = clamped > 0 ? Math.max(1.2, (clamped / 100) * height) : 0;
+          const y = height - barH;
+          return (
+            <g key={idx}>
+              <rect
+                x={x}
+                y={0}
+                width={barWidth}
+                height={height}
+                rx={0.5}
+                className="status-histogram-slot"
+              />
+              {barH > 0 && (
+                <rect
+                  x={x}
+                  y={y}
+                  width={barWidth}
+                  height={barH}
+                  rx={0.5}
+                  className="status-histogram-bar"
+                />
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </span>
+  );
+}
+
 function MiniSparkline({
   values,
   tone,
@@ -328,7 +383,7 @@ function HardwareHudCard({
       ? memMbValues.reduce((a, b) => a + b, 0) / memMbValues.length
       : peakMemMb;
 
-  const chartWidth = 246;
+  const chartWidth = 240;
   const chartHeight = 44;
   const activeSeries = isCpu ? cpuValues : memMbValues;
   const maxVal = isCpu
@@ -352,7 +407,7 @@ function HardwareHudCard({
             {isCpu ? <CpuIcon /> : <RamIcon />}
           </span>
           <span className="hardware-hud-name">
-            {isCpu ? "CPU ENGINE TELEMETRY" : "MEMORY TELEMETRY"}
+            {isCpu ? "CPU TELEMETRY" : "MEMORY TELEMETRY"}
           </span>
         </div>
         <div className="hardware-hud-badge">
@@ -591,12 +646,7 @@ export default function StatusBar({
               </span>
               <span className="status-pill-name">{cpu}</span>
             </span>
-            <MiniSparkline
-              values={cpuSeries}
-              tone={cpuToneVal}
-              minVal={0}
-              maxVal={100}
-            />
+            <CpuHistogram values={cpuSeries} tone={cpuToneVal} />
           </span>
           <HardwareHudCard
             type="cpu"
