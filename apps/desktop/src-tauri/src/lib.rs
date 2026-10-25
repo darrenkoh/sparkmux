@@ -170,7 +170,9 @@ pub fn run() {
                     let slot = app.state::<web_server::WebServeSlot>();
                     match slot.start(opts).await {
                         Ok(status) => {
-                            web_server::write_pairing_banner(&status.urls);
+                            let urls: Vec<String> =
+                                status.links.iter().map(|link| link.url.clone()).collect();
+                            web_server::write_pairing_banner(&urls);
                             web_server::set_web_menu_label(&app, status.running);
                         }
                         Err(err) => tracing::error!(%err, "web server stopped"),

@@ -167,11 +167,15 @@ export async function pasteIntoPane(paneId: string, bracket: boolean): Promise<v
   await paneWrite(paneId, bytes);
 }
 
+export type PairingLink = {
+  url: string;
+  modules: string;
+};
+
 export type WebServeStatus = {
   running: boolean;
-  urls: string[];
-  qr_url: string;
-  qr_svg: string;
+  links: PairingLink[];
+  selected: string;
 };
 
 export function webServeToggle(): Promise<WebServeStatus> {

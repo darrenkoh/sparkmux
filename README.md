@@ -308,7 +308,7 @@ To keep the desktop window open and serve the page at the same time (port 7420):
 SPARKMUX_SERVE=1 sparkmux-desktop
 ```
 
-On startup the terminal prints a pairing URL for this computer, then the same page on each other IPv4 address. The QR code uses a phone address: Wi-Fi (`192.168.x.x`) when one exists, otherwise another private or Tailscale address. The desktop menu shows that same code. `127.0.0.1` opens on this computer. Bind a specific address when the phone should use that one:
+On startup the terminal prints a pairing URL for this computer, then the same page on each other IPv4 address. The QR code uses a phone address: Wi-Fi (`192.168.x.x`) when one exists, otherwise another private or Tailscale address. In the desktop window, select another address and the code changes to match it. `127.0.0.1` opens on this computer. Bind a specific address when the phone should use that one:
 
 ```bash
 sparkmux-desktop --serve --bind 100.64.1.2 --port 7420

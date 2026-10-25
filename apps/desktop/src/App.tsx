@@ -109,7 +109,7 @@ type Dialog =
   | { kind: "stop"; socket: string; count: number }
   | { kind: "help" }
   | { kind: "recipes" }
-  | { kind: "web-serve"; urls: string[]; qrUrl: string; qrSvg: string };
+  | { kind: "web-serve"; links: { url: string; modules: string }[]; selected: string };
 
 function namedSession(name: string | null | undefined): string | null {
   const trimmed = name?.trim() ?? "";
@@ -126,6 +126,26 @@ function agyUsageFromTerminal(paneId: string, now: number): LlmUsage | null {
     lines.push(buf.getLine(row)?.translateToString(true) ?? "");
   }
   return parseAgyUsageScreen(lines.join("\n"), now);
+}
+
+function QrMark({ modules }: { modules: string }) {
+  const rows = modules.split("\n").filter((row) => row.length > 0);
+  const size = rows[0]?.length ?? 0;
+  if (size === 0 || rows.some((row) => row.length !== size)) return null;
+  return (
+    <div
+      className="web-serve-qr-grid"
+      style={{ gridTemplateColumns: `repeat(${size}, 1fr)` }}
+      role="img"
+      aria-label="QR code for the selected address"
+    >
+      {rows.map((row, y) =>
+        Array.from(row, (cell, x) => (
+          <span key={`${y}-${x}`} className={cell === "1" ? "on" : "off"} />
+        )),
+      )}
+    </div>
+  );
 }
 
 const FONT_MIN = 11;
@@ -739,9 +759,8 @@ export default function App() {
     if (status.running) {
       setDialog({
         kind: "web-serve",
-        urls: status.urls,
-        qrUrl: status.qr_url,
-        qrSvg: status.qr_svg,
+        links: status.links,
+        selected: status.selected || status.links[0]?.url || "",
       });
       return;
     }
@@ -1921,29 +1940,44 @@ export default function App() {
           className="web-serve-modal"
           onClose={() => setDialog(null)}
         >
-          {dialog.qrSvg && (
-            <div className="web-serve-qr">
-              <img
-                alt="QR code for the iPhone pairing address"
-                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(dialog.qrSvg)}`}
-              />
-              <p>
-                {dialog.qrUrl.includes("127.0.0.1")
-                  ? "This code only opens on this computer."
-                  : "Scan with the iPhone camera."}
-              </p>
-            </div>
-          )}
-          <p>
-            An address on 127.0.0.1 is this computer. In Safari, use Share, then Add to Home Screen.
-          </p>
-          {dialog.urls.map((url) => (
-            <div key={url} className="web-serve-url">
-              <code>{url}</code>
+          {(() => {
+            const link =
+              dialog.links.find((item) => item.url === dialog.selected) ?? dialog.links[0];
+            if (!link) return null;
+            const local = link.url.includes("127.0.0.1");
+            return (
+              <div className="web-serve-qr">
+                <QrMark modules={link.modules} />
+                <p>
+                  {local
+                    ? "This code only opens on this computer."
+                    : "Scan the selected address with the iPhone camera."}
+                </p>
+              </div>
+            );
+          })()}
+          <p>Select an address. 127.0.0.1 is this computer. In Safari, use Share, then Add to Home Screen.</p>
+          {dialog.links.map((link) => (
+            <div
+              key={link.url}
+              className={link.url === dialog.selected ? "web-serve-url selected" : "web-serve-url"}
+            >
+              <button
+                type="button"
+                className="web-serve-pick"
+                aria-pressed={link.url === dialog.selected}
+                onClick={() =>
+                  setDialog((current) =>
+                    current?.kind === "web-serve" ? { ...current, selected: link.url } : current,
+                  )
+                }
+              >
+                <code>{link.url}</code>
+              </button>
               <button
                 type="button"
                 onClick={() =>
-                  void clipboardWrite(url)
+                  void clipboardWrite(link.url)
                     .then(() => showToast("Copied."))
                     .catch((err) => showToast(String(err)))
                 }

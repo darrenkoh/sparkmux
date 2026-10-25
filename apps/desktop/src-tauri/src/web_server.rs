@@ -48,26 +48,55 @@ pub struct WebServerContext {
 }
 
 #[derive(Clone, serde::Serialize)]
+pub struct PairingLink {
+    pub url: String,
+    /// Square module grid, one row per line. `1` is dark. Includes the quiet zone.
+    pub modules: String,
+}
+
+#[derive(Clone, serde::Serialize)]
 pub struct WebServeStatus {
     pub running: bool,
-    pub urls: Vec<String>,
-    pub qr_url: String,
-    pub qr_svg: String,
+    pub links: Vec<PairingLink>,
+    /// Address shown until another row is selected.
+    pub selected: String,
 }
 
 fn serve_status(running: bool, urls: Vec<String>) -> WebServeStatus {
-    let qr_url = phone_scan_url(&urls).unwrap_or("").to_string();
-    let qr_svg = if qr_url.is_empty() {
-        String::new()
-    } else {
-        pairing_qr_svg(&qr_url).unwrap_or_default()
-    };
+    let selected = phone_scan_url(&urls).unwrap_or("").to_string();
+    let links = urls
+        .into_iter()
+        .map(|url| {
+            let modules = qr_modules(&url).unwrap_or_default();
+            PairingLink { url, modules }
+        })
+        .collect();
     WebServeStatus {
         running,
-        urls,
-        qr_url,
-        qr_svg,
+        links,
+        selected,
     }
+}
+
+fn qr_modules(url: &str) -> Result<String, String> {
+    let code = qrcode::QrCode::new(url.as_bytes()).map_err(|err| err.to_string())?;
+    let quiet = 4usize;
+    let width = code.width();
+    let size = width + quiet * 2;
+    let mut rows = Vec::with_capacity(size);
+    for y in 0..size {
+        let mut row = String::with_capacity(size);
+        for x in 0..size {
+            let dark = x >= quiet
+                && y >= quiet
+                && x < quiet + width
+                && y < quiet + width
+                && code[(x - quiet, y - quiet)] == qrcode::Color::Dark;
+            row.push(if dark { '1' } else { '0' });
+        }
+        rows.push(row);
+    }
+    Ok(rows.join("\n"))
 }
 
 struct RunningWeb {
@@ -343,15 +372,6 @@ async fn shutdown_web(running: RunningWeb) {
         }
     }
     let _ = control::disconnect_core(&state).await;
-}
-
-fn pairing_qr_svg(url: &str) -> Result<String, String> {
-    let code = qrcode::QrCode::new(url.as_bytes()).map_err(|err| err.to_string())?;
-    Ok(code
-        .render::<qrcode::render::svg::Color>()
-        .quiet_zone(true)
-        .min_dimensions(240, 240)
-        .build())
 }
 
 fn print_qr(url: &str) {
@@ -1113,14 +1133,21 @@ mod tests {
     }
 
     #[test]
-    fn the_pairing_qr_is_an_svg_of_the_phone_address() {
+    fn the_pairing_qr_follows_each_address() {
         let urls = vec![
             "http://127.0.0.1:7420/?token=tok".to_string(),
             "http://192.168.1.20:7420/?token=tok".to_string(),
         ];
         let status = serve_status(true, urls);
-        assert_eq!(status.qr_url, "http://192.168.1.20:7420/?token=tok");
-        assert!(status.qr_svg.contains("<svg"));
+        assert_eq!(status.selected, "http://192.168.1.20:7420/?token=tok");
+        assert_eq!(status.links.len(), 2);
+        assert_ne!(status.links[0].modules, status.links[1].modules);
+        for link in &status.links {
+            let rows: Vec<&str> = link.modules.lines().collect();
+            assert!(rows.len() > 20, "{}", link.url);
+            assert!(rows.iter().all(|row| row.len() == rows.len()));
+            assert!(link.modules.contains('1') && link.modules.contains('0'));
+        }
     }
 
     #[tokio::test]
@@ -1136,7 +1163,11 @@ mod tests {
         let probe = async {
             let status = started?;
             assert!(status.running);
-            let url = status.urls.first().cloned().ok_or("missing url")?;
+            let url = status
+                .links
+                .first()
+                .map(|link| link.url.clone())
+                .ok_or("missing url")?;
             assert!(url.contains("menu-test-token"));
             let body = tokio::time::timeout(Duration::from_secs(2), http_get(&url))
                 .await
