@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.56
+
+### Improvements
+
+- **Multi-Model Quota Pill Badges**: Replaced verbose quota strings with compact, rounded capsule badges in the bottom status bar for all active model pools (Gemini, Argon, Claude, Grok), featuring dedicated micro SVG icons, active time-window tags, and embedded progress bars.
+- **Floating Sci-Fi HUD Info Card**: Hovering over any model quota badge presents a high-tech frosted glass HUD card detailing all quota windows (5-Hour vs Weekly), exact absolute reset timestamps, countdown timers, and active constraining limit indicators.
+- **Multi-Model CLI Parser**: Upgraded `agy --print /usage` and terminal screen parsing to cleanly support multi-space aligned tables and custom model limits, recognizing separate quota pools such as `Gemini 4 Argon`.
+- **Streamlined Desktop Telemetry**: Streamlined telemetry dependencies and memory reporting.
+
 ## 0.1.55
 
 ### Improvements
