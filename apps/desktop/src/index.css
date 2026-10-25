@@ -1986,7 +1986,7 @@ body.is-resizing * {
   gap: 6px;
   min-width: 0;
   flex: 0 1 auto;
-  padding: 2px 7px;
+  padding: 2px 7px 2px 5px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.09);
@@ -2140,8 +2140,18 @@ body.is-resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 13px;
-  height: 13px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.status-quota-card-icon .model-halo-ring {
+  width: 18px;
+  height: 18px;
+}
+.status-quota-card-icon .halo-icon-wrap,
+.status-quota-card-icon .halo-icon-core {
+  width: 10px;
+  height: 10px;
 }
 .status-quota-card.ok .status-quota-card-icon { color: var(--ok); }
 .status-quota-card.warn .status-quota-card-icon { color: #e8a849; }
@@ -2310,14 +2320,83 @@ body.is-resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 11px;
-  height: 11px;
+  width: 17px;
+  height: 17px;
   flex-shrink: 0;
 }
 
-.status-pill-icon svg {
-  width: 11px;
-  height: 11px;
+/* Model Halo Ring (Reset Countdown Gauge) */
+.model-halo-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+.model-halo-ring .halo-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.model-halo-ring .halo-track {
+  stroke: rgba(255, 255, 255, 0.12);
+  fill: none;
+}
+
+.model-halo-ring .halo-fill {
+  stroke: currentColor;
+  fill: none;
+  transition: stroke-dashoffset 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.model-halo-ring .halo-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 9px;
+  height: 9px;
+  z-index: 1;
+}
+
+.model-halo-ring .halo-icon-core {
+  width: 9px;
+  height: 9px;
+  display: block;
+}
+
+.model-halo-ring.ok {
+  color: var(--ok);
+}
+.model-halo-ring.warn {
+  color: #e8a849;
+}
+.model-halo-ring.hot {
+  color: var(--danger);
+}
+.model-halo-ring.cost {
+  color: #facc15;
+}
+
+.model-halo-ring.is-urgent {
+  animation: halo-pulse 2s infinite ease-in-out;
+}
+
+@keyframes halo-pulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 1px currentColor);
+    opacity: 1;
+  }
+  50% {
+    filter: drop-shadow(0 0 5px currentColor);
+    opacity: 0.82;
+  }
 }
 
 .status-pill-name {
@@ -4917,6 +4996,92 @@ div.mini-subagents-head {
 
 .status-graph:hover {
   background: rgba(45, 212, 191, 0.18);
+}
+
+.status-recipes {
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  background: #1a1e26;
+  border: 1px solid var(--border);
+  color: var(--fg);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.status-recipes:hover {
+  background: var(--row-hover);
+}
+
+.modal.recipe-modal {
+  width: min(560px, calc(100vw - 32px));
+  max-width: 560px;
+}
+
+.recipe-folder {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.recipe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.recipe-job {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  font: inherit;
+  color: var(--fg);
+  background: #12151b;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.recipe-job[aria-selected="true"] {
+  border-color: var(--accent);
+  background: rgba(122, 162, 247, 0.12);
+}
+
+.recipe-job span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recipe-pattern {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.recipe-preview {
+  margin: 10px 0 0;
+  padding: 10px;
+  background: #0d0f12;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.modal-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .artifact-graph-btn {

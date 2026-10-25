@@ -5,6 +5,7 @@ import {
   allowanceWatchKey,
   amountLeft,
   parseAgyUsageScreen,
+  resetTimeFraction,
   usageChips,
   usageTone,
   type LlmUsage,
@@ -342,4 +343,31 @@ test("color follows how much allowance is left", () => {
   assert.equal(usageTone(19.9), "hot");
   assert.equal(amountLeft(bar({ percent: 70, direction: "used" })), 30);
   assert.equal(amountLeft(bar({ percent: 84, direction: "remaining" })), 84);
+});
+
+test("reset time fraction calculates fraction of window remaining", () => {
+  assert.equal(resetTimeFraction(null, "5 hour", NOW), 1);
+  assert.equal(resetTimeFraction(NOW - 1000, "5 hour", NOW), 0);
+  // 2.5 hours remaining in a 5h window -> 0.5
+  const half5h = NOW + 2.5 * 3600_000;
+  assert.equal(resetTimeFraction(half5h, "Five Hour Limit Remaining", NOW), 0.5);
+
+  const chips = usageChips(
+    usage({
+      cli: "grok",
+      bars: [
+        bar({
+          percent: 50,
+          direction: "remaining",
+          resets_at_ms: GROK_RESET,
+          label: "Weekly",
+        }),
+      ],
+    }),
+    NOW,
+  );
+  assert.ok(chips[0].timeFraction != null);
+  assert.ok(chips[0].timeFraction > 0 && chips[0].timeFraction <= 1);
+  assert.equal(chips[0].timeRemainingMs, GROK_RESET - NOW);
+  assert.equal(chips[0].details?.[0].timeFraction, chips[0].timeFraction);
 });

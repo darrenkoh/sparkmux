@@ -14,6 +14,8 @@ export interface ModelWindowDetail {
   resetsAtMs: number | null;
   resetsAtFormatted: string | null;
   countdown: string | null;
+  /** Fraction of time remaining in this window (0..1). */
+  timeFraction: number;
   isTighter: boolean;
 }
 
@@ -39,6 +41,10 @@ export interface UsageChip {
   percent?: number;
   /** Countdown string if available, e.g. "8h 55m". */
   resetsIn?: string | null;
+  /** Fraction of time remaining until reset (0..1). 1 = full, 0 = expired. */
+  timeFraction?: number;
+  /** Milliseconds until reset. */
+  timeRemainingMs?: number | null;
   /** Detailed window limits for the model info card popup. */
   details?: ModelWindowDetail[];
   /** When this payload was fetched (ms epoch). */
@@ -120,6 +126,30 @@ export function allowanceWatchKey(command: string, title: string): string {
   return `agent:${named ? base : "shell"}:${titled ? label : ""}`;
 }
 
+export function resetTimeFraction(
+  resetsAtMs: number | null | undefined,
+  windowLabel: string | null | undefined,
+  now: number,
+): number {
+  if (resetsAtMs == null) return 1;
+  const remaining = Math.max(0, resetsAtMs - now);
+  if (remaining === 0) return 0;
+  const lower = (windowLabel ?? "").toLowerCase();
+  let totalMs = 7 * 24 * 3600_000;
+  if (lower.includes("five") || lower.includes("5") || lower.includes("5h")) {
+    totalMs = 5 * 3600_000;
+  } else if (lower.includes("day") || lower.includes("daily")) {
+    totalMs = 24 * 3600_000;
+  } else if (lower.includes("week") || lower.includes("wk")) {
+    totalMs = 7 * 24 * 3600_000;
+  } else if (remaining <= 5 * 3600_000) {
+    totalMs = 5 * 3600_000;
+  } else if (remaining <= 24 * 3600_000) {
+    totalMs = 24 * 3600_000;
+  }
+  return Math.min(1, Math.max(0, remaining / totalMs));
+}
+
 /** Chips for the status bar. A shell pane and a CLI with no local payload yield none. */
 export function usageChips(
   usage: LlmUsage | null | undefined,
@@ -137,6 +167,8 @@ export function usageChips(
     const bar = usage.bars[0];
     if (!bar) return [];
     const left = amountLeft(bar);
+    const timeRemainingMs = bar.resets_at_ms != null ? Math.max(0, bar.resets_at_ms - now) : null;
+    const timeFraction = resetTimeFraction(bar.resets_at_ms, bar.label, now);
     const details: ModelWindowDetail[] = [
       {
         label: bar.label || "Weekly Limit",
@@ -147,6 +179,7 @@ export function usageChips(
         resetsAtMs: bar.resets_at_ms,
         resetsAtFormatted: bar.resets_at_ms ? formatAbsolute(bar.resets_at_ms, timeZone) : null,
         countdown: countdown(bar.resets_at_ms, now),
+        timeFraction,
         isTighter: true,
       },
     ];
@@ -161,6 +194,8 @@ export function usageChips(
         window: shortWindow(bar.label),
         percent: whole(left),
         resetsIn: countdown(bar.resets_at_ms, now),
+        timeFraction,
+        timeRemainingMs,
         details,
         fetchedAtMs: usage.fetched_at_ms,
         fetchedAgeText,
@@ -170,6 +205,8 @@ export function usageChips(
   if (usage.cli === "claude") {
     const bar = tighter(usage.bars);
     const left = amountLeft(bar);
+    const timeRemainingMs = bar.resets_at_ms != null ? Math.max(0, bar.resets_at_ms - now) : null;
+    const timeFraction = resetTimeFraction(bar.resets_at_ms, bar.label, now);
     const details: ModelWindowDetail[] = usage.bars.map((m) => {
       const mLeft = amountLeft(m);
       return {
@@ -181,6 +218,7 @@ export function usageChips(
         resetsAtMs: m.resets_at_ms,
         resetsAtFormatted: m.resets_at_ms ? formatAbsolute(m.resets_at_ms, timeZone) : null,
         countdown: countdown(m.resets_at_ms, now),
+        timeFraction: resetTimeFraction(m.resets_at_ms, m.label, now),
         isTighter: m === bar,
       };
     });
@@ -195,6 +233,8 @@ export function usageChips(
         window: shortWindow(bar.label),
         percent: whole(left),
         resetsIn: countdown(bar.resets_at_ms, now),
+        timeFraction,
+        timeRemainingMs,
         details,
         fetchedAtMs: usage.fetched_at_ms,
         fetchedAgeText,
@@ -320,6 +360,8 @@ function groupChips(
     const modelTitle = modelGroupTooltip(name, members, bar, now, timeZone, fetchedAt);
     const windowTag = shortWindow(bar.label);
     const left = amountLeft(bar);
+    const timeRemainingMs = bar.resets_at_ms != null ? Math.max(0, bar.resets_at_ms - now) : null;
+    const timeFraction = resetTimeFraction(bar.resets_at_ms, bar.label, now);
     const details: ModelWindowDetail[] = members.map((m) => {
       const mLeft = amountLeft(m);
       return {
@@ -331,6 +373,7 @@ function groupChips(
         resetsAtMs: m.resets_at_ms,
         resetsAtFormatted: m.resets_at_ms ? formatAbsolute(m.resets_at_ms, timeZone) : null,
         countdown: countdown(m.resets_at_ms, now),
+        timeFraction: resetTimeFraction(m.resets_at_ms, m.label, now),
         isTighter: m === bar,
       };
     });
@@ -344,6 +387,8 @@ function groupChips(
       window: windowTag,
       percent: whole(left),
       resetsIn: countdown(bar.resets_at_ms, now),
+      timeFraction,
+      timeRemainingMs,
       details,
       fetchedAtMs: fetchedAt,
       fetchedAgeText: fetchedAt != null ? fetchedAge(fetchedAt, now) : null,

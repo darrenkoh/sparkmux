@@ -2,7 +2,7 @@ import type { LlmUsage, TmuxStatus } from "../types";
 import { usageChips, type UsageChip } from "./llmUsage";
 import { formatCpu, formatMemory, type AppTelemetry } from "./telemetry";
 
-function ModelIcon({ model }: { model?: string }) {
+function ModelIconCore({ model }: { model?: string }) {
   const lower = (model ?? "").toLowerCase();
   if (
     lower.includes("gemini") ||
@@ -11,7 +11,7 @@ function ModelIcon({ model }: { model?: string }) {
     lower.includes("pro")
   ) {
     return (
-      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className="halo-icon-core">
         <path d="M8 1c.3 2.8 1.9 4.4 4.7 4.7-2.8.3-4.4 1.9-4.7 4.7C7.7 7.6 6.1 6 3.3 5.7 6.1 5.4 7.7 3.8 8 1z" />
         <path
           d="M12.5 10c.2 1.4 1 2.2 2.4 2.4-1.4.2-2.2 1-2.4 2.4-.2-1.4-1-2.2-2.4-2.4 1.4-.2 2.2-1 2.4-2.4z"
@@ -29,6 +29,7 @@ function ModelIcon({ model }: { model?: string }) {
         strokeWidth="1.8"
         strokeLinecap="round"
         aria-hidden="true"
+        className="halo-icon-core"
       >
         <path d="M8 2.5v11M3.5 5.25l9 5.5M3.5 10.75l9-5.5" />
       </svg>
@@ -36,15 +37,75 @@ function ModelIcon({ model }: { model?: string }) {
   }
   if (lower.includes("grok")) {
     return (
-      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className="halo-icon-core">
         <path d="M3 13.5L10.5 2h2.5L5.5 13.5H3z" />
       </svg>
     );
   }
   return (
-    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" className="halo-icon-core">
       <circle cx="8" cy="8" r="3" />
     </svg>
+  );
+}
+
+export function ModelHaloIcon({
+  model,
+  timeFraction,
+  timeRemainingMs,
+  tone,
+  title,
+}: {
+  model?: string;
+  timeFraction?: number;
+  timeRemainingMs?: number | null;
+  tone?: string;
+  title?: string;
+}) {
+  const hasTime = timeFraction != null;
+  const fraction = Math.min(1, Math.max(0, timeFraction ?? 1));
+  const r = 7;
+  const circumference = 2 * Math.PI * r;
+  const strokeDashoffset = circumference * (1 - fraction);
+  const isUrgent = timeRemainingMs != null && timeRemainingMs <= 3600_000 && timeRemainingMs > 0;
+
+  return (
+    <div
+      className={`model-halo-ring ${tone ?? "ok"}${isUrgent ? " is-urgent" : ""}`}
+      title={title}
+      aria-hidden="true"
+    >
+      {hasTime && (
+        <svg
+          className="halo-svg"
+          viewBox="0 0 18 18"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            className="halo-track"
+            cx="9"
+            cy="9"
+            r={r}
+            strokeWidth="1.5"
+          />
+          <circle
+            className="halo-fill"
+            cx="9"
+            cy="9"
+            r={r}
+            strokeWidth="1.5"
+            strokeDasharray={circumference}
+            strokeDashoffset={strokeDashoffset}
+            strokeLinecap="round"
+            transform="rotate(-90 9 9)"
+          />
+        </svg>
+      )}
+      <div className="halo-icon-wrap">
+        <ModelIconCore model={model} />
+      </div>
+    </div>
   );
 }
 
@@ -61,7 +122,12 @@ function ModelQuotaCard({ chip }: { chip: UsageChip }) {
       <div className="status-quota-card-header">
         <div className="status-quota-card-title">
           <span className="status-quota-card-icon">
-            <ModelIcon model={chip.model} />
+            <ModelHaloIcon
+              model={chip.model}
+              timeFraction={chip.timeFraction}
+              timeRemainingMs={chip.timeRemainingMs}
+              tone={chip.tone}
+            />
           </span>
           <span className="status-quota-card-name">
             {chip.model ?? "Model Quota"}
@@ -150,6 +216,7 @@ export default function StatusBar({
   onOutput,
   onAnalytics,
   onGraph,
+  onRecipes,
 }: {
   status: TmuxStatus | null;
   session: string | null;
@@ -162,6 +229,7 @@ export default function StatusBar({
   onOutput: () => void;
   onAnalytics?: () => void;
   onGraph?: () => void;
+  onRecipes: () => void;
 }) {
   const tmux = status?.version ?? "tmux";
   const sock = status?.socket_name ? `-L ${status.socket_name}` : "-L sparkmux";
@@ -198,7 +266,13 @@ export default function StatusBar({
                   >
                     <span className="status-pill-head">
                       <span className="status-pill-icon" aria-hidden="true">
-                        <ModelIcon model={chip.model} />
+                        <ModelHaloIcon
+                          model={chip.model}
+                          timeFraction={chip.timeFraction}
+                          timeRemainingMs={chip.timeRemainingMs}
+                          tone={chip.tone}
+                          title={chip.resetsIn ? `Resets in ${chip.resetsIn}` : undefined}
+                        />
                       </span>
                       <span className="status-pill-name">{label}</span>
                       {chip.window && (
@@ -269,6 +343,15 @@ export default function StatusBar({
           ⬡ Gits
         </button>
       )}
+      <button
+        type="button"
+        className="status-recipes"
+        aria-label="Recipes"
+        title="Insert a folder, find, or grep command"
+        onClick={onRecipes}
+      >
+        Recipes
+      </button>
     </footer>
   );
 }

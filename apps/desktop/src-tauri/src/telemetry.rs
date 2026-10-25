@@ -223,8 +223,10 @@ mod tests {
         let bar = include_str!("../../src/chrome/StatusBar.tsx");
         assert!(bar.contains("Sparkmux memory:"));
         assert!(bar.contains("Sparkmux CPU:"));
+        assert!(bar.contains("aria-label=\"Recipes\""));
         assert!(!bar.contains("Command helper"));
         let app = include_str!("../../src/App.tsx");
+        assert!(app.contains("kind: \"recipes\""));
         assert!(app.contains("appTelemetry"));
         assert!(app.contains("formatMemory"));
         assert!(app.contains("formatCpu"));

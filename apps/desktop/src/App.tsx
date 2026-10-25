@@ -8,6 +8,7 @@ import {
   clipboardWrite,
   appTelemetry,
   llmUsage,
+  paneWrite,
   pasteIntoPane,
   controlConnect,
   ensureReady,
@@ -55,6 +56,7 @@ import { outputPaneForTab } from "./chrome/artifactModel";
 import { allowanceWatchKey, parseAgyUsageScreen } from "./chrome/llmUsage";
 import { ACTIVE_TARGET_STORAGE_KEY } from "./chrome/popoutModel";
 import ErrorPanel from "./chrome/ErrorPanel";
+import RecipesDialog from "./chrome/RecipesDialog";
 import Splitter, {
   SIDEBAR_DEFAULT,
   SIDEBAR_MAX,
@@ -78,6 +80,7 @@ import TiledWindow, {
   fallbackLayout,
   paneInputModes,
 } from "./terminal/TiledWindow";
+import { canInsertRecipe } from "./terminal/recipes";
 import { getTerm } from "./terminal/XtermView";
 import type {
   GuiError,
@@ -97,7 +100,8 @@ type Dialog =
   | { kind: "close-tab"; id: string; name: string; last: boolean; session: string }
   | { kind: "close-session"; name: string; tabs: number }
   | { kind: "stop"; socket: string; count: number }
-  | { kind: "help" };
+  | { kind: "help" }
+  | { kind: "recipes" };
 
 function namedSession(name: string | null | undefined): string | null {
   const trimmed = name?.trim() ?? "";
@@ -1154,6 +1158,29 @@ export default function App() {
     showToast,
   ]);
 
+  async function insertRecipe(text: string) {
+    const pane = outputPane;
+    if (!pane || !canInsertRecipe(pane.command, pane.alternate)) return;
+    try {
+      await paneWrite(pane.id, Array.from(new TextEncoder().encode(text)));
+      setDialog(null);
+      showToast("Inserted. Press Enter to run it.");
+      getTerm(pane.id)?.focus();
+    } catch (err) {
+      showToast(String(err));
+    }
+  }
+
+  async function copyRecipe(text: string) {
+    try {
+      await clipboardWrite(text);
+      setDialog(null);
+      showToast("Copied.");
+    } catch (err) {
+      showToast(String(err));
+    }
+  }
+
   return (
     <div className="app">
       <div className="body">
@@ -1513,6 +1540,7 @@ export default function App() {
           setAnalyticsOpen(false);
           setGraphOpen((open) => !open);
         }}
+        onRecipes={() => setDialog({ kind: "recipes" })}
       />
       <UpdateNotice
         phase={updateNotice.phase}
@@ -1677,6 +1705,8 @@ export default function App() {
             <dd>⌘C ⌘V / Ctrl+Shift+V</dd>
             <dt>Drop a file</dt>
             <dd>Pastes its path into the prompt</dd>
+            <dt>Recipes</dt>
+            <dd>Status bar. Inserts a folder, find, or grep command. You press Enter</dd>
             <dt>Output</dt>
             <dd>Status bar. Follows the latest Grok, Claude, or Antigravity reply. Auto scroll can be turned off</dd>
             <dt>Split</dt>
@@ -1697,6 +1727,16 @@ export default function App() {
             </button>
           </div>
         </Modal>
+      )}
+      {dialog?.kind === "recipes" && (
+        <RecipesDialog
+          folder={outputPane?.path ?? ""}
+          command={outputPane?.command ?? ""}
+          alternate={outputPane?.alternate ?? true}
+          onInsert={(text) => void insertRecipe(text)}
+          onCopy={(text) => void copyRecipe(text)}
+          onClose={() => setDialog(null)}
+        />
       )}
     </div>
   );
