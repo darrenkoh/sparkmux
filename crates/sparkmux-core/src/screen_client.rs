@@ -225,10 +225,28 @@ fn open_pty() -> Result<(OwnedFd, OwnedFd)> {
     if rc != 0 {
         return Err(Error::Io(std::io::Error::last_os_error()));
     }
+    // Set FD_CLOEXEC on both master and slave so children do not inherit them
+    // across exec. If sparkmux is killed or relaunched, closing master hangs up
+    // the slave and ensures tmux client exits instead of being orphaned.
+    set_cloexec(master)?;
+    set_cloexec(slave)?;
     // SAFETY: openpty succeeded, so both descriptors are open and owned here.
     let master = unsafe { OwnedFd::from_raw_fd(master) };
     let slave = unsafe { OwnedFd::from_raw_fd(slave) };
     Ok((master, slave))
+}
+
+fn set_cloexec(fd: libc::c_int) -> Result<()> {
+    // SAFETY: fcntl F_GETFD / F_SETFD are safe operations on valid fds.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    let rc = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    if rc == -1 {
+        return Err(Error::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
 }
 
 fn set_winsize(slave: &OwnedFd, rows: u16, cols: u16) -> Result<()> {
@@ -446,5 +464,25 @@ mod tests {
 
         ctl.shutdown().await.expect("shutdown control");
         let _ = std::fs::remove_file(&script);
+    }
+
+    #[test]
+    fn open_pty_sets_cloexec_on_both_descriptors() {
+        let (master, slave) = open_pty().expect("open_pty");
+        use std::os::fd::AsRawFd;
+        let master_flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFD) };
+        let slave_flags = unsafe { libc::fcntl(slave.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(master_flags, -1);
+        assert_ne!(slave_flags, -1);
+        assert_eq!(
+            master_flags & libc::FD_CLOEXEC,
+            libc::FD_CLOEXEC,
+            "master has FD_CLOEXEC"
+        );
+        assert_eq!(
+            slave_flags & libc::FD_CLOEXEC,
+            libc::FD_CLOEXEC,
+            "slave has FD_CLOEXEC"
+        );
     }
 }

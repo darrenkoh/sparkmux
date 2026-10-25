@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { tabAnalytics, type TabAnalyticsResponse } from "../api";
 import { formatDuration, formatMs, formatNum, formatUsd } from "./analyticsFormat";
 import { cliLabel } from "./artifactModel";
@@ -26,7 +26,7 @@ const CHANNEL_TAGS: Record<ChannelBreakdownItem["key"], string> = {
   tool: "TOL",
 };
 
-export default function DockedStatsPanel({
+function DockedStatsPanelImpl({
   sessionName,
   tabId,
   tabName,
@@ -305,3 +305,5 @@ export default function DockedStatsPanel({
     </div>
   );
 }
+
+export default memo(DockedStatsPanelImpl);
