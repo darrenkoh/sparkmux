@@ -126,11 +126,19 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .build()?
     };
 
-    let help = SubmenuBuilder::new(app, "Help")
-        .item(&help_item)
-        .separator()
-        .item(&check_update)
-        .build()?;
+    // macOS keeps Check for Updates in the app menu. Linux has no app menu,
+    // so the same command lives in Help there.
+    let help = if mac {
+        SubmenuBuilder::new(app, "Help")
+            .item(&help_item)
+            .build()?
+    } else {
+        SubmenuBuilder::new(app, "Help")
+            .item(&help_item)
+            .separator()
+            .item(&check_update)
+            .build()?
+    };
 
     let mut menu = MenuBuilder::new(app);
     if mac {
@@ -225,5 +233,31 @@ mod tests {
         assert!(menu.contains("WEB_SERVE_MENU_ID"));
         assert!(menu.contains("WEB_SERVE_MENU_START"));
         assert!(menu.contains(".item(&web_serve)"));
+    }
+
+    #[test]
+    fn check_for_updates_appears_once_per_platform() {
+        let menu = include_str!("menu.rs");
+        let src = menu.split("#[cfg(test)]").next().expect("menu source");
+        assert_eq!(src.matches(".item(&check_update)").count(), 2);
+
+        let help_at = menu
+            .find("let help = if mac {")
+            .expect("platform help menu");
+        let app_at = menu
+            .find("SubmenuBuilder::new(app, \"Sparkmux\")")
+            .expect("app menu");
+        let help_block = &menu[help_at..app_at];
+        let else_at = help_block.find("} else {").expect("linux help");
+        assert!(
+            !help_block[..else_at].contains("check_update"),
+            "macOS Help should not list Check for Updates"
+        );
+        assert!(help_block[else_at..].contains(".item(&check_update)"));
+
+        let app_end = menu[app_at..]
+            .find(".build()?")
+            .expect("app menu end");
+        assert!(menu[app_at..app_at + app_end].contains(".item(&check_update)"));
     }
 }
