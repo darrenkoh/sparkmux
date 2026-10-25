@@ -14,9 +14,10 @@
 <p align="center">
   <b>Private tmux Server</b> &bull;
   <b>Tiled Native xterm.js Terminals</b> &bull;
-  <b>Real-Time AI Agent Telemetry</b> &bull;
-  <b>3D WebGL Topographical Area Map</b> &bull;
-  <b>Sci-Fi Neural HUD</b>
+  <b>Your Prompts</b> &bull;
+  <b>3D Area Map &amp; Mini Stat</b> &bull;
+  <b>Stats HUD</b> &bull;
+  <b>Gits</b>
 </p>
 
 ---
@@ -25,7 +26,7 @@
 
 [![Sparkmux Live Workflow Demo](docs/sparkmux-demo.gif)](docs/sparkmux-demo.mp4)
 
-*Tiled native tmux terminal with live AI agent follower, instant output stream, and real-time 3D topographical telemetry HUD. ([Watch HD 60fps Video](docs/sparkmux-demo.mp4))*
+*Tiled tmux panes, the agent panel, and the live area map. ([Watch HD video](docs/sparkmux-demo.mp4))*
 
 ---
 
@@ -35,16 +36,18 @@
 
 - [Overview](#-overview)
 - [Key Features](#-key-features)
-  - [1. Real-Time AI Agent Follower & Intelligence](#1-real-time-ai-agent-follower--intelligence)
-  - [2. Interactive 3D Topographical Area Map](#2-interactive-3d-topographical-area-map)
-  - [3. Sci-Fi Neural Telemetry HUD](#3-sci-fi-neural-telemetry-hud)
-  - [4. Private & Isolated tmux Architecture](#4-private--isolated-tmux-architecture)
-  - [5. Visual Git Intelligence Canvas](#5-visual-git-intelligence-canvas)
+  - [1. Private tmux Workspace](#1-private-tmux-workspace)
+  - [2. Your Prompts](#2-your-prompts)
+  - [3. Allowance, Hardware, and Commands](#3-allowance-hardware-and-commands)
+  - [4. Area Map and Mini Stat](#4-area-map-and-mini-stat)
+  - [5. Stats HUD](#5-stats-hud)
+  - [6. Gits](#6-gits)
 - [Architecture](#-architecture)
 - [Quick Install](#-quick-install)
   - [macOS (Apple Silicon)](#macos-apple-silicon)
   - [Linux (ARM64 / DGX Spark)](#linux-arm64--dgx-spark)
   - [Build from Source](#build-from-source)
+  - [Updates](#updates)
 - [CLI Reference](#-cli-reference)
 - [Keyboard Shortcuts](#-keyboard-shortcuts)
 - [Configuration](#-configuration)
@@ -54,95 +57,104 @@
 
 ## 💡 Overview
 
-Modern terminal multiplexers were created decades before autonomous AI coding agents existed. When running agents like **Google Antigravity CLI**, **Claude Code**, or **Grok Build**, terminals get inundated with thousands of tool invocations, hidden reasoning chains, and massive token payloads.
+Modern terminal multiplexers were created decades before autonomous AI coding agents existed. When you run **Grok Build**, **Claude Code**, or **Google Antigravity CLI**, a pane fills with tool calls, reasoning, and token traffic that a plain shell cannot summarize.
 
-**sparkmux** bridges the terminal and the AI era:
-- **Zero Configuration Conflicts**: Launches and controls a private tmux server on `-L sparkmux` without ever touching or interfering with your default tmux sessions.
-- **True Tiled Panes**: Each tmux pane renders as an authentic xterm.js instance with pixel-perfect layouts derived directly from tmux `window_layout`.
-- **Live Agent Follower**: Non-intrusively tracks agent transcripts in real time, presenting tool calls, thinking phases, and diffs side-by-side with your terminal.
-- **3D Topographical Landscapes & Sci-Fi HUD**: Translates token activity and session channels into interactive 3D WebGL islands and real-time synaptogenesis telemetry.
+**sparkmux** is a desktop front-end for a private tmux server:
+
+- **Isolated server**: The app owns `tmux -L sparkmux`. Your default tmux server stays untouched.
+- **True tiled panes**: Each pane is a real xterm.js terminal. Geometry comes from tmux `window_layout`. Live bytes come from control mode (`%output` and `send-keys -H`).
+- **Read-only agent follower**: Prompts, thinking, tools, replies, tokens, and file edits are read from the CLI's own transcript on this machine.
+- **Telemetry you can dock or pop out**: Mini Stat and the 3D Area Map sit beside the terminal. Stats and Gits open full-screen, or in their own windows.
+
+Follow the focused pane from another terminal with:
+
+```bash
+tmux -L sparkmux attach
+```
 
 ---
 
 ## ✨ Key Features
 
-### 1. Real-Time AI Agent Follower & Intelligence
+### 1. Private tmux Workspace
 
-Track the execution loops of your autonomous agents without cluttering your command prompt.
+![Sparkmux desktop workspace](docs/screenshot.png)
 
-![Sparkmux Agent Follower](docs/agent-follower.png)
-
-- **Multi-Agent Follower**: Native, zero-overhead transcript follower for:
-  - **Google Antigravity CLI** (`agy`)
-  - **Claude Code CLI** (`claude`)
-  - **Grok Build CLI** (`grok`)
-- **Side-by-Side Agent Drawer**: Click **Output** on the status bar to expand live tool executions (`read_file`, `grep`, `run_terminal_command`, `edit_file`), outputs, and reasoning steps as they execute.
-- **Cost & Token Telemetry**: Real-time token consumption metrics, including AWS Bedrock API cost estimates and quota monitoring for Claude.
-- **Strictly Read-Only**: Follows session files passively without writing to agent directories or intercepting agent CLI state.
+- **Dedicated server**: Sessions, tabs, and panes live on `-L sparkmux`. Quit detaches the control client and leaves the server running, so shells and agent processes keep going. Reopen Sparkmux and the same sessions are there.
+- **Session sidebar**: Drag to resize. Click a session name to attach and expand or collapse its tabs. The disclosure arrow toggles the list on its own. Double-click a name to rename it.
+- **Agents board**: Lists Grok, Claude, and Antigravity panes on this socket, with state **Waiting on you**, **Running**, **Finished**, or **Failed**. Choosing a row opens that pane. A hidden tab lights an unread mark when an agent is waiting or reports a failure, and shows the question it is waiting on. When Sparkmux is in the background, the first wait posts a system notification.
+- **Automatic tab names**: A tab still named `shell` takes the foreground CLI and its version, such as `Grok v…`, `Claude v…`, or `AGY v…`. A name you typed stays. When the CLI exits, the tab returns to `shell`.
+- **Scrollback**: Opening a pane again restores history from tmux, so you can scroll to output from before this attach. **⌘F** / **Ctrl+F** finds text in that scrollback. An `http` or `https` link opens in the default browser.
+- **Drop a file or folder** on a pane to paste its absolute path into the prompt. You press Enter. Shell metacharacters are quoted.
 
 ---
 
-### 2. Interactive 3D Topographical Area Map
+### 2. Your Prompts
 
-Experience your agent workflows as an interactive WebGL2 3D island terrain with elevation ridges and real-time particle dynamics.
+**Output** on the status bar docks **Your Prompts** beside the terminal for the focused pane. It follows that pane's Grok, Claude, or Antigravity transcript, including work from child agents. A pane that is only `ssh` stays a terminal.
 
-![3D Topographical Terrain Map](docs/terrain-3d.gif)
-
-- **Channel-Mapped Elevation Ridges**:
-  - `[USER]` &rarr; Human input spikes
-  - `[THINK]` &rarr; Chain-of-thought & reasoning plateau
-  - `[REPLY]` &rarr; Assistant response valleys
-  - `[TOOL]` &rarr; Tool runtime mountain peaks
-- **Topological Contours**: Marching-squares elevation lines and ambient floating particle field.
-- **Interactive Camera**: Smooth orbit, pan, zoom, auto-rotation, and reset controls.
-- **Shader Modes**: Toggle between **Spectral** (full multi-channel color gradient) and **Monochrome** sci-fi amber wireframes.
-- **Flexible Workspace**: Explore in the full-screen HUD or **Dock** the 3D map directly to the bottom right of your terminal panes.
+- **One card per prompt**: Preview, status (`Working…`, `Done`, `No reply`), and step count. The newest turn is first.
+- **Prompt Details**: Full markdown prompt, collapsible thinking and tool steps, the closing reply, and previous / next through the session. Fenced code blocks can be copied.
+- **Open a path**: A recorded file path on a tool row opens in your editor.
+- **Stats and Gits** are one click away from the panel header.
 
 ---
 
-### 3. Sci-Fi Neural Telemetry HUD
+### 3. Allowance, Hardware, and Commands
 
-A comprehensive mission-control dashboard for complex multi-agent coding sessions.
+The status bar follows the focused pane.
+
+- **Model quota pills**: Compact badges for the active pools (Grok, Claude, Gemini, Argon, and other limits the CLI reports). Each pill shows the window (`5h`, `Wk`), remaining percent, a meter, and a countdown halo. Hover for every window, the reset time, and which limit is tighter. A Claude process on AWS Bedrock shows session and today API cost in place of a quota meter.
+- **Memory and CPU**: This Sparkmux process only, with a memory sparkline and a CPU histogram. Hover either pill for a 30-second waveform, peak, and uptime.
+- **Frequently Used Command**: The circled **?** inserts one finished shell command into a normal shell (`zsh`, `bash`, `fish`, `sh`, `dash`) and leaves Enter to you. Recipes cover folder size, free space, listing, file counts, find, grep, `git status`, and `git diff`, with the focused pane's folder filled in. A full-screen agent pane copies the command so it can be pasted by hand.
+
+---
+
+### 4. Area Map and Mini Stat
+
+![3D Area Map](docs/terrain-3d.gif)
+
+Activity on the focused agent session becomes a WebGL2 terrain. Channels are **User**, **Think**, **Reply**, and **Tool**.
+
+- **Two bases**: **Rect** is a left-to-right time surface. **Globe** is a sensor disc: the four channels are rings, time runs around the disc, and a radar ping expands outward.
+- **Long sessions**: The map shows a 30-minute slice. Quiet stretches fold into short seams, so a multi-hour session stays readable. Drag the window, or jump back to live. The docked map stays on the latest slice.
+- **Look**: **Spectral** or **Mono** shading, sweep speed, scan-light intensity, orbit, pan, zoom, auto-rotate, and reset. Auto-rotate is remembered.
+- **Mini Stat**: The docked deck shows the live model, turns, average turn time, time to first token, token and cache totals, tool health, code delta, sub-agents, and the terrain underneath. Expand it to the full Stats HUD, or pop Stats out into its own window.
+
+---
+
+### 5. Stats HUD
 
 ![Sparkmux Stats HUD](docs/stats-hud.png)
 
-- **Neural Cortex Synaptogenesis**: Radar sweep visualizing live synaptic firing and event bursts.
-- **Token Spectrum Gauge**: Live circular distribution breakdown of Input tokens, Output tokens, Cache Reads, and Reasoning tokens.
-- **Context Buffer & TTFT**: Real-time context window saturation gauge and Time-To-First-Token latency tracker.
-- **Code Delta Tracker**: Live count of additions and deletions (`+added / -removed lines`) across all active tools.
-- **Actions / Tools Matrix**: Latency benchmarks, call frequency, and status indicators per tool.
-- **Event Stream Log**: Filtered chronological audit log with live replay capability.
+**◈ Stats** opens a mission-control view of the focused pane. **Current Task** is this session. **Tab Cumulative** keeps the counters for the tab. The terrain itself always draws the active session.
+
+- **Neural telemetry**: A 3D synaptic view of user prompts, thinking blocks, model replies, and tool calls.
+- **Actions / Tools matrix**: Calls, average latency, and errors per tool.
+- **Subagents**: Tokens, tools, and last activity for Grok, Claude, and Antigravity children launched from this pane. Their work is included in the pane totals. A child's own prompt stays out of your prompt count and average turn time.
+- **Token Spectrum**: Cache, input, reasoning, and output over the session. **2D Stack**, **Burst**, and **Arc Gauge**. The same idle-gap fold as the Area Map.
+- **Session economy**: Cache-hit rate, estimated cost, average turn time, and lines added and removed.
+- **Event stream**: Filter by turns, tools, usage, or agents, and open a row to read the stored text.
+- **Recording** can be paused. **Purge Data** deletes captured telemetry for the tab. The CLI transcript stays on disk, and later activity is what counts next.
+- **Pop out** Stats into a separate window. Pin it to this tab, or let it follow whichever tab is active in the main window. Closing that window leaves Sparkmux and tmux running.
 
 ---
 
-### 4. Private & Isolated tmux Architecture
+### 6. Gits
 
-Enjoy the full power and reliability of tmux without configuration headaches or socket collisions.
+![Gits canvas and diff](docs/gits-canvas.png)
 
-![Sparkmux Desktop Terminal Workspace](docs/screenshot.png)
+**⬡ Gits** is a full-window view of the focused pane's repository and the edits in its current agent session. Close it from the header or with Escape. It can pop out the same way Stats can.
 
-- **Dedicated Server**: Runs strictly on `-L sparkmux` — never mutates, lists, or touches your personal tmux server.
-- **Persistent Sessions**: Closing or quitting the app **detaches** the client; your commands, builds, and agent runs stay alive in the background. Reopening Sparkmux reconnects instantly.
-- **Direct Control Mode**: Driven by `tmux -C` with `%output` and `send-keys -H` for instant terminal responsiveness without capture polling.
-- **Session Tree Sidebar**: Drag-to-resize sidebar with session, window, and pane hierarchy, activity pips, and one-click session creation.
+**Canvas** lays out changed files, git dirty files and agent edits together, with local dependency links.
 
----
+- **Layouts**: Auto-fit **Grid**, **Pipeline** (agent edits, modified, added, other), **Modules** (directory clusters), **Impact** (churn), and **Radial**. Pick the layout from the dropdown.
+- **Search** across paths, clusters, and file text. **⚡ DIFF** searches changed lines. **📄 FULL** searches the working copy. Matches are marked on the cards and in the diff.
+- **Diff**: Resizable split between the canvas and a unified or side-by-side diff. Open the file in your editor from the card.
 
-### 5. Visual Git Intelligence Canvas
+**Chronicle** is the session's edit timeline: a revision deck of each mutating step, churn, and a diff studio with hunk jumps, search, and copy. **● LIVE** returns to the newest step.
 
-Visualize git repository changes and agent edits on an interactive 2D/3D workspace canvas.
-
-![Visual Git Chain Graph and Split-Pane Diff Viewer](docs/gits-canvas.png)
-
-- **5 Adaptive Organization Layouts**:
-  - **Auto-Fit Grid**: Balanced responsive grid fitting your current window.
-  - **Pipeline Kanban**: Stage columns (Agent Edits &rarr; Modified &rarr; Added &rarr; Other).
-  - **Architectural Modules**: Directory hierarchy clusters with folder badges.
-  - **Impact Churn**: Waterfall prioritized by churn lines and AI edit weight.
-  - **Radial Constellation**: Sci-fi orbiting rings with radiating guides.
-- **Unified Text Search**: Search file paths, repo clusters, and diff contents with highlighted `<mark>` badges.
-- **Inline Split-Pane Diff Viewer**: Resizable 50% split view supporting synchronized Side-by-Side and Unified diffs.
-- **Touch & Gesture Physics**: Smooth multi-touch pinch-to-zoom and vertical zoom dial (35% to 200%).
+**History** is the git log for the repo: commits, branch, changed-file tree, and a unified or side-by-side diff. After you commit, Gits still shows that commit's files when the worktree is clean.
 
 ---
 
@@ -151,46 +163,62 @@ Visualize git repository changes and agent edits on an interactive 2D/3D workspa
 ```mermaid
 flowchart TD
     subgraph UI ["Sparkmux Desktop (Tauri 2 + React)"]
-        Sidebar["Session & Pane Hierarchy"]
-        Terminals["Tiled xterm.js Panes (window_layout)"]
-        Drawer["AI Agent Follower Drawer"]
-        Terrain["WebGL2 3D Area Map & HUD"]
-        Gits["Git Intelligence Canvas"]
+        Sidebar["Sessions, tabs, Agents board"]
+        Terminals["Tiled xterm.js panes"]
+        Prompts["Your Prompts"]
+        Mini["Mini Stat and Area Map"]
+        Stats["Stats HUD"]
+        Gits["Gits: Canvas, Chronicle, History"]
     end
 
-    subgraph Core ["crates/sparkmux-core (Rust)"]
-        Client["tmux -C Control Client"]
-        LayoutParser["window_layout Parser"]
-        Follower["Transcript Follower (ingest.rs)"]
+    subgraph Desktop ["apps/desktop (Rust)"]
+        Follower["Read-only transcript follower"]
+        Usage["Allowance, cost, and process telemetry"]
     end
 
-    subgraph TmuxServer ["Private Server (-L sparkmux)"]
-        TmuxD["tmux server daemon"]
-        Panes["PTY Panes / Shells / Agent CLI"]
+    subgraph Core ["sparkmux-core"]
+        Client["tmux -C control client"]
+        LayoutParser["window_layout parser"]
     end
 
-    subgraph Agents ["AI Agent Stores (Read-Only)"]
-        AGY["~/.gemini/antigravity-cli"]
-        Claude["~/.claude"]
+    subgraph TmuxServer ["Private server (-L sparkmux)"]
+        TmuxD["tmux server"]
+        Panes["Shells and agent CLIs"]
+    end
+
+    subgraph Agents ["Agent stores on this machine"]
         Grok["~/.grok"]
+        Claude["~/.claude"]
+        AGY["~/.gemini/antigravity-cli"]
     end
 
-    UI <-->|"Tauri IPC Events & Channels"| Core
-    Core <-->|"Control Protocol %output / send-keys"| TmuxServer
-    Agents -.->|"Read-only file follower"| Follower
+    UI <-->|"Tauri commands"| Desktop
+    Desktop <--> Core
+    Core <-->|"%output / send-keys -H"| TmuxServer
+    Agents -.->|"Read-only"| Follower
 ```
+
+All tmux I/O goes through `sparkmux-core`. The desktop app does not spawn `tmux` on its own.
 
 ---
 
 ## 🚀 Quick Install
 
+Sparkmux ships for **Apple Silicon macOS** and **ARM64 Linux** (DGX Spark / Ubuntu 24.04). It needs **tmux 3.2+**.
+
 ### One-Line Install (macOS & ARM64 Linux)
 
-Installs `tmux 3.2+` if missing or outdated, then installs the latest [GitHub Release](https://github.com/darrenkoh/sparkmux/releases):
+Installs tmux 3.2+ when it is missing or older, then installs the latest [GitHub Release](https://github.com/darrenkoh/sparkmux/releases):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/darrenkoh/sparkmux/main/scripts/install.sh | bash
 ```
+
+| Flag | Effect |
+|---|---|
+| `--from-source` | Build with Rust and npm instead of downloading a release |
+| `--skip-tmux` | Leave tmux installation to you |
+| `--prefix DIR` | Linux user-install prefix (default `~/.local`) |
 
 ### macOS (Apple Silicon)
 
@@ -199,8 +227,8 @@ curl -fsSL https://raw.githubusercontent.com/darrenkoh/sparkmux/main/scripts/ins
    brew install tmux
    ```
 2. Download the latest `.dmg` from [Releases](https://github.com/darrenkoh/sparkmux/releases).
-3. Open the disk image and drag **Sparkmux.app** to your `Applications` folder.
-4. **First Launch**: Right-click `Sparkmux.app` &rarr; select **Open** &rarr; click **Open** in the gatekeeper dialog.
+3. Open the disk image and drag **Sparkmux.app** to `Applications`.
+4. **First launch**: Right-click `Sparkmux.app` → **Open** → **Open** in the Gatekeeper dialog. Release builds are unsigned.
 
 ### Linux (ARM64 / DGX Spark / Ubuntu 24.04)
 
@@ -208,58 +236,68 @@ curl -fsSL https://raw.githubusercontent.com/darrenkoh/sparkmux/main/scripts/ins
    ```bash
    sudo apt-get update && sudo apt-get install -y tmux
    ```
-2. Download the `.deb` asset from [Releases](https://github.com/darrenkoh/sparkmux/releases) and install:
+2. Download the `.deb` from [Releases](https://github.com/darrenkoh/sparkmux/releases) and install:
    ```bash
    sudo dpkg -i sparkmux-desktop_*.deb
    ```
-3. Launch `sparkmux-desktop` from your app launcher or terminal.
+   Without passwordless `sudo`, the installer places `sparkmux-desktop` under `~/.local/bin` (or `--prefix`).
+3. Launch `sparkmux-desktop` from your app launcher or a terminal.
 
 ### Build from Source
 
-Requirements: **Rust 1.88+**, **Node.js 18+**, **pnpm**, **tmux 3.2+** (and WebKitGTK on Linux).
+Requirements: **Rust 1.88+**, **Node.js 20.19+ or 22.12+** with npm, **tmux 3.2+**. Linux also needs WebKitGTK (`libwebkit2gtk-4.1-dev` and GTK 3).
 
 ```bash
-# 1. Clone repository
 git clone https://github.com/darrenkoh/sparkmux.git
 cd sparkmux
-
-# 2. Run automated installer with build flags
 ./scripts/install.sh --from-source
-
-# Or run the desktop dev loop directly:
-cd apps/desktop
-pnpm install
-pnpm run tauri dev
 ```
 
+Developer loop, from `apps/desktop` (the repo root has no `package.json`):
+
+```bash
+cd apps/desktop
+npm install
+npm run tauri dev
+```
+
+Release bundles: `npm run tauri build` in `apps/desktop`. Output is under the workspace `target/release/bundle`.
+
 > [!TIP]
-> **macOS Build Note**: If compilation fails with *"You have not agreed to the Xcode license"*, point Cargo at the Command Line Tools:
+> **macOS build note**: If compilation fails with *"You have not agreed to the Xcode license"*, point Cargo at the Command Line Tools:
 > ```bash
 > export DEVELOPER_DIR=/Library/Developer/CommandLineTools
 > ```
+
+### Updates
+
+A packaged build checks GitHub Releases on launch and offers **Later** or **Update Now**. **Update Now** downloads the signed release, installs it, and relaunches. The tmux server stays up. You can also use **Check for Updates…** in the Sparkmux menu on macOS, or in Help on Linux.
 
 ---
 
 ## 💻 CLI Reference
 
-`sparkmux` includes a standalone diagnostic and automation CLI:
+`sparkmux` is a small diagnostic CLI. The desktop app is the product UI.
 
 ```bash
-# View diagnostic information, tmux version, and socket path
+# Socket, tmux version, and session status
 sparkmux doctor
 
-# Dump full session/window/pane hierarchy tree as JSON
+# Session, window, and pane tree as JSON
 sparkmux dump
 
-# Show sparkmux version and detected tmux binary
+# sparkmux version and the detected tmux binary
 sparkmux version
 
-# Inspect the user's default system tmux server (-L default)
+# Inspect the default tmux server (-L default). The desktop app stays on -L sparkmux.
 sparkmux --system dump
 
-# Target a custom socket
+# Another socket name, or an explicit socket path
 sparkmux -L my-socket dump
+sparkmux -S /tmp/my.sock doctor
 ```
+
+`SPARKMUX_TMUX` or `--tmux-bin` selects the tmux binary. `--config` selects a config file.
 
 ---
 
@@ -267,35 +305,58 @@ sparkmux -L my-socket dump
 
 | Shortcut | Context | Action |
 |---|---|---|
-| <kbd>⌘</kbd> + <kbd>T</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd> | Global | Create new window in current session |
-| <kbd>⌘</kbd> + <kbd>V</kbd> / <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd> | Terminal | Paste clipboard content to focused pane |
-| <kbd>Ctrl</kbd> + <kbd>C</kbd> | Terminal | Send interrupt signal to focused pane |
-| <kbd>Left Click + Drag</kbd> | 3D Area Map | Orbit camera angle |
-| <kbd>Right Click + Drag</kbd> | 3D Area Map | Pan camera across terrain |
-| <kbd>Scroll Wheel</kbd> / <kbd>Pinch</kbd> | 3D Area Map | Zoom in / out |
-| <kbd>Double Click</kbd> | 3D Area Map | Reset camera to default perspective |
+| <kbd>⌘</kbd><kbd>N</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>N</kbd> | Global | New session |
+| <kbd>⌘</kbd><kbd>T</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>T</kbd> | Global | New tab in the current session |
+| <kbd>⌘</kbd><kbd>W</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>W</kbd> | Global | Close the current tab (asks first) |
+| Double-click | Tab or session | Rename |
+| Click the session name | Sidebar | Attach, and expand or collapse its tabs |
+| <kbd>⌘</kbd><kbd>C</kbd> | Terminal | Copy the selection, or send interrupt when nothing is selected |
+| <kbd>⌘</kbd><kbd>V</kbd> / <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>V</kbd> | Terminal | Paste into the focused pane |
+| <kbd>⌘</kbd><kbd>F</kbd> / <kbd>Ctrl</kbd><kbd>F</kbd> | Terminal | Find in pane scrollback |
+| Drop a file or folder | Terminal pane | Paste its path. You press Enter |
+| <kbd>⌘</kbd><kbd>=</kbd> <kbd>⌘</kbd><kbd>-</kbd> <kbd>⌘</kbd><kbd>0</kbd> | Global | Bigger text, smaller text, actual size |
+| <kbd>Ctrl</kbd><kbd>=</kbd> <kbd>Ctrl</kbd><kbd>-</kbd> <kbd>Ctrl</kbd><kbd>0</kbd> | Linux | Same text-size commands |
+| <kbd>⌘</kbd><kbd>Shift</kbd><kbd>/</kbd> / <kbd>F1</kbd> | Global | Sparkmux Help |
+| <kbd>⌘</kbd><kbd>Q</kbd> | macOS | Quit. Detaches only. The server stays up |
+| Left-drag / right-drag | Area Map | Orbit / pan |
+| Scroll or pinch | Area Map | Zoom |
+| Double-click | Area Map | Reset the camera |
+| <kbd>Esc</kbd> | Stats, Gits, dialogs | Close |
+
+On Linux, Quit is in the File menu. Prefix keys are available when you `tmux -L sparkmux attach` from another terminal. Sparkmux does not emulate the tmux prefix inside the panes.
 
 ---
 
 ## ⚙️ Configuration
 
-Configuration is automatically read from:
+Sparkmux reads:
+
 - **macOS**: `~/Library/Application Support/sparkmux/config.toml`
 - **Linux**: `~/.config/sparkmux/config.toml`
 
+A flag wins over the environment, which wins over the file. `SPARKMUX_TMUX` overrides `tmux_bin`.
+
 ```toml
-# Path to specific tmux binary (defaults to searching PATH)
+# tmux binary. Empty searches PATH, then Homebrew and system locations.
 tmux_bin = ""
 
-# Socket name for the private server
+# Private server socket (tmux -L). The desktop app uses this socket.
 socket_name = "sparkmux"
 
-# Refresh and poll rate for session state in milliseconds
+# Optional explicit socket path (tmux -S). Empty uses socket_name.
+socket_path = ""
+
+# Session-tree refresh interval, in milliseconds.
 refresh_ms = 1000
 
-# Default initial session name
+# Created on a cold start when the server has no sessions.
 default_session = "main"
+
+# Last session you attached. Sparkmux writes this when you switch.
+last_session = ""
 ```
+
+A session you name from **New Session** is created under that name.
 
 ---
 

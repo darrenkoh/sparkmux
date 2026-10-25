@@ -178,3 +178,27 @@ export function estimateTotalCost(
   );
 }
 
+/**
+ * Calculates estimated dollar savings from prompt caching
+ * (cost of cache reads at uncached input pricing minus actual cache read cost).
+ */
+export function estimateCostSavings(
+  models: ModelUsageTokens[] | undefined,
+  fallbackModel: string | undefined,
+  totalCacheReadTokens: number,
+): number {
+  if (models && models.length > 0) {
+    let savings = 0;
+    for (const m of models) {
+      const { inRate, cacheReadRate } = getModelPricing(m.model);
+      const discount = Math.max(0, inRate - cacheReadRate);
+      savings += (Math.max(0, m.cache_read_tokens) / 1_000_000) * discount;
+    }
+    return savings;
+  }
+  const { inRate, cacheReadRate } = getModelPricing(fallbackModel);
+  const discount = Math.max(0, inRate - cacheReadRate);
+  return (Math.max(0, totalCacheReadTokens) / 1_000_000) * discount;
+}
+
+

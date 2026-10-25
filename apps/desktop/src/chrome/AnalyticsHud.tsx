@@ -17,6 +17,7 @@ import {
   formatUsd,
   estimateCost,
   estimateTotalCost,
+  estimateCostSavings,
 } from "./analyticsFormat";
 import TerrainViewport from "./TerrainViewport";
 import TokenSpectrumChart from "./TokenSpectrumChart";
@@ -37,7 +38,7 @@ export interface AnalyticsHudProps {
   onTogglePin?: () => void;
 }
 
-export { formatBytes, formatNum, formatMs, formatUsd, estimateCost, estimateTotalCost };
+export { formatBytes, formatNum, formatMs, formatUsd, estimateCost, estimateTotalCost, estimateCostSavings };
 
 const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
 const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
@@ -840,7 +841,31 @@ export default function AnalyticsHud({
     st?.total_cache_read_tokens ?? 0,
     st?.total_cache_write_tokens ?? 0,
   );
+  const estSavings = estimateCostSavings(
+    st?.models,
+    st?.active_model,
+    st?.total_cache_read_tokens ?? 0,
+  );
   const netDiff = (st?.lines_added ?? 0) - (st?.lines_removed ?? 0);
+  const totalEdits = (st?.lines_added ?? 0) + (st?.lines_removed ?? 0);
+  const addRatio = totalEdits > 0 ? ((st?.lines_added ?? 0) / totalEdits) * 100 : 50;
+
+  const contextTokens = st?.context_tokens_used ?? 0;
+  const contextWindow = st?.context_window_tokens ?? 200_000;
+  const contextUsagePct =
+    contextWindow > 0 ? Math.min(100, Math.max(0, (contextTokens / contextWindow) * 100)) : 0;
+
+  const ttftMs = st?.ttft_ms ?? 0;
+  const avgTurnMs = st?.avg_turn_duration_ms ?? 0;
+  const maxTurnMs = st?.max_turn_duration_ms ?? 0;
+  const turnCount = st?.turn_count ?? 0;
+  const totalTurnDurationSec = (st?.total_turn_duration_ms ?? 0) / 1000;
+  const outputTokensPerSec =
+    totalTurnDurationSec > 0 && (st?.total_output_tokens ?? 0) > 0
+      ? Math.round((st?.total_output_tokens ?? 0) / totalTurnDurationSec)
+      : 0;
+  const editVelocity =
+    turnCount > 0 ? (totalEdits / turnCount).toFixed(1) : totalEdits > 0 ? `${totalEdits}` : "0";
   const subagents = st?.subagents ?? [];
   const subagentTokens = subagents.reduce(
     (sum, row) => sum + (row.input_tokens ?? 0) + (row.output_tokens ?? 0),
@@ -1268,39 +1293,103 @@ export default function AnalyticsHud({
                 <header>
                   <span className="tag">05</span>
                   <span>CACHE EFFICIENCY & CODE DELTA</span>
-                  <small>SESSION ECONOMY</small>
+                  <small>SESSION ECONOMY · {turnCount} TURNS</small>
                 </header>
                 <div className="body context-body">
-                  <div
-                    className="context-meter"
-                    title={`Context Utilization: ${formatNum(st?.context_tokens_used ?? 0)} / ${formatNum(st?.context_window_tokens ?? 200_000)} tokens`}
-                  >
-                    <div className="meter-label">
-                      <span>CACHE HIT EFFICIENCY</span>
-                      <span style={{ color: "#3dd68c", fontWeight: 600 }}>
-                        {cacheHitRate.toFixed(1)}% ({formatNum(st?.total_cache_read_tokens ?? 0)} CACHED)
-                      </span>
+                  <div className="meters-group">
+                    <div
+                      className="context-meter"
+                      title={`Prompt Cache: ${formatNum(st?.total_cache_read_tokens ?? 0)} tokens read · ${formatNum(st?.total_cache_write_tokens ?? 0)} tokens written (${cacheHitRate.toFixed(1)}% hit rate across ${formatNum(promptTokens)} prompt tokens)`}
+                    >
+                      <div className="meter-label">
+                        <span>CACHE HIT EFFICIENCY</span>
+                        <span style={{ color: "#3dd68c", fontWeight: 600 }}>
+                          {cacheHitRate.toFixed(1)}%
+                          <span className="meter-subtext">
+                            ({formatNum(st?.total_cache_read_tokens ?? 0)} READ · {formatNum(st?.total_cache_write_tokens ?? 0)} WROTE)
+                          </span>
+                        </span>
+                      </div>
+                      <div className="meter-bar">
+                        <div
+                          className="meter-fill cache-fill"
+                          style={{
+                            width: `${Math.min(100, Math.max(0, cacheHitRate))}%`,
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="meter-bar">
-                      <div
-                        className="meter-fill cache-fill"
-                        style={{
-                          width: `${Math.min(100, Math.max(0, cacheHitRate))}%`,
-                        }}
-                      />
+
+                    <div
+                      className="context-meter"
+                      title={`Context Buffer Utilization: ${formatNum(contextTokens)} / ${formatNum(contextWindow)} tokens (${contextUsagePct.toFixed(1)}%). Remaining headroom: ${formatNum(Math.max(0, contextWindow - contextTokens))} tokens.`}
+                    >
+                      <div className="meter-label">
+                        <span>CONTEXT CAPACITY</span>
+                        <span
+                          style={{
+                            color:
+                              contextUsagePct > 85 ? "#f87171" : contextUsagePct > 70 ? "#facc15" : "#38bdf8",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {contextUsagePct.toFixed(1)}%
+                          <span className="meter-subtext">
+                            ({formatNum(contextTokens)} / {formatNum(contextWindow)})
+                          </span>
+                        </span>
+                      </div>
+                      <div className="meter-bar">
+                        <div
+                          className={`meter-fill ${
+                            contextUsagePct > 85
+                              ? "context-fill-alert"
+                              : contextUsagePct > 70
+                                ? "context-fill-warn"
+                                : "context-fill"
+                          }`}
+                          style={{
+                            width: `${contextUsagePct}%`,
+                          }}
+                        />
+                      </div>
                     </div>
                   </div>
 
                   <div className="kpis-sub">
-                    <div title="Estimated session cost based on input, output & cached token rates">
-                      <small>EST. COST</small>
-                      <b style={{ color: "#facc15" }}>{formatUsd(estCost)}</b>
+                    <div title={`Session Cost: ${formatUsd(estCost)} · Cache Savings: ${formatUsd(estSavings)}`}>
+                      <small>EST. COST / SAVED</small>
+                      <div className="kpi-value-row">
+                        <b style={{ color: "#facc15" }}>{formatUsd(estCost)}</b>
+                        {estSavings > 0 && (
+                          <span className="savings-badge" title={`Saved ${formatUsd(estSavings)} via prompt cache hits`}>
+                            +{formatUsd(estSavings)}
+                          </span>
+                        )}
+                      </div>
+                      <span className="kpi-sub-detail">
+                        {st?.total_cache_read_tokens
+                          ? `${((estSavings / Math.max(0.001, estCost + estSavings)) * 100).toFixed(0)}% saved via cache`
+                          : "Uncached baseline"}
+                      </span>
                     </div>
-                    <div title="Average duration per interaction turn">
-                      <small>AVG TURN TIME</small>
-                      <b>{formatMs(st?.avg_turn_duration_ms ?? 0)}</b>
+
+                    <div title={`TTFT: ${formatMs(ttftMs)} · Avg turn: ${formatMs(avgTurnMs)} · Max turn: ${formatMs(maxTurnMs)} · Velocity: ${outputTokensPerSec > 0 ? `${outputTokensPerSec} tok/s` : "n/a"}`}>
+                      <small>TTFT & TURN TIME</small>
+                      <div className="kpi-value-row">
+                        <b>{formatMs(avgTurnMs)}</b>
+                        {ttftMs > 0 && (
+                          <span className="ttft-badge" title={`Time To First Token: ${formatMs(ttftMs)}`}>
+                            TTFT {formatMs(ttftMs)}
+                          </span>
+                        )}
+                      </div>
+                      <span className="kpi-sub-detail">
+                        MAX {formatMs(maxTurnMs)} {outputTokensPerSec > 0 ? `· ${outputTokensPerSec} tok/s` : ""}
+                      </span>
                     </div>
-                    <div title="Lines added & removed across tool file write/patch operations">
+
+                    <div title={`Lines added: ${st?.lines_added ?? 0} · Lines removed: ${st?.lines_removed ?? 0} · Net: ${netDiff >= 0 ? `+${netDiff}` : netDiff} · Churn: ${totalEdits} lines across ${turnCount} turns (${editVelocity} l/turn)`}>
                       <small>TOOL FILE EDITS</small>
                       <b style={{ color: "#3dd68c" }}>
                         +{st?.lines_added ?? 0} / -{st?.lines_removed ?? 0}
@@ -1308,6 +1397,15 @@ export default function AnalyticsHud({
                           ({netDiff >= 0 ? `+${netDiff}` : netDiff} net)
                         </span>
                       </b>
+                      {totalEdits > 0 ? (
+                        <div className="diff-bar" title={`Additions: ${addRatio.toFixed(0)}% · Deletions: ${(100 - addRatio).toFixed(0)}%`}>
+                          <div className="diff-bar-add" style={{ width: `${addRatio}%` }} />
+                          <div className="diff-bar-del" style={{ width: `${100 - addRatio}%` }} />
+                        </div>
+                      ) : null}
+                      <span className="kpi-sub-detail">
+                        CHURN {totalEdits} lines · {editVelocity} l/turn
+                      </span>
                     </div>
                   </div>
                 </div>

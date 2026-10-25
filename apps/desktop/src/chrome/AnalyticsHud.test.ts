@@ -9,6 +9,7 @@ import {
   formatUsd,
   estimateCost,
   estimateTotalCost,
+  estimateCostSavings,
   getModelPricing,
 } from "./analyticsFormat.ts";
 
@@ -98,4 +99,23 @@ test("estimateCost accurately calculates Grok 4.7 pricing matching /usage ticks"
   assert.equal(pricing46.outRate, 4.08);
   assert.equal(pricing46.cacheReadRate, 0.34);
 });
+
+test("estimateCostSavings computes prompt caching discount correctly", () => {
+  // Claude 3.5 Sonnet: inRate $3.00, cacheReadRate $0.30 -> discount is $2.70 per 1M tokens
+  const savings = estimateCostSavings(undefined, "claude-3-5-sonnet", 1_000_000);
+  assert.ok(Math.abs(savings - 2.70) < 0.0001);
+
+  // With explicit models array: Haiku 4.5 inRate $1.00, cacheRead $0.10 -> discount is $0.90 per 1M tokens
+  const models = [
+    {
+      model: "claude-haiku-4-5",
+      input_tokens: 1000,
+      output_tokens: 500,
+      cache_read_tokens: 2_000_000,
+    },
+  ];
+  const modelSavings = estimateCostSavings(models, undefined, 0);
+  assert.ok(Math.abs(modelSavings - 1.80) < 0.0001);
+});
+
 
