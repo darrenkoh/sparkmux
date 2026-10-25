@@ -79,8 +79,8 @@ export default function XtermView({
   const paneColsRef = useRef(paneCols);
   const paneRowsRef = useRef(paneRows);
   const doFitRef = useRef<() => void>(() => {});
-  const redrawCaretRef = useRef<() => void>(() => {});
-  const syncTmuxCursorRef = useRef<() => void>(() => {});
+  const redrawCaretRef = useRef<(forceBottom?: boolean) => void>(() => {});
+  const syncTmuxCursorRef = useRef<(forceBottom?: boolean) => void>(() => {});
   const restoreMouseRef = useRef<() => void>(() => {});
   const findOpenRef = useRef(false);
   const findRef = useRef<HTMLInputElement>(null);
@@ -188,6 +188,32 @@ export default function XtermView({
       showCaret(term, forceBottom);
     };
 
+    const scrollCursorIntoView = (row: number, col = 0) => {
+      const host = hostRef.current;
+      const live = termRef.current;
+      if (!host || !live) return;
+      const { width: cellW, height: cellH } = cellSize(live);
+      if (cellH <= 0) return;
+      const targetTop = row * cellH;
+      const maxRow = Math.min(live.rows, row + 4);
+      const targetBottom = maxRow * cellH;
+      const viewH = host.clientHeight;
+      if (targetTop < host.scrollTop) {
+        host.scrollTop = targetTop;
+      } else if (targetBottom > host.scrollTop + viewH) {
+        host.scrollTop = Math.max(0, targetBottom - viewH + 4);
+      }
+      if (cellW > 0) {
+        const targetLeft = col * cellW;
+        const viewW = host.clientWidth;
+        if (targetLeft < host.scrollLeft) {
+          host.scrollLeft = targetLeft;
+        } else if (targetLeft + cellW > host.scrollLeft + viewW) {
+          host.scrollLeft = Math.max(0, targetLeft + cellW - viewW + 8);
+        }
+      }
+    };
+
     const syncTmuxCursor = (forceBottom = false) => {
       if (applyingSeed) return;
       void paneCursor(paneId)
@@ -197,6 +223,7 @@ export default function XtermView({
           if (!live) return;
           live.write(cursorCup(pos.y, pos.x), () => {
             showCaret(live, forceBottom);
+            scrollCursorIntoView(pos.y, pos.x);
           });
         })
         .catch(() => {
@@ -556,8 +583,8 @@ export default function XtermView({
   useEffect(() => {
     if (focused && !findOpen) {
       termRef.current?.focus();
-      redrawCaretRef.current();
-      syncTmuxCursorRef.current();
+      redrawCaretRef.current(true);
+      syncTmuxCursorRef.current(true);
     }
   }, [focused, findOpen]);
 

@@ -722,8 +722,7 @@ body.is-resizing * {
   min-width: 0;
   position: relative;
   height: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto;
 }
 
 .artifact-panel {
@@ -1844,13 +1843,33 @@ body.is-resizing * {
 .xterm-host {
   position: absolute;
   inset: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto;
   background: var(--bg);
+  scrollbar-width: thin;
+  scrollbar-color: #2a2f3a transparent;
+}
+
+.xterm-host::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.xterm-host::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.xterm-host::-webkit-scrollbar-thumb {
+  background: #2a2f3a;
+  border-radius: 3px;
+}
+
+.xterm-host::-webkit-scrollbar-thumb:hover {
+  background: #3f4756;
 }
 
 .xterm-host .xterm {
-  height: 100% !important;
+  min-height: 100%;
+  height: max-content !important;
   min-width: 100%;
   width: max-content !important;
   padding: 0 !important;
