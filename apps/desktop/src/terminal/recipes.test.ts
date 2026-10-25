@@ -43,6 +43,30 @@ test("find quotes the name so the shell does not expand a star", () => {
   assert.equal(recipeCommand("find-name", folder, "a\nb"), null);
 });
 
+test("listing, counts, recent files, and git use the pane folder", () => {
+  assert.equal(recipeCommand("list-folder", folder, ""), `ls -lah '${folder}'`);
+  assert.equal(recipeCommand("file-count", folder, ""), `find '${folder}' -type f | wc -l`);
+  assert.equal(
+    recipeCommand("changed-today", folder, ""),
+    `find '${folder}' -type f -mtime -1`,
+  );
+  assert.equal(recipeCommand("git-status", folder, ""), `git -C '${folder}' status -sb`);
+  assert.equal(recipeCommand("git-diff", ".", ""), "git -C . diff --stat");
+  assert.equal(
+    recipeCommand("find-iname", folder, "*.LOG"),
+    `find '${folder}' -iname '*.LOG'`,
+  );
+  assert.equal(
+    recipeCommand("grep-text-i", folder, "Todo"),
+    `grep -R -n -F -i -- 'Todo' '${folder}'`,
+  );
+  assert.equal(recipeCommand("find-iname", folder, ""), null);
+  assert.equal(
+    recipeProblem(recipeById("find-iname")!, folder, ""),
+    "Type a name.",
+  );
+});
+
 test("text search is a fixed-string grep", () => {
   assert.equal(
     recipeCommand("grep-text", folder, "TODO"),

@@ -5,8 +5,15 @@ export type RecipeId =
   | "folder-size"
   | "folder-usage"
   | "free-space"
+  | "list-folder"
+  | "file-count"
+  | "changed-today"
   | "find-name"
-  | "grep-text";
+  | "find-iname"
+  | "grep-text"
+  | "grep-text-i"
+  | "git-status"
+  | "git-diff";
 
 export interface Recipe {
   id: RecipeId;
@@ -43,9 +50,41 @@ export const RECIPES: readonly Recipe[] = [
     patternPlaceholder: "",
   },
   {
+    id: "list-folder",
+    label: "List this folder",
+    hint: "Names, sizes, and hidden files",
+    needsPattern: false,
+    patternLabel: "",
+    patternPlaceholder: "",
+  },
+  {
+    id: "file-count",
+    label: "How many files",
+    hint: "Count the files under this folder",
+    needsPattern: false,
+    patternLabel: "",
+    patternPlaceholder: "",
+  },
+  {
+    id: "changed-today",
+    label: "Files changed today",
+    hint: "Files modified in the last day",
+    needsPattern: false,
+    patternLabel: "",
+    patternPlaceholder: "",
+  },
+  {
     id: "find-name",
     label: "Files by name",
     hint: "Find files whose name matches",
+    needsPattern: true,
+    patternLabel: "Name",
+    patternPlaceholder: "*.log",
+  },
+  {
+    id: "find-iname",
+    label: "Name, ignoring case",
+    hint: "Find files by name, upper or lower case",
     needsPattern: true,
     patternLabel: "Name",
     patternPlaceholder: "*.log",
@@ -57,6 +96,30 @@ export const RECIPES: readonly Recipe[] = [
     needsPattern: true,
     patternLabel: "Text",
     patternPlaceholder: "TODO",
+  },
+  {
+    id: "grep-text-i",
+    label: "Text, ignoring case",
+    hint: "Find lines that contain this text, in any case",
+    needsPattern: true,
+    patternLabel: "Text",
+    patternPlaceholder: "TODO",
+  },
+  {
+    id: "git-status",
+    label: "Git status",
+    hint: "Short status of the repo that holds this folder",
+    needsPattern: false,
+    patternLabel: "",
+    patternPlaceholder: "",
+  },
+  {
+    id: "git-diff",
+    label: "Git diff",
+    hint: "Summary of uncommitted changes",
+    needsPattern: false,
+    patternLabel: "",
+    patternPlaceholder: "",
   },
 ];
 
@@ -106,7 +169,7 @@ export function recipeProblem(
   if (hasControl(folder)) return "This folder path cannot go into a command.";
   if (!recipe.needsPattern) return null;
   if (!pattern.trim()) {
-    return recipe.id === "find-name" ? "Type a name." : "Type the text to find.";
+    return recipe.patternLabel === "Name" ? "Type a name." : "Type the text to find.";
   }
   if (hasControl(pattern)) return "That text cannot go into a command.";
   return null;
@@ -124,7 +187,14 @@ export function recipeCommand(
   if (id === "folder-size") return `du -sh ${dir}`;
   if (id === "folder-usage") return `du -hd 1 ${dir}`;
   if (id === "free-space") return `df -h ${dir}`;
+  if (id === "list-folder") return `ls -lah ${dir}`;
+  if (id === "file-count") return `find ${dir} -type f | wc -l`;
+  if (id === "changed-today") return `find ${dir} -type f -mtime -1`;
+  if (id === "git-status") return `git -C ${dir} status -sb`;
+  if (id === "git-diff") return `git -C ${dir} diff --stat`;
   const quoted = shellQuote(pattern.trim());
   if (id === "find-name") return `find ${dir} -name ${quoted}`;
-  return `grep -R -n -F -- ${quoted} ${dir}`;
+  if (id === "find-iname") return `find ${dir} -iname ${quoted}`;
+  if (id === "grep-text") return `grep -R -n -F -- ${quoted} ${dir}`;
+  return `grep -R -n -F -i -- ${quoted} ${dir}`;
 }
