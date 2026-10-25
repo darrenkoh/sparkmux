@@ -103,7 +103,8 @@ struct RunningWeb {
     shutdown: tokio::sync::watch::Sender<bool>,
     task: tokio::task::JoinHandle<Result<(), String>>,
     urls: Vec<String>,
-    state: Arc<AppState>,
+    state: AppState,
+    is_headless: bool,
 }
 
 /// Desktop menu start/stop. Headless `sparkmux serve` does not use this slot.
@@ -120,12 +121,16 @@ impl Default for WebServeSlot {
 }
 
 impl WebServeSlot {
-    pub async fn start(&self, opts: ServeOptions) -> Result<WebServeStatus, String> {
+    pub async fn start(
+        &self,
+        state: AppState,
+        opts: ServeOptions,
+    ) -> Result<WebServeStatus, String> {
         let mut guard = self.current.lock().await;
         if let Some(running) = guard.as_ref() {
             return Ok(serve_status(true, running.urls.clone()));
         }
-        let running = open_web(opts).await?;
+        let running = open_web(state, opts, false).await?;
         let urls = running.urls.clone();
         *guard = Some(running);
         Ok(serve_status(true, urls))
@@ -142,12 +147,16 @@ impl WebServeSlot {
         Ok(serve_status(false, Vec::new()))
     }
 
-    pub async fn toggle(&self, opts: ServeOptions) -> Result<WebServeStatus, String> {
+    pub async fn toggle(
+        &self,
+        state: AppState,
+        opts: ServeOptions,
+    ) -> Result<WebServeStatus, String> {
         let already = self.current.lock().await.is_some();
         if already {
             self.stop().await
         } else {
-            self.start(opts).await
+            self.start(state, opts).await
         }
     }
 }
@@ -163,9 +172,12 @@ fn menu_serve_options() -> ServeOptions {
 #[tauri::command]
 pub async fn web_serve_toggle(
     app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
     slot: tauri::State<'_, WebServeSlot>,
 ) -> Result<WebServeStatus, String> {
-    let status = slot.toggle(menu_serve_options()).await?;
+    let status = slot
+        .toggle(state.inner().clone(), menu_serve_options())
+        .await?;
     set_web_menu_label(&app, status.running);
     Ok(status)
 }
@@ -316,7 +328,8 @@ pub fn write_pairing_banner(urls: &[String]) {
 }
 
 pub async fn serve(opts: ServeOptions) -> Result<(), String> {
-    let running = open_web(opts).await?;
+    let state = AppState::new();
+    let running = open_web(state, opts, true).await?;
     write_pairing_banner(&running.urls);
     match running.task.await {
         Ok(result) => result,
@@ -324,7 +337,11 @@ pub async fn serve(opts: ServeOptions) -> Result<(), String> {
     }
 }
 
-async fn open_web(opts: ServeOptions) -> Result<RunningWeb, String> {
+async fn open_web(
+    state: AppState,
+    opts: ServeOptions,
+    is_headless: bool,
+) -> Result<RunningWeb, String> {
     let token = resolve_token(opts.token.clone())?;
     let addr: SocketAddr = format!("{}:{}", opts.bind, opts.port)
         .parse()
@@ -341,9 +358,8 @@ async fn open_web(opts: ServeOptions) -> Result<RunningWeb, String> {
         Vec::new()
     };
     let urls = collect_pairing_urls(&opts.bind, bound.port(), &token, &extras);
-    let state = Arc::new(AppState::new());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let task_state = Arc::clone(&state);
+    let task_state = Arc::new(state.clone());
     let task = tokio::spawn(async move {
         let result = run_web_server(task_state, listener, token, shutdown_rx).await;
         if let Err(err) = &result {
@@ -356,13 +372,17 @@ async fn open_web(opts: ServeOptions) -> Result<RunningWeb, String> {
         task,
         urls,
         state,
+        is_headless,
     })
 }
 
 async fn shutdown_web(running: RunningWeb) {
     let _ = running.shutdown.send(true);
     let RunningWeb {
-        mut task, state, ..
+        mut task,
+        state,
+        is_headless,
+        ..
     } = running;
     tokio::select! {
         _ = &mut task => {}
@@ -371,7 +391,9 @@ async fn shutdown_web(running: RunningWeb) {
             let _ = task.await;
         }
     }
-    let _ = control::disconnect_core(&state).await;
+    if is_headless {
+        let _ = control::disconnect_core(&state).await;
+    }
 }
 
 fn print_qr(url: &str) {
@@ -1153,12 +1175,16 @@ mod tests {
     #[tokio::test]
     async fn the_menu_server_starts_and_stops_without_stopping_tmux() {
         let slot = WebServeSlot::default();
+        let state = AppState::new();
         let started = slot
-            .start(ServeOptions {
-                bind: "127.0.0.1".into(),
-                port: 0,
-                token: Some("menu-test-token".into()),
-            })
+            .start(
+                state,
+                ServeOptions {
+                    bind: "127.0.0.1".into(),
+                    port: 0,
+                    token: Some("menu-test-token".into()),
+                },
+            )
             .await;
         let probe = async {
             let status = started?;

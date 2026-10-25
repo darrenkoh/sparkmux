@@ -36,7 +36,9 @@ pub async fn connect_core(
     if let Some(ctl) = inner.control.clone() {
         if inner.attached_session.as_deref() == Some(session.as_str()) {
             drop(inner);
-            let _ = ctl.refresh_size(cols.max(2), rows.max(1)).await;
+            if app.is_some() {
+                let _ = ctl.refresh_size(cols.max(2), rows.max(1)).await;
+            }
             let mut inner = state.inner.lock().await;
             ensure_screen(&mut inner, &session).await;
             return Ok(());

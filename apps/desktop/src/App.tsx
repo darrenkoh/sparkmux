@@ -341,14 +341,27 @@ export default function App() {
     return pixelClientSize();
   }, [pixelClientSize]);
 
+  const lastPushedSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
   const pushClientSize = useCallback(() => {
     if (sizeTimer.current) window.clearTimeout(sizeTimer.current);
     sizeTimer.current = window.setTimeout(() => {
+      if (typeof document !== "undefined" && !document.hasFocus() && lastPushedSizeRef.current !== null) {
+        return;
+      }
       const node = layoutRef.current;
       if (node && !clientSizeFromFits(node, paneFitRef.current)) {
         return;
       }
       const { cols, rows } = hostSize();
+      if (
+        lastPushedSizeRef.current &&
+        lastPushedSizeRef.current.cols === cols &&
+        lastPushedSizeRef.current.rows === rows
+      ) {
+        return;
+      }
+      lastPushedSizeRef.current = { cols, rows };
       void windowResize(cols, rows);
     }, 50);
   }, [hostSize]);
@@ -634,6 +647,16 @@ export default function App() {
       setDropPane(null);
     };
   }, []);
+
+  useEffect(() => {
+    const onWindowFocus = () => {
+      pushClientSize();
+    };
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      window.removeEventListener("focus", onWindowFocus);
+    };
+  }, [pushClientSize]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -1489,7 +1512,6 @@ export default function App() {
                         if (cols >= 2 && rows >= 1) {
                           paneFitRef.current.set(paneId, { cols, rows });
                         }
-                        pushClientSize();
                       }
                     }}
                   />

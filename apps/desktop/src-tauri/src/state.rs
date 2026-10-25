@@ -83,9 +83,10 @@ pub struct ActiveTarget {
     pub pid: u32,
 }
 
+#[derive(Clone)]
 pub struct AppState {
-    pub inner: Mutex<Inner>,
-    pub active_target: std::sync::Mutex<ActiveTarget>,
+    pub inner: Arc<Mutex<Inner>>,
+    pub active_target: Arc<std::sync::Mutex<ActiveTarget>>,
     pub events_tx: broadcast::Sender<ServerPushEvent>,
 }
 
@@ -104,6 +105,12 @@ pub struct Inner {
     pub stopped: bool,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let (config, warning) = load_config(ConfigOverrides::default());
@@ -112,7 +119,7 @@ impl AppState {
         }
         let (events_tx, _) = broadcast::channel(256);
         Self {
-            inner: Mutex::new(Inner {
+            inner: Arc::new(Mutex::new(Inner {
                 client: None,
                 control: None,
                 screen: None,
@@ -123,8 +130,8 @@ impl AppState {
                 channels: Arc::new(Mutex::new(HashMap::new())),
                 pump: None,
                 stopped: false,
-            }),
-            active_target: std::sync::Mutex::new(ActiveTarget::default()),
+            })),
+            active_target: Arc::new(std::sync::Mutex::new(ActiveTarget::default())),
             events_tx,
         }
     }

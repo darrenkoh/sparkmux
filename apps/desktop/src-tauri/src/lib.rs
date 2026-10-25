@@ -168,7 +168,8 @@ pub fn run() {
                 let app = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let slot = app.state::<web_server::WebServeSlot>();
-                    match slot.start(opts).await {
+                    let state = app.state::<AppState>().inner().clone();
+                    match slot.start(state, opts).await {
                         Ok(status) => {
                             let urls: Vec<String> =
                                 status.links.iter().map(|link| link.url.clone()).collect();
