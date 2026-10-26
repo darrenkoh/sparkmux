@@ -115,8 +115,12 @@ export function getModelPricing(model: string | undefined): ModelPricing {
     return { inRate: 15.0, outRate: 75.0, cacheReadRate: 1.5, cacheWriteRate: 18.75 };
   }
 
-  // Gemini / Flash / Mini / Light
-  if (m.includes("flash") || m.includes("mini") || m.includes("8b") || m.includes("nano")) {
+  // Gemini. "gemini" contains the letters "mini", so a substring check
+  // would price every Gemini model on the legacy $0.25 Flash table.
+  const gemini = geminiListPricing(m);
+  if (gemini) return gemini;
+  const mini = /(^|[^a-z])mini([^a-z]|$)/.test(m);
+  if (m.includes("flash") || mini || m.includes("8b") || m.includes("nano")) {
     return { inRate: 0.25, outRate: 1.25, cacheReadRate: 0.03, cacheWriteRate: 0.25 };
   }
 
@@ -131,6 +135,51 @@ export function getModelPricing(model: string | undefined): ModelPricing {
 
   // Default / fallback standard pricing (e.g. Sonnet tier 3/15)
   return { inRate: 3.0, outRate: 15.0, cacheReadRate: 0.3, cacheWriteRate: 3.75 };
+}
+
+/** UTC calendar day `YYYY-MM-DD`, for list prices that change on a published date. */
+function utcDay(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Gemini 3.8 Flash list price. Introductory through 2026-12-31, then the
+ * standard rate. Cache read is one tenth of input. Output includes thinking.
+ */
+function flash38Rates(now: Date): ModelPricing {
+  if (utcDay(now) < "2027-01-01") {
+    return { inRate: 0.75, outRate: 3.75, cacheReadRate: 0.075, cacheWriteRate: 0.75 };
+  }
+  return { inRate: 1.5, outRate: 7.5, cacheReadRate: 0.15, cacheWriteRate: 1.5 };
+}
+
+/**
+ * Gemini 4 Argon list price. Introductory through 2026-11-30, then double.
+ * Cache read is 95% off input. Output includes thinking.
+ */
+function argonRates(now: Date): ModelPricing {
+  if (utcDay(now) < "2026-12-01") {
+    return { inRate: 2, outRate: 10, cacheReadRate: 0.1, cacheWriteRate: 0 };
+  }
+  return { inRate: 4, outRate: 20, cacheReadRate: 0.2, cacheWriteRate: 0 };
+}
+
+/**
+ * List price for a Gemini model name. Returns null for an older Flash / Mini
+ * name so the legacy $0.25 table can still handle `gemini-2.0-flash`.
+ * Antigravity's default, when the transcript names no model, is 3.8 Flash.
+ */
+function geminiListPricing(model: string): ModelPricing | null {
+  const argon =
+    model.includes("argon") ||
+    model.includes("gemini-4") ||
+    model.includes("gemini 4");
+  if (argon) return argonRates(new Date());
+  if (model.includes("3.8") || model.includes("3-8")) return flash38Rates(new Date());
+  if (!model.includes("gemini")) return null;
+  const mini = /(^|[^a-z])mini([^a-z]|$)/.test(model);
+  if (model.includes("flash") || mini) return null;
+  return flash38Rates(new Date());
 }
 
 export function estimateCost(
@@ -424,16 +473,25 @@ function categoryAmount(
 
 /**
  * Antigravity fallback when the cumulative stamp is absent.
- * Each category is priced once from its own `estimatedCostUsd` or, failing
- * that, from the ledger pricing block. Thinking uses the output rate and is
- * not folded into the output token count. Tools are not dropped.
- * Gemini and Argon without a pricing block are not priced as Sonnet or Flash.
+ * Each category is priced once from its own `estimatedCostUsd`, then the
+ * ledger pricing block, then that model's list price. An unnamed model uses
+ * Gemini 3.8 Flash, which is what `agy` runs when settings do not say
+ * otherwise. Thinking uses the output rate and is not folded into the output
+ * token count. Tools are not dropped. The legacy $0.25 Flash table and the
+ * Sonnet table are not used for Gemini 3.8 or Argon.
  */
 function antigravityFallback(ledger: UsageLedger): number | null {
   const pricing = ledger.pricing;
-  const inRate = pricing?.inputPricePerMillionTokens;
-  const outRate = pricing?.outputPricePerMillionTokens;
-  const cacheRate = pricing?.cacheReadPricePerMillionTokens;
+  const table = geminiListPricing((ledger.model || "").toLowerCase()) ?? flash38Rates(new Date());
+  const inRate = finiteNumber(pricing?.inputPricePerMillionTokens)
+    ? pricing.inputPricePerMillionTokens
+    : table.inRate;
+  const outRate = finiteNumber(pricing?.outputPricePerMillionTokens)
+    ? pricing.outputPricePerMillionTokens
+    : table.outRate;
+  const cacheRate = finiteNumber(pricing?.cacheReadPricePerMillionTokens)
+    ? pricing.cacheReadPricePerMillionTokens
+    : table.cacheReadRate;
   const cats = ledger.categories;
   const parts: Array<[LedgerCategory | undefined, number, number | undefined]> = [
     [cats?.input, categoryTokens(cats?.input, ledger.inputTokens), inRate],
@@ -531,7 +589,10 @@ export function sessionCostFromStats(
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as UsageLedger;
-      if (parsed && typeof parsed === "object") return sessionCost(parsed);
+      if (parsed && typeof parsed === "object") {
+        if (!parsed.model && stats.active_model) parsed.model = stats.active_model;
+        return sessionCost(parsed);
+      }
     } catch {
       // A torn ledger falls through to the token totals.
     }
@@ -553,7 +614,10 @@ export function sessionCostFromStats(
     outputTokens: stats.total_output_tokens,
     cacheReadTokens: stats.total_cache_read_tokens,
     cacheCreationTokens: stats.total_cache_write_tokens,
-    reasoningTokens: stats.total_reasoning_tokens,
+    // Antigravity `output_tokens` already includes thinking. The stats
+    // reasoning total is a text estimate and must not be billed again.
+    reasoningTokens:
+      cli === "antigravity" || cli === "agy" ? undefined : stats.total_reasoning_tokens,
     inputIncludesCache: false,
     modelUsage: Object.keys(modelUsage).length > 0 ? modelUsage : undefined,
   });

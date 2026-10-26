@@ -435,19 +435,23 @@ test("Antigravity Argon fallback uses the pricing block", () => {
     },
   };
   const cost = sessionCost(ledger);
-  // "gemini" contains "mini", so the shared rate table prices Argon as Flash.
   const catalog = getModelPricing("gemini-4-argon");
-  assert.equal(catalog.inRate, 0.25);
-  assert.equal(catalog.outRate, 1.25);
+  assert.notEqual(catalog.inRate, 0.25);
+  assert.notEqual(catalog.outRate, 1.25);
   const sonnet = getModelPricing("claude-sonnet-4-5");
   assert.equal(sonnet.inRate, 3);
   assert.equal(sonnet.outRate, 15);
-  const asFlash = estimateCost("gemini-4-argon", 1_000_000, 160_000, 2_000_000, 0);
+  const asList = estimateCost("gemini-4-argon", 1_000_000, 160_000, 2_000_000, 0);
   const asSonnet = estimateCost("claude-sonnet-4-5", 1_000_000, 160_000, 2_000_000, 0);
+  const asLegacyFlash =
+    (1_000_000 / 1_000_000) * 0.25 +
+    (160_000 / 1_000_000) * 1.25 +
+    (2_000_000 / 1_000_000) * 0.03;
   assert.equal(cost.stamped, false);
   assert.ok(cost.usd != null && Math.abs(cost.usd - 3.1) < 1e-9);
-  assert.notEqual(cost.usd, asFlash);
+  assert.notEqual(cost.usd, asList);
   assert.notEqual(cost.usd, asSonnet);
+  assert.notEqual(cost.usd, asLegacyFlash);
   assert.ok(Math.abs((cost.usd ?? 0) - 3.6) > 0.01);
   assert.ok(Math.abs((cost.usd ?? 0) - 3.0) > 0.01);
 });
@@ -465,7 +469,7 @@ test("a quota percent is not a dollar cost", () => {
   assert.notEqual(cost.usd, 0.4);
 });
 
-test("Antigravity planner rows stay empty until the status-line total_usd", () => {
+test("Antigravity planner rows are priced from the model list until a stamp arrives", () => {
   const categories = {
     input: { tokens: 4842 },
     cacheRead: { tokens: 38177 },
@@ -486,13 +490,15 @@ test("Antigravity planner rows stay empty until the status-line total_usd", () =
     },
     "antigravity",
   );
+  const listed = estimateCost("gemini-4-argon", 4842, 182, 38177, 0);
   const sonnet = estimateCost("claude-sonnet-4-5", 4842, 182 + 40, 38177, 0);
-  const flash = estimateCost("gemini-4-argon", 4842, 182 + 40, 38177, 0);
-  assert.equal(tokensOnly.usd, null);
+  const legacyFlash =
+    (4842 / 1_000_000) * 0.25 + (222 / 1_000_000) * 1.25 + (38177 / 1_000_000) * 0.03;
   assert.equal(tokensOnly.stamped, false);
-  assert.equal(formatSessionUsd(tokensOnly.usd), "—");
-  assert.notEqual(tokensOnly.usd, sonnet);
-  assert.notEqual(tokensOnly.usd, flash);
+  assert.ok(tokensOnly.usd != null && Math.abs(tokensOnly.usd - listed) < 1e-9);
+  assert.notEqual(formatSessionUsd(tokensOnly.usd), "—");
+  assert.ok(Math.abs((tokensOnly.usd ?? 0) - sonnet) > 1e-6);
+  assert.ok(Math.abs((tokensOnly.usd ?? 0) - legacyFlash) > 1e-6);
 
   const stamped = sessionCostFromStats(
     {
@@ -514,6 +520,36 @@ test("Antigravity planner rows stay empty until the status-line total_usd", () =
   assert.equal(stamped.stamped, true);
   assert.notEqual(stamped.usd, 0.75);
   assert.equal(formatSessionUsd(stamped.usd), "$0.5000");
+});
+
+test("an unnamed Antigravity session is priced as Gemini 3.8 Flash", () => {
+  const cost = sessionCostFromStats(
+    {
+      total_input_tokens: 1_508_764,
+      total_output_tokens: 229_893,
+      total_cache_read_tokens: 45_960_483,
+      total_reasoning_tokens: 28_201,
+      active_model: "",
+    },
+    "antigravity",
+  );
+  const listed = estimateCost("gemini-3.8-flash", 1_508_764, 229_893, 45_960_483, 0);
+  const withThinking = estimateCost(
+    "gemini-3.8-flash",
+    1_508_764,
+    229_893 + 28_201,
+    45_960_483,
+    0,
+  );
+  const sonnet = estimateCost("claude-sonnet-4-5", 1_508_764, 229_893, 45_960_483, 0);
+  assert.equal(cost.stamped, false);
+  assert.ok(cost.usd != null && Math.abs(cost.usd - listed) < 1e-6);
+  assert.ok(Math.abs(cost.usd - withThinking) > 0.01);
+  assert.ok(Math.abs(cost.usd - sonnet) > 1);
+  assert.notEqual(formatSessionUsd(cost.usd), "—");
+  const named = getModelPricing("Gemini 3.8 Flash (Medium)");
+  assert.equal(named.inRate, getModelPricing("gemini-3.8-flash").inRate);
+  assert.equal(named.outRate, getModelPricing("gemini-3.8-flash").outRate);
 });
 
 

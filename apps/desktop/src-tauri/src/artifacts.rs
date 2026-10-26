@@ -485,7 +485,7 @@ pub(crate) fn select_transcript(
     if kind == CliKind::Antigravity {
         return select_agy(cwd, family, roots);
     }
-    if let Some(path) = grok_active_transcript(kind, cwd, family, roots) {
+    if let Some(path) = grok_active_transcript(kind, cwd, title, family, roots) {
         return Some(path);
     }
     let found = transcripts_for_cwd(kind, cwd, roots);
@@ -895,6 +895,7 @@ fn percent_decode_path(text: &str) -> String {
 fn grok_active_transcript(
     kind: CliKind,
     pane_cwd: &str,
+    title: &str,
     family: &[(u32, u8)],
     roots: &TranscriptRoots,
 ) -> Option<PathBuf> {
@@ -902,15 +903,33 @@ fn grok_active_transcript(
         return None;
     }
     let sessions = read_active_sessions(&roots.grok_active_sessions);
+    let mut paths = Vec::new();
+    for session in &sessions {
+        if !family.iter().any(|(pid, _)| *pid == session.pid) {
+            continue;
+        }
+        if let Some(path) = grok_session_transcript(session, roots) {
+            paths.push(path);
+        }
+    }
+    // Several rows share one Grok pid. The pane title names the live session.
+    // The newest row can be an empty sibling with no `usage.json`.
+    if let Some(path) = match_title(kind, &paths, title) {
+        return Some(path);
+    }
     let best = best_active(&sessions, family, pane_cwd)?;
-    if !safe_component(&best.session_id) {
+    grok_session_transcript(best, roots)
+}
+
+fn grok_session_transcript(session: &ActiveSession, roots: &TranscriptRoots) -> Option<PathBuf> {
+    if !safe_component(&session.session_id) {
         return None;
     }
-    let cwd = normalize_cwd(&best.cwd)?;
+    let cwd = normalize_cwd(&session.cwd)?;
     let path = roots
         .grok_sessions
         .join(encode_grok_path(&cwd))
-        .join(&best.session_id)
+        .join(&session.session_id)
         .join("chat_history.jsonl");
     under_jail(&roots.grok_sessions, &path)
 }
@@ -2554,6 +2573,44 @@ mod tests {
         let unbound = load_artifacts("grok", &cwd, "", 0, &roots);
         assert!(unbound.transcript_path.is_none(), "{unbound:?}");
         assert!(unbound.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pane_title_beats_a_newer_session_on_the_same_pid() {
+        let dir = scratch("grok-same-pid");
+        let project = dir.join("proj");
+        fs::create_dir_all(&project).unwrap();
+        let sessions = dir.join("sessions");
+        let encoded = sessions.join(encode_grok_path(&project));
+        write_grok(&encoded, "live", "live reply");
+        write_grok(&encoded, "ghost", "ghost reply");
+        fs::write(
+            encoded.join("live").join("summary.json"),
+            "{\"generated_title\":\"Match sparkmux costs to /usage\"}\n",
+        )
+        .unwrap();
+        let cwd = project.to_string_lossy().into_owned();
+        fs::write(
+            dir.join("active_sessions.json"),
+            format!(
+                "[{{\"session_id\":\"live\",\"pid\":42,\"cwd\":\"{cwd}\",\"opened_at\":\"2026-01-01T00:00:00Z\"}},{{\"session_id\":\"ghost\",\"pid\":42,\"cwd\":\"{cwd}\",\"opened_at\":\"2026-06-01T00:00:00Z\"}}]"
+            ),
+        )
+        .unwrap();
+        let roots = roots(&dir, sessions, dir.join("no-claude"));
+        let feed = load_for_family(
+            "grok-1.0.70",
+            &cwd,
+            "⠼ - Match sparkmux costs to /usage - grok",
+            &[(7, 0), (42, 1)],
+            &roots,
+        );
+        assert!(
+            feed.entries.iter().any(|entry| entry.body == "live reply"),
+            "{feed:?}"
+        );
+        assert!(feed.entries.iter().all(|entry| entry.body != "ghost reply"));
         let _ = fs::remove_dir_all(&dir);
     }
 

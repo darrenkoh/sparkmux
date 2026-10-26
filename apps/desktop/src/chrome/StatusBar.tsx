@@ -158,14 +158,17 @@ function ModelQuotaCard({ chip }: { chip: UsageChip }) {
             <span>Session Cost</span>
             <b>{cost.sessionUsd}</b>
           </div>
-          <div className="cost-row">
-            <span>Today's Total</span>
-            <b>{cost.todayUsd}</b>
-          </div>
+          {cost.todayUsd && (
+            <div className="cost-row">
+              <span>Today's Total</span>
+              <b>{cost.todayUsd}</b>
+            </div>
+          )}
           <div className="cost-note">
-            {cost.estimated
-              ? "Estimated from token consumption"
-              : "Direct Bedrock API metrics"}
+            {cost.note ??
+              (cost.estimated
+                ? "Estimated from token consumption"
+                : "Direct Bedrock API metrics")}
           </div>
         </div>
       )}

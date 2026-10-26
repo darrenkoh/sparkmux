@@ -142,12 +142,30 @@ test("grok shows weekly used percent and the local reset", () => {
   );
   assert.equal(chips.length, 1);
   assert.equal(chips[0].text, "Grok 30% Remaining - Resets:3d 1h 22m 33s");
+  assert.equal(chips[0].costDetail, undefined);
   assert.equal(chips[0].fill, 30);
   assert.equal(chips[0].tone, "warn");
   assert.match(chips[0].title, /SuperGrok Plus/);
   assert.match(chips[0].title, /Weekly 30% Remaining, resets Oct 13, 14:22/);
   assert.match(chips[0].title, /Credits \$10\.00/);
   assert.match(chips[0].title, /fetched 2m ago/);
+});
+
+test("grok session cost is the usage.json dollar", () => {
+  const chips = usageChips(
+    usage({
+      cli: "grok",
+      session_usd: 65.25046,
+      bars: [bar({ percent: 70, direction: "used", resets_at_ms: GROK_RESET })],
+    }),
+    NOW,
+    ZONE,
+  );
+  assert.equal(chips[0].text, "Grok $65.25 · 30% Remaining - Resets:3d 1h 22m 33s");
+  assert.equal(chips[0].costDetail?.sessionUsd, "$65.25");
+  assert.equal(chips[0].costDetail?.todayUsd, undefined);
+  assert.equal(chips[0].costDetail?.estimated, false);
+  assert.match(chips[0].costDetail?.note ?? "", /Grok \/usage/);
 });
 
 test("a grok window inside a day uses a relative reset", () => {

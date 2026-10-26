@@ -113,6 +113,8 @@ export interface LlmUsage {
   credits_usd: number | null;
   /** Present only for a Claude pane running on Bedrock. */
   cost?: UsageCost | null;
+  /** Grok `/usage` session cost, `costUsdTicks / 1e10`. */
+  session_usd?: number | null;
 }
 
 export interface TmuxStatus {

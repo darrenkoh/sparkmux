@@ -1295,6 +1295,11 @@ fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut
 // ---------------------------------------------------------------- Antigravity
 
 fn ingest_agy(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
+    if cur.model.is_empty() {
+        if let Some(model) = agy_settings_model(path) {
+            cur.model = model;
+        }
+    }
     let mut out = Vec::new();
     let mut saw_after = false;
     if let Some((lines, next)) = read_new_lines(path, cur.offset, MAX_READ) {
@@ -1447,6 +1452,26 @@ fn agy_timestamp(obj: &Map<String, Value>, cur: &mut Cursor, now: i64) -> i64 {
         cur.last_ts = cur.last_ts.max(ts);
     }
     ts
+}
+
+/// `settings.json` `model`, for example `Gemini 3.8 Flash (Medium)`.
+/// The transcript rows do not name a model, and an empty name was leaving
+/// the session cost unpriced.
+fn agy_settings_model(transcript: &Path) -> Option<String> {
+    let agy = transcript
+        .parent()?
+        .parent()?
+        .parent()?
+        .parent()?
+        .parent()?;
+    let text = std::fs::read_to_string(agy.join("settings.json")).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    let model = value.get("model")?.as_str()?.trim();
+    if model.is_empty() {
+        None
+    } else {
+        Some(model.to_string())
+    }
 }
 
 fn agy_model(obj: &Map<String, Value>) -> String {

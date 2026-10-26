@@ -1,4 +1,4 @@
-import { estimateTotalCost } from "./analyticsFormat.ts";
+import { estimateTotalCost, formatSessionUsd } from "./analyticsFormat.ts";
 import type { LlmUsage, UsageBar, UsageCostPart } from "../types";
 
 export type { LlmUsage, UsageBar };
@@ -21,8 +21,10 @@ export interface ModelWindowDetail {
 
 export interface UsageCostDetail {
   sessionUsd: string;
-  todayUsd: string;
+  todayUsd?: string;
   estimated: boolean;
+  /** Shown under the amounts. */
+  note?: string;
 }
 
 export interface UsageChip {
@@ -51,7 +53,7 @@ export interface UsageChip {
   fetchedAtMs?: number | null;
   /** Human-formatted age, e.g. "fetched just now". */
   fetchedAgeText?: string | null;
-  /** Bedrock cost breakdown if applicable. */
+  /** Session cost, and today's total when the CLI records one. */
   costDetail?: UsageCostDetail;
 }
 
@@ -183,9 +185,13 @@ export function usageChips(
         isTighter: true,
       },
     ];
+    const sessionUsd =
+      usage.session_usd != null && Number.isFinite(usage.session_usd)
+        ? formatSessionUsd(usage.session_usd)
+        : null;
     return [
       {
-        text: grokText(bar, now),
+        text: sessionUsd ? `Grok ${sessionUsd} · ${grokText(bar, now).replace(/^Grok /, "")}` : grokText(bar, now),
         title,
         fill: left,
         tone: usageTone(left),
@@ -199,6 +205,13 @@ export function usageChips(
         details,
         fetchedAtMs: usage.fetched_at_ms,
         fetchedAgeText,
+        costDetail: sessionUsd
+          ? {
+              sessionUsd,
+              estimated: false,
+              note: "Session usage from Grok /usage",
+            }
+          : undefined,
       },
     ];
   }

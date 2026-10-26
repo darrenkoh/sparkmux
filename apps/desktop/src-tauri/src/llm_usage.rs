@@ -89,6 +89,9 @@ pub struct LlmUsage {
     /// Bedrock API cost for this pane. Absent for subscription Claude, Grok, and Antigravity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<crate::bedrock_cost::BedrockCost>,
+    /// Grok `/usage` session cost: `usage.json` `costUsdTicks / 1e10`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_usd: Option<f64>,
 }
 
 impl LlmUsage {
@@ -100,6 +103,7 @@ impl LlmUsage {
             plan: None,
             credits_usd: None,
             cost: None,
+            session_usd: None,
         }
     }
 
@@ -111,6 +115,7 @@ impl LlmUsage {
             plan: None,
             credits_usd: None,
             cost: None,
+            session_usd: None,
         }
     }
 }
@@ -169,7 +174,41 @@ pub async fn llm_usage(command: String, title: String, cwd: String, pid: u32) ->
         usage.cli = Some("claude".to_string());
         usage.cost = Some(cost);
     }
+    if usage.cli.as_deref() == Some("grok") {
+        usage.session_usd = grok_session_usd(&command, &cwd, &title, pid);
+    }
     usage
+}
+
+/// Session dollars from the pane's `usage.json`, the same figure Grok `/usage` prints.
+fn grok_session_usd(command: &str, cwd: &str, title: &str, pid: u32) -> Option<f64> {
+    let (kind, path, _) = crate::artifacts::resolve_pane_transcript(
+        command,
+        cwd,
+        title,
+        pid,
+        &crate::artifacts::default_roots(),
+    )?;
+    if kind != crate::artifacts::CliKind::Grok {
+        return None;
+    }
+    let usage = path.parent()?.join("usage.json");
+    let text = std::fs::read_to_string(usage).ok()?;
+    session_usd_from_grok_usage(&text)
+}
+
+/// `costUsdTicks / 1e10`. Absent ticks stay absent, including a partial ledger.
+pub(crate) fn session_usd_from_grok_usage(text: &str) -> Option<f64> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    let session = value.get("session")?.as_object()?;
+    let ticks = session
+        .get("costUsdTicks")
+        .or_else(|| session.get("cost_usd_ticks"))?;
+    let ticks = ticks
+        .as_i64()
+        .or_else(|| ticks.as_u64().and_then(|n| i64::try_from(n).ok()))?;
+    let usd = ticks as f64 / 10_000_000_000.0;
+    usd.is_finite().then_some(usd)
 }
 
 pub fn agy_refresh_minutes() -> u32 {
@@ -497,6 +536,7 @@ fn grok_from_value(value: &Value) -> Option<LlmUsage> {
         plan,
         credits_usd,
         cost: None,
+        session_usd: None,
     })
 }
 
@@ -526,6 +566,7 @@ fn parse_claude_usage(text: &str) -> Option<LlmUsage> {
         plan: None,
         credits_usd: None,
         cost: None,
+        session_usd: None,
     })
 }
 
@@ -602,6 +643,7 @@ fn parse_agy_usage(text: &str, now: i64) -> Option<LlmUsage> {
         plan: None,
         credits_usd: None,
         cost: None,
+        session_usd: None,
     })
 }
 
@@ -666,6 +708,7 @@ fn parse_agy_print(text: &str) -> Option<LlmUsage> {
         plan: None,
         credits_usd: None,
         cost: None,
+        session_usd: None,
     })
 }
 
@@ -1169,6 +1212,15 @@ Gemini 4 Argon         Gemini 4 Argon Weekly Limit  1%    2026-10-24 21:53 PDT
         let text = fs::read_to_string(&path).unwrap();
         assert_eq!(parse_agy_minutes(&text), Some(10));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn grok_usage_json_ticks_are_the_session_dollars() {
+        let text = r#"{"session":{"costUsdTicks":652504600000,"inputTokens":96408909,"outputTokens":714853,"cachedReadTokens":92880000}}"#;
+        let usd = session_usd_from_grok_usage(text).unwrap();
+        assert!((usd - 65.25046).abs() < 1e-9, "{usd}");
+        assert!(session_usd_from_grok_usage(r#"{"session":{"costIsPartial":true}}"#).is_none());
+        assert!(session_usd_from_grok_usage(r#"{"turns":[]}"#).is_none());
     }
 
     #[test]

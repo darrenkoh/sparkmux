@@ -866,6 +866,9 @@ export default function AnalyticsHud({
 
   const isLifetime = viewMode === "lifetime";
   const st = isLifetime ? (data?.lifetime_stats ?? data?.stats) : data?.stats;
+  // The dollar is this session's `/usage` stamp. Tab cumulative still
+  // widens the charts, but it must not replace that stamp with a reprice
+  // of every Grok session this tab has ever stored.
   const storage = data?.storage;
 
   const promptTokens = (st?.total_input_tokens ?? 0) + (st?.total_cache_read_tokens ?? 0);
@@ -873,7 +876,7 @@ export default function AnalyticsHud({
     promptTokens > 0
       ? ((st?.total_cache_read_tokens ?? 0) / promptTokens) * 100
       : 0;
-  const session = sessionCostFromStats(st, data?.cli);
+  const session = sessionCostFromStats(data?.stats, data?.cli);
   const estCost = session.usd;
   const estSavings = estimateCostSavings(
     st?.models,
