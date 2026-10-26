@@ -3,6 +3,7 @@ import { useState } from "react";
 import AgentBoard from "../chrome/AgentBoard.tsx";
 import type { AgentBoardRow } from "../chrome/agentBoard.ts";
 import type { Selection, Snapshot } from "../types";
+import { offScreenHint, offScreenSessions } from "./orphanSessions";
 
 export default function Sidebar({
   snapshot,
@@ -52,6 +53,7 @@ export default function Sidebar({
   }
 
   const n = snapshot.sessions.length;
+  const offScreen = offScreenSessions(snapshot.sessions, attachedSession);
 
   const selectAgent = onSelectAgent ?? onSelectPane;
 
@@ -101,6 +103,49 @@ export default function Sidebar({
           </button>
         </div>
       </header>
+      {offScreen.length > 0 && (
+        <section className="offscreen" aria-label="Off screen sessions">
+          <div className="offscreen-head">
+            <div className="sidebar-kicker" title="Still running. The terminal is showing a different session.">
+              Off screen
+            </div>
+            <div className="sidebar-count">{offScreen.length}</div>
+          </div>
+          <div className="offscreen-list">
+            {offScreen.map((session) => {
+              const hint = offScreenHint(session);
+              return (
+                <div key={session.id} className="row sess-row offscreen-row">
+                  <button
+                    type="button"
+                    className="row-main"
+                    title={`${session.name}\n${hint}\nOpen in the terminal`}
+                    aria-label={`${session.name}, off screen, ${hint}`}
+                    onClick={() => onSelectSession(session.name)}
+                  >
+                    <span className="live-dot" aria-hidden="true" />
+                    <span className="name">{session.name}</span>
+                    <span className="offscreen-hint">{hint}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="sess-close"
+                    title={`Close session ${session.name}`}
+                    aria-label={`Close session ${session.name}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onCloseSession(session.name);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
       <div className="sidebar-tree">
         {n === 0 && <div className="sidebar-empty">No sessions on this socket</div>}
         {snapshot.sessions.map((session) => {
