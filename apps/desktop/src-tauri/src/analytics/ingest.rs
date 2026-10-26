@@ -50,6 +50,14 @@ pub struct Cursor {
     pub usage_turns: usize,
     #[serde(default)]
     pub usage_mtime: u64,
+    /// Parent conversation db mtime. A new `model_cost` does not grow the transcript.
+    #[serde(default)]
+    pub agy_db_mtime: u64,
+    #[serde(default)]
+    pub agy_summaries_mtime: u64,
+    /// XOR of subagent conversation db mtimes.
+    #[serde(default)]
+    pub agy_child_mtime: u64,
     #[serde(default)]
     pub signals_mtime: u64,
     #[serde(default)]
@@ -1289,19 +1297,20 @@ fn claude_block(block: &Value, model: &str, cur: &mut Cursor, ts: i64, out: &mut
 fn ingest_agy(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
     let mut out = Vec::new();
     let mut saw_after = false;
-    let Some((lines, next)) = read_new_lines(path, cur.offset, MAX_READ) else {
-        return out;
-    };
-    cur.offset = next;
-    for line in lines {
-        let Some(obj) = parse_obj(&line) else {
-            continue;
-        };
-        agy_step(&obj, cur, now, &mut saw_after, &mut out);
+    if let Some((lines, next)) = read_new_lines(path, cur.offset, MAX_READ) {
+        cur.offset = next;
+        for line in lines {
+            let Some(obj) = parse_obj(&line) else {
+                continue;
+            };
+            agy_step(&obj, cur, now, &mut saw_after, &mut out);
+        }
+        if saw_after {
+            close_agy_turn(cur, &mut out);
+        }
     }
-    if saw_after {
-        close_agy_turn(cur, &mut out);
-    }
+    // `model_cost` is written into the conversation db, not the jsonl tail.
+    note_agy_model_cost(path, cur);
     out
 }
 
@@ -1963,6 +1972,48 @@ fn stamp_agy_status_cost(cost: &Map<String, Value>, cur: &mut Cursor) {
     let mut ledger = agy_ledger_map(cur);
     put_f64(&mut ledger, "estimatedCostUsd", Some(total));
     cur.cost_ledger = Value::Object(ledger).to_string();
+}
+
+/// Sum `model_cost` from the conversation protobuf. Subagent databases are
+/// included once. `subagent_usd` is not added on top of that total.
+fn note_agy_model_cost(transcript: &Path, cur: &mut Cursor) {
+    let Some(paths) = super::agy_cost::conversation_paths(transcript) else {
+        return;
+    };
+    if !paths.db.is_file() {
+        return;
+    }
+    // Revisions mix the db mtime with the `-wal` mtime. The open itself must
+    // not create the CLI's `-shm` file; `read_model_cost_total` copies a
+    // non-empty wal aside before it reads.
+    let db_mtime = super::agy_cost::file_revision(&paths.db);
+    let summaries_mtime = super::agy_cost::file_revision(&paths.summaries);
+    let Some(child_mtime) = super::agy_cost::child_mtime_stamp(&paths) else {
+        return;
+    };
+    if db_mtime == cur.agy_db_mtime
+        && summaries_mtime == cur.agy_summaries_mtime
+        && child_mtime == cur.agy_child_mtime
+        && cur.agy_db_mtime != 0
+    {
+        return;
+    }
+    match super::agy_cost::read_model_cost_total(&paths) {
+        super::agy_cost::CostRead::Unreadable => {}
+        super::agy_cost::CostRead::NoModelCost => {
+            cur.agy_db_mtime = db_mtime;
+            cur.agy_summaries_mtime = summaries_mtime;
+            cur.agy_child_mtime = child_mtime;
+        }
+        super::agy_cost::CostRead::Total(usd) => {
+            cur.agy_db_mtime = db_mtime;
+            cur.agy_summaries_mtime = summaries_mtime;
+            cur.agy_child_mtime = child_mtime;
+            let mut ledger = agy_ledger_map(cur);
+            put_f64(&mut ledger, "estimatedCostUsd", Some(usd));
+            cur.cost_ledger = Value::Object(ledger).to_string();
+        }
+    }
 }
 
 fn note_agy_cost(obj: &Map<String, Value>, cur: &mut Cursor) {
@@ -2865,8 +2916,8 @@ mod tests {
     }
 
     /// A real `brain/*/transcript.jsonl` planner row has token counters, a
-    /// thinking string, and tool calls. It does not carry `cost_summary`.
-    /// The session dollar is the status-line `cost.total_usd`.
+    /// thinking string, and tool calls. It does not carry a dollar. The
+    /// session dollar is `model_cost` on the captured conversation step.
     #[test]
     fn agy_real_planner_rows_keep_tokens_and_status_line_total() {
         let scratch_dir = scratch("agy-real");
@@ -2915,31 +2966,52 @@ mod tests {
             .get("estimatedCostUsd")
             .is_none());
 
-        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
-        writeln!(
-            file,
-            r#"{{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-26T04:11:08Z","thinking":"priced","content":"ok","input_tokens":100,"cache_read_tokens":50,"output_tokens":10,"tool_calls":[{{"name":"view_file","args":{{"path":"b.rs"}}}}],"cost":{{"total_usd":0.5,"subagent_usd":0.25,"estimated":false}},"quota":{{"used_percent":12}}}}"#
-        )
-        .unwrap();
-        drop(file);
+        // Captured `steps.metadata` from conversation e5b88dc4. The raw blob
+        // has no model_cost. Field 10 is the fixed32 `GetModelCost` writes.
+        // Parent 0.25 + linked child 0.25 is the status-line total. The
+        // unlinked db's 9.0 is not `subagent_usd` and is not added.
+        let id = "7bf2186c-d869-47d9-b2e9-55c01f8018ff";
+        let child = "c0ffee00-16a4-4c0b-8011-621243f0f559";
+        let decoy = "deadbeef-16a4-4c0b-8011-621243f0f559";
+        let conv = scratch_dir.join("conversations");
+        let priced =
+            super::super::agy_cost::with_model_cost(super::super::agy_cost::CAPTURED_STEP, 0.25);
+        super::super::agy_cost::write_steps(
+            &conv.join(format!("{id}.db")),
+            &[
+                super::super::agy_cost::CAPTURED_STEP.to_vec(),
+                priced.clone(),
+            ],
+        );
+        super::super::agy_cost::write_steps(&conv.join(format!("{child}.db")), &[priced]);
+        super::super::agy_cost::write_steps(
+            &conv.join(format!("{decoy}.db")),
+            &[super::super::agy_cost::with_model_cost(
+                super::super::agy_cost::CAPTURED_STEP,
+                9.0,
+            )],
+        );
+        super::super::agy_cost::write_child_link(
+            &scratch_dir.join("conversation_summaries.db"),
+            id,
+            child,
+        );
         ingest(CliKind::Antigravity, &path, &mut cur, 0);
         assert!(!cur.cost_ledger.contains("quota"), "{}", cur.cost_ledger);
         assert!(!cur.cost_ledger.contains("subagent"), "{}", cur.cost_ledger);
         let stamped: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
-        assert!((stamped["estimatedCostUsd"].as_f64().unwrap() - 0.5).abs() < 1e-9);
-        // The priced planner adds its own token counters. Thinking text and
-        // tool_calls stay out of the ledger; subagent_usd is already in total_usd.
+        assert!((stamped["estimatedCostUsd"].as_f64().unwrap() - 0.5).abs() < 1e-6);
         assert_eq!(
             stamped["categories"]["input"]["tokens"].as_u64(),
-            Some(4942)
+            Some(4842)
         );
         assert_eq!(
             stamped["categories"]["cacheRead"]["tokens"].as_u64(),
-            Some(38227)
+            Some(38177)
         );
         assert_eq!(
             stamped["categories"]["output"]["tokens"].as_u64(),
-            Some(192)
+            Some(182)
         );
         assert!(stamped["categories"].get("thinking").is_none());
         assert!(stamped["categories"].get("tools").is_none());

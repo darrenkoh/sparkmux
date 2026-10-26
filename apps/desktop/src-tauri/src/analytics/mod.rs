@@ -1,6 +1,7 @@
 //! Analytics coordinator exposing Tauri commands and orchestrating
 //! transcript discovery, incremental ingestion, storage, and stat aggregation.
 
+pub mod agy_cost;
 pub mod event;
 pub mod ingest;
 pub mod stats;
@@ -228,6 +229,14 @@ pub async fn tab_analytics(
                 // again. Drop steps this tab already stored.
                 let replay = fresh_cursor(&cursor);
                 let now = now_ms();
+                // A cost stamp can change with no new chat bytes. Persist that
+                // cursor or the next launch rereads the ledger from scratch.
+                let ledger_before = cursor.cost_ledger.clone();
+                let agy_mtime_before = (
+                    cursor.agy_db_mtime,
+                    cursor.agy_summaries_mtime,
+                    cursor.agy_child_mtime,
+                );
                 let mut new_events = ingest_session(k, p, &mut cursor, now, &roots);
                 let mut caught_up = false;
                 if replay {
@@ -240,7 +249,13 @@ pub async fn tab_analytics(
                         caught_up = true;
                     }
                 }
-                if !new_events.is_empty() || caught_up {
+                let cost_moved = cursor.cost_ledger != ledger_before
+                    || (
+                        cursor.agy_db_mtime,
+                        cursor.agy_summaries_mtime,
+                        cursor.agy_child_mtime,
+                    ) != agy_mtime_before;
+                if !new_events.is_empty() || caught_up || cost_moved {
                     if !new_events.is_empty() {
                         let _ = append_events(&session_name, &tab_id, &new_events);
                     }
@@ -529,10 +544,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A real `brain/<id>/.system_generated/logs/transcript.jsonl` planner row
-    /// has token counters, thinking, and tool calls, and no `cost_summary`.
-    /// The session dollar is the status-line `cost.total_usd`, which already
-    /// includes subagent spend. `tab_analytics` must surface that stamp.
+    /// A real planner transcript has token counters and no dollar. The session
+    /// dollar is the sum of `model_cost` in the conversation database, which
+    /// is the status-line `total_usd` (subagent spend included once).
     #[test]
     fn agy_status_line_cost_reaches_tab_analytics() {
         struct Reset;
@@ -594,7 +608,7 @@ mod tests {
                 grok_sessions: root.join("grok-sessions"),
                 claude_projects: root.join("claude"),
                 grok_active_sessions: root.join("active_sessions.json"),
-                agy_root: agy,
+                agy_root: agy.clone(),
             });
         storage::set_analytics_root_override(Some(root.join("analytics")));
 
@@ -634,19 +648,24 @@ mod tests {
         assert!(open["categories"].get("thinking").is_none());
         assert!(open["categories"].get("tools").is_none());
 
-        // A later planner row carries the status-line cost object. total_usd
-        // already includes subagent_usd. Quota is not the dollar.
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&transcript)
-            .unwrap();
-        std::io::Write::write_all(
-            &mut file,
-            br#"{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-26T04:11:08Z","thinking":"priced","content":"ok","input_tokens":100,"cache_read_tokens":50,"output_tokens":10,"tool_calls":[{"name":"view_file","args":{"path":"b.rs"}}],"cost":{"total_usd":0.5,"subagent_usd":0.25,"estimated":false},"quota":{"gemini-weekly":{"remaining_fraction":0.5}}}"#,
-        )
-        .unwrap();
-        std::io::Write::write_all(&mut file, b"\n").unwrap();
-        drop(file);
+        // Captured `steps.metadata` from conversation e5b88dc4. The raw blob
+        // has no dollar. Field 10 is `model_cost`. Parent 0.25 plus the
+        // linked child 0.25 is `total_usd`. The unlinked 9.0 is not added,
+        // and the transcript grows no cost object.
+        let child = "c0ffee00-16a4-4c0b-8011-621243f0f559";
+        let decoy = "deadbeef-16a4-4c0b-8011-621243f0f559";
+        let conv = agy.join("conversations");
+        let priced = agy_cost::with_model_cost(agy_cost::CAPTURED_STEP, 0.25);
+        agy_cost::write_steps(
+            &conv.join(format!("{id}.db")),
+            &[agy_cost::CAPTURED_STEP.to_vec(), priced.clone()],
+        );
+        agy_cost::write_steps(&conv.join(format!("{child}.db")), &[priced]);
+        agy_cost::write_steps(
+            &conv.join(format!("{decoy}.db")),
+            &[agy_cost::with_model_cost(agy_cost::CAPTURED_STEP, 9.0)],
+        );
+        agy_cost::write_child_link(&agy.join("conversation_summaries.db"), id, child);
 
         let second = rt
             .block_on(tab_analytics(
@@ -676,15 +695,15 @@ mod tests {
         );
         assert_eq!(
             stamped["categories"]["input"]["tokens"].as_u64(),
-            Some(4942)
+            Some(4842)
         );
         assert_eq!(
             stamped["categories"]["cacheRead"]["tokens"].as_u64(),
-            Some(38227)
+            Some(38177)
         );
         assert_eq!(
             stamped["categories"]["output"]["tokens"].as_u64(),
-            Some(192)
+            Some(182)
         );
         assert!(stamped["categories"].get("thinking").is_none());
         assert!(stamped["categories"].get("tools").is_none());
