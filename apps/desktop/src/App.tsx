@@ -1631,14 +1631,6 @@ export default function App() {
                               title={outputPane?.title ?? ""}
                               pid={outputPane?.pid ?? 0}
                               onCollapse={() => setOutputOpen(false)}
-                              onOpenAnalytics={() => {
-                                setGraphOpen(false);
-                                setAnalyticsOpen(true);
-                              }}
-                              onOpenGraph={() => {
-                                setAnalyticsOpen(false);
-                                setGraphOpen(true);
-                              }}
                               isDocked
                             />
                           </div>
@@ -1680,14 +1672,6 @@ export default function App() {
                             title={outputPane?.title ?? ""}
                             pid={outputPane?.pid ?? 0}
                             onCollapse={() => setOutputOpen(false)}
-                            onOpenAnalytics={() => {
-                              setGraphOpen(false);
-                              setAnalyticsOpen(true);
-                            }}
-                            onOpenGraph={() => {
-                              setAnalyticsOpen(false);
-                              setGraphOpen(true);
-                            }}
                             isDocked
                           />
                         </div>
@@ -1701,13 +1685,13 @@ export default function App() {
                             style={{ height: `${dockSplitRatio * 100}%` }}
                           >
                             <div className="docked-collapsed-inner">
-                              <span>YOUR PROMPTS COLLAPSED</span>
+                              <span>LOGS COLLAPSED</span>
                               <button
                                 type="button"
                                 className="docked-open-output-btn"
                                 onClick={() => setOutputOpen(true)}
                               >
-                                + OPEN PROMPTS
+                                + OPEN LOGS
                               </button>
                             </div>
                           </div>

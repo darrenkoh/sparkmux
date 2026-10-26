@@ -232,5 +232,9 @@ mod tests {
         assert!(app.contains("appTelemetry"));
         assert!(app.contains("formatMemory"));
         assert!(app.contains("formatCpu"));
+        let css = include_str!("../../src/index.css");
+        assert!(
+            css.contains(".status {\n  display: flex;\n  gap: 8px;\n  align-items: center;\n  padding: 6px 12px;\n  border-top: 1px solid var(--border);\n  background: var(--sidebar-head);\n  color: var(--muted);\n  font-size: 12px;\n  min-width: 0;\n  overflow: visible;\n  white-space: nowrap;\n}")
+        );
     }
 }

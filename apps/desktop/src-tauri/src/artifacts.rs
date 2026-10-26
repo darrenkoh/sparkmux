@@ -2682,7 +2682,10 @@ mod tests {
         assert!(bar.contains("status-output"));
         assert!(bar.contains("aria-label=\"Agent output\""));
         let panel = include_str!("../../src/chrome/ArtifactPanel.tsx");
-        assert!(panel.contains("Your Prompts"));
+        assert!(panel.contains("aria-label=\"Logs\""));
+        assert!(!panel.contains("Your Prompts"));
+        assert!(!panel.contains("artifact-stats-btn"));
+        assert!(!panel.contains("artifact-graph-btn"));
         assert!(panel.contains("onCollapse"));
         assert!(panel.contains("paneArtifacts"));
         assert!(app.contains("outputPaneForTab"));

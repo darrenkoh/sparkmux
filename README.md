@@ -14,7 +14,7 @@
 <p align="center">
   <b>Private tmux Server</b> &bull;
   <b>Tiled Native xterm.js Terminals</b> &bull;
-  <b>Your Prompts</b> &bull;
+  <b>Logs</b> &bull;
   <b>3D Area Map &amp; Mini Stat</b> &bull;
   <b>Stats HUD</b> &bull;
   <b>Gits</b> &bull;
@@ -27,7 +27,7 @@
 
 [![Sparkmux Live Workflow Demo](docs/sparkmux-demo.gif)](docs/sparkmux-demo.mp4)
 
-*Tiled tmux panes, the agent panel, and the live area map. ([Watch HD video](docs/sparkmux-demo.mp4))*
+*Tiled tmux panes, Logs, and the live area map. ([Watch HD video](docs/sparkmux-demo.mp4))*
 
 ---
 
@@ -38,7 +38,7 @@
 - [Overview](#-overview)
 - [Key Features](#-key-features)
   - [1. Private tmux Workspace](#1-private-tmux-workspace)
-  - [2. Your Prompts](#2-your-prompts)
+  - [2. Logs](#2-logs)
   - [3. Allowance, Hardware, and Commands](#3-allowance-hardware-and-commands)
   - [4. Area Map and Mini Stat](#4-area-map-and-mini-stat)
   - [5. Stats HUD](#5-stats-hud)
@@ -68,7 +68,7 @@ Modern terminal multiplexers were created decades before autonomous AI coding ag
 
 - **Isolated server**: The app owns `tmux -L sparkmux`. Your default tmux server stays untouched.
 - **True tiled panes**: Each pane is a real xterm.js terminal. Geometry comes from tmux `window_layout`. Live bytes come from control mode (`%output` and `send-keys -H`).
-- **Read-only agent follower**: Prompts, thinking, tools, replies, tokens, and file edits are read from the CLI's own transcript on this machine.
+- **Read-only agent follower**: **Logs**, beside the terminal, shows prompts, thinking, tools, and replies from the CLI's own transcript on this machine. Tokens and file edits feed Stats and Gits.
 - **Telemetry you can dock or pop out**: Mini Stat and the 3D Area Map sit beside the terminal. Stats and Gits open full-screen, or in their own windows.
 - **Phone and tablet**: `sparkmux-desktop --serve` hosts that same UI as a Home Screen web app. The phone opens a page; tmux and the agent CLIs stay on the host. See [iPhone and iPad](#-iphone-and-ipad).
 
@@ -95,14 +95,14 @@ tmux -L sparkmux attach
 
 ---
 
-### 2. Your Prompts
+### 2. Logs
 
-**Output** on the status bar docks **Your Prompts** beside the terminal for the focused pane. It follows that pane's Grok, Claude, or Antigravity transcript, including work from child agents. A pane that is only `ssh` stays a terminal.
+**Output** on the status bar docks **Logs** beside the terminal for the focused pane. It follows that pane's Grok, Claude, or Antigravity transcript, including work from child agents. A pane that is only `ssh` stays a terminal. The panel header is the title and a close button.
 
 - **One card per prompt**: Preview, status (`Working…`, `Done`, `No reply`), and step count. The newest turn is first.
 - **Prompt Details**: Full markdown prompt, collapsible thinking and tool steps, the closing reply, and previous / next through the session. Fenced code blocks can be copied.
 - **Open a path**: A recorded file path on a tool row opens in your editor.
-- **Stats and Gits** are one click away from the panel header.
+- **Status-bar borders**: **Output** lights blue while Logs is open. **◈ Stats** lights orange while Mini Stat is docked or the Stats HUD is open. **⬡ Gits** keeps a teal border.
 
 ---
 
@@ -133,7 +133,7 @@ Activity on the focused agent session becomes a WebGL2 terrain. Channels are **U
 
 ![Sparkmux Stats HUD](docs/stats-hud.png)
 
-**◈ Stats** opens a mission-control view of the focused pane. **Current Task** is this session. **Tab Cumulative** keeps the counters for the tab. The terrain itself always draws the active session.
+**◈ Stats** on the status bar opens a mission-control view of the focused pane. The button lights orange while Mini Stat is docked or this view is open. **Current Task** is this session. **Tab Cumulative** keeps the counters for the tab. The terrain itself always draws the active session.
 
 - **Neural telemetry**: A 3D synaptic view of user prompts, thinking blocks, model replies, and tool calls.
 - **Actions / Tools matrix**: Calls, average latency, and errors per tool.
@@ -150,7 +150,7 @@ Activity on the focused agent session becomes a WebGL2 terrain. Channels are **U
 
 ![Gits canvas and diff](docs/gits-canvas.png)
 
-**⬡ Gits** is a full-window view of the focused pane's repository and the edits in its current agent session. Close it from the header or with Escape. It can pop out the same way Stats can.
+**⬡ Gits** on the status bar opens a full-window view of the focused pane's repository and the edits in its current agent session. The button keeps a teal border. Close it from the header or with Escape. It can pop out the same way Stats can.
 
 **Canvas** lays out changed files, git dirty files and agent edits together, with local dependency links.
 
@@ -171,7 +171,7 @@ flowchart TD
     subgraph UI ["Sparkmux Desktop (Tauri 2 + React)"]
         Sidebar["Sessions, tabs, Agents board"]
         Terminals["Tiled xterm.js panes"]
-        Prompts["Your Prompts"]
+        Logs["Logs"]
         Mini["Mini Stat and Area Map"]
         Stats["Stats HUD"]
         Gits["Gits: Canvas, Chronicle, History"]
@@ -334,9 +334,9 @@ The page picks a layout from the screen. Open **tmux** on the key bar and use **
 
 | Layout | When | What you see |
 |---|---|---|
-| Duo Book | iPhone Duo folded side by side, or a square unfolded touch screen | Tabs, tiled terminal, and the key bar on the left. Map, output, and gits on the right. The hinge stays clear. **Sessions** opens the sidebar over the left side. |
+| Duo Book | iPhone Duo folded side by side, or a square unfolded touch screen | Tabs, tiled terminal, and the key bar on the left. Map, Logs, and Gits on the right. The hinge stays clear. **Sessions** opens the sidebar over the left side. |
 | Duo Clamshell | iPhone Duo folded top and bottom | Map and telemetry on top. Terminal and key bar below. |
-| Phone | A touch screen narrower than 680px | **Sessions** opens the sidebar. A window with several panes shows one pane at a time; **Tile** brings the others back. Output, stats, and gits open as a sheet along the bottom. |
+| Phone | A touch screen narrower than 680px | **Sessions** opens the sidebar. A window with several panes shows one pane at a time; **Tile** brings the others back. **Output** opens Logs as a sheet along the bottom. Stats and Gits open there the same way. |
 | iPad | A wider touch screen | The three-column desktop layout, with larger splitter targets. `?window=stats` and `?window=gits` open those views on their own. |
 
 The on-screen keyboard shortens the page to the visible area so the terminal reflows above the keys.

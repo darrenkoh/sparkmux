@@ -26,8 +26,6 @@ export default function ArtifactPanel({
   title,
   pid,
   onCollapse,
-  onOpenAnalytics,
-  onOpenGraph,
   isDocked = false,
 }: {
   command: string;
@@ -35,8 +33,6 @@ export default function ArtifactPanel({
   title: string;
   pid: number;
   onCollapse: () => void;
-  onOpenAnalytics?: () => void;
-  onOpenGraph?: () => void;
   isDocked?: boolean;
 }) {
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
@@ -144,43 +140,21 @@ export default function ArtifactPanel({
   return (
     <aside
       className={`artifact-panel${isDocked ? " docked" : ""}`}
-      aria-label="Your Prompts"
+      aria-label="Logs"
       onMouseDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
       <header className="artifact-head">
         <div className="artifact-title">
-          <span>Your Prompts</span>
+          <span>Logs</span>
         </div>
         <div className="artifact-actions">
-          {onOpenAnalytics && (
-            <button
-              type="button"
-              className="artifact-stats-btn"
-              onClick={onOpenAnalytics}
-              aria-label="Open Sci-Fi Telemetry & Analytics HUD"
-              title="Open Sci-Fi Telemetry & Analytics HUD"
-            >
-              ◈ Stats
-            </button>
-          )}
-          {onOpenGraph && (
-            <button
-              type="button"
-              className="artifact-graph-btn"
-              onClick={onOpenGraph}
-              aria-label="Open changed files graph"
-              title="Open changed files graph"
-            >
-              ⬡ Gits
-            </button>
-          )}
           <button
             type="button"
             className="mini-stat-btn"
             onClick={onCollapse}
-            title="Close Your Prompts"
-            aria-label="Close Your Prompts"
+            title="Close Logs"
+            aria-label="Close Logs"
           >
             ✕
           </button>
