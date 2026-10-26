@@ -544,11 +544,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A real planner transcript has token counters and no dollar. The session
-    /// dollar is the sum of `model_cost` in the conversation database, which
-    /// is the status-line `total_usd` (subagent spend included once).
+    /// A real planner transcript has token counters and no dollar. The
+    /// captured `steps.metadata` bytes also have no `model_cost`, so the
+    /// session stamp stays unset.
     #[test]
-    fn agy_status_line_cost_reaches_tab_analytics() {
+    fn agy_captured_step_leaves_tab_analytics_without_a_dollar() {
         struct Reset;
         impl Drop for Reset {
             fn drop(&mut self) {
@@ -648,24 +648,18 @@ mod tests {
         assert!(open["categories"].get("thinking").is_none());
         assert!(open["categories"].get("tools").is_none());
 
-        // Captured `steps.metadata` from conversation e5b88dc4. The raw blob
-        // has no dollar. Field 10 is `model_cost`. Parent 0.25 plus the
-        // linked child 0.25 is `total_usd`. The unlinked 9.0 is not added,
-        // and the transcript grows no cost object.
-        let child = "c0ffee00-16a4-4c0b-8011-621243f0f559";
-        let decoy = "deadbeef-16a4-4c0b-8011-621243f0f559";
-        let conv = agy.join("conversations");
-        let priced = agy_cost::with_model_cost(agy_cost::CAPTURED_STEP, 0.25);
-        agy_cost::write_steps(
-            &conv.join(format!("{id}.db")),
-            &[agy_cost::CAPTURED_STEP.to_vec(), priced.clone()],
-        );
-        agy_cost::write_steps(&conv.join(format!("{child}.db")), &[priced]);
-        agy_cost::write_steps(
-            &conv.join(format!("{decoy}.db")),
-            &[agy_cost::with_model_cost(agy_cost::CAPTURED_STEP, 9.0)],
-        );
-        agy_cost::write_child_link(&agy.join("conversation_summaries.db"), id, child);
+        // Unmodified `steps.metadata` from conversation e5b88dc4. The bytes
+        // are compared to the capture before the second read.
+        let db_path = agy.join("conversations").join(format!("{id}.db"));
+        agy_cost::write_steps(&db_path, &[agy_cost::CAPTURED_STEP.to_vec()]);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let stored: Vec<u8> = conn
+            .query_row("SELECT metadata FROM steps WHERE idx = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored.as_slice(), agy_cost::CAPTURED_STEP);
+        drop(conn);
 
         let second = rt
             .block_on(tab_analytics(
@@ -688,10 +682,15 @@ mod tests {
             second.stats.cost_ledger
         );
         let stamped: serde_json::Value = serde_json::from_str(&second.stats.cost_ledger).unwrap();
-        let usd = stamped["estimatedCostUsd"].as_f64().unwrap();
         assert!(
-            (usd - 0.5).abs() < 1e-9,
-            "session cost {usd} != status-line total_usd"
+            stamped.get("estimatedCostUsd").is_none(),
+            "captured step is not a dollar: {}",
+            second.stats.cost_ledger
+        );
+        assert!(
+            stamped.get("pricing").is_none(),
+            "{}",
+            second.stats.cost_ledger
         );
         assert_eq!(
             stamped["categories"]["input"]["tokens"].as_u64(),

@@ -1,8 +1,8 @@
-//! Antigravity session dollars live on the conversation protobuf, not in
-//! `transcript.jsonl`. `CortexStepMetadata.model_cost` is fixed32 field 10
-//! (`GetModelCost`). The status line's `cost.total_usd` is the sum of those
-//! step costs, including subagent conversations, and already contains
-//! `subagent_usd`.
+//! Antigravity session dollars, when the CLI has recorded one, are
+//! `CortexStepMetadata.model_cost` (fixed32 field 10) on `steps.metadata`.
+//! The status line's `total_usd` is the sum of those values, including
+//! subagent conversations once. A step with no `model_cost` is not a dollar:
+//! quota percents and token counts are not priced here.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -75,9 +75,8 @@ pub(crate) fn file_revision(path: &Path) -> u64 {
 }
 
 pub(crate) fn read_model_cost_total(paths: &ConversationPaths) -> CostRead {
-    let mut saw = false;
-    let mut total = 0.0f64;
-    if sum_file(&paths.db, &mut saw, &mut total).is_err() {
+    let mut blobs = Vec::new();
+    if load_metadata(&paths.db, &mut blobs).is_err() {
         return CostRead::Unreadable;
     }
     if paths.summaries.is_file() {
@@ -91,20 +90,34 @@ pub(crate) fn read_model_cost_total(paths: &ConversationPaths) -> CostRead {
             if !db.is_file() {
                 continue;
             }
-            if sum_file(&db, &mut saw, &mut total).is_err() {
+            if load_metadata(&db, &mut blobs).is_err() {
                 return CostRead::Unreadable;
             }
         }
     }
-    if saw {
-        CostRead::Total(total)
-    } else {
-        CostRead::NoModelCost
+    let refs: Vec<&[u8]> = blobs.iter().map(Vec::as_slice).collect();
+    match session_usd_from_metadata(&refs) {
+        Some(usd) => CostRead::Total(usd),
+        None => CostRead::NoModelCost,
     }
 }
 
+/// Sum of top-level fixed32 field 10 across these step blobs. `None` when
+/// no blob recorded `model_cost`. Nested floats are not that field.
+pub(crate) fn session_usd_from_metadata(blobs: &[&[u8]]) -> Option<f64> {
+    let mut total = 0.0f64;
+    let mut saw = false;
+    for blob in blobs {
+        if let Some(cost) = step_model_cost(blob) {
+            saw = true;
+            total += f64::from(cost);
+        }
+    }
+    saw.then_some(total)
+}
+
 /// Top-level fixed32 field 10. Nested floats are not this field.
-pub(crate) fn step_model_cost(metadata: &[u8]) -> Option<f32> {
+fn step_model_cost(metadata: &[u8]) -> Option<f32> {
     let mut i = 0;
     let mut found = None;
     while i < metadata.len() {
@@ -153,7 +166,7 @@ pub(crate) fn step_model_cost(metadata: &[u8]) -> Option<f32> {
     found
 }
 
-fn sum_file(path: &Path, saw: &mut bool, total: &mut f64) -> Result<(), ()> {
+fn load_metadata(path: &Path, out: &mut Vec<Vec<u8>>) -> Result<(), ()> {
     with_ro(path, |conn| {
         let mut stmt = conn
             .prepare("SELECT metadata FROM steps WHERE metadata IS NOT NULL")
@@ -162,11 +175,7 @@ fn sum_file(path: &Path, saw: &mut bool, total: &mut f64) -> Result<(), ()> {
             .query_map([], |row| row.get::<_, Vec<u8>>(0))
             .map_err(|_| ())?;
         for row in rows {
-            let blob = row.map_err(|_| ())?;
-            if let Some(cost) = step_model_cost(&blob) {
-                *saw = true;
-                *total += f64::from(cost);
-            }
+            out.push(row.map_err(|_| ())?);
         }
         Ok(())
     })
@@ -320,15 +329,6 @@ fn mtime_ms(path: &Path) -> u64 {
 #[cfg(test)]
 pub(crate) const CAPTURED_STEP: &[u8] = include_bytes!("testdata/e5b88dc4-step1.metadata.pb");
 
-/// Field 10, wire type 5, the encoding `GetModelCost` unmarshals.
-#[cfg(test)]
-pub(crate) fn with_model_cost(metadata: &[u8], cost: f32) -> Vec<u8> {
-    let mut out = metadata.to_vec();
-    out.push((10 << 3) | 5);
-    out.extend_from_slice(&cost.to_le_bytes());
-    out
-}
-
 /// One conversation db, the same `steps.metadata` column the CLI writes.
 #[cfg(test)]
 pub(crate) fn write_steps(path: &Path, blobs: &[Vec<u8>]) {
@@ -374,83 +374,52 @@ mod tests {
 
     #[test]
     fn captured_planner_step_has_no_model_cost() {
-        assert!(step_model_cost(CAPTURED_STEP).is_none());
+        assert_eq!(CAPTURED_STEP.len(), 384);
         let usage = model_usage_tokens(CAPTURED_STEP).unwrap();
         assert_eq!(usage, (8093, 247));
-        let priced = with_model_cost(CAPTURED_STEP, 0.5);
-        let cost = step_model_cost(&priced).unwrap();
-        assert!((f64::from(cost) - 0.5).abs() < 1e-6);
+        assert!(session_usd_from_metadata(&[CAPTURED_STEP]).is_none());
     }
 
-    /// The captured step, stored the way the CLI stores it, is not a dollar.
-    /// A later `model_cost` on that same blob, plus the linked child db, is
-    /// the status-line total. An unlinked db is not added, and a recorded 0
-    /// is a stamp rather than "no cost".
+    /// The captured step, stored as the CLI stores it, is not a dollar. A
+    /// linked child that holds the same unmodified bytes is not one either.
     #[test]
-    fn captured_db_sums_model_cost_once() {
+    fn captured_db_has_no_session_dollar() {
         let dir = std::env::temp_dir().join(format!(
             "sparkmux-agy-model-cost-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+            COPY_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let parent = "e5b88dc4-16a4-4c0b-8011-621243f0f559";
         let child = "c0ffee00-16a4-4c0b-8011-621243f0f559";
-        let decoy = "deadbeef-16a4-4c0b-8011-621243f0f559";
         let conv = dir.join("conversations");
         let parent_db = conv.join(format!("{parent}.db"));
         let summaries = dir.join("conversation_summaries.db");
+        write_steps(&parent_db, &[CAPTURED_STEP.to_vec()]);
+        let stored = read_step(&parent_db);
+        assert_eq!(stored.as_slice(), CAPTURED_STEP);
         let paths = ConversationPaths {
-            db: parent_db.clone(),
+            db: parent_db,
             summaries: summaries.clone(),
             id: parent.to_string(),
         };
-
-        write_steps(&parent_db, &[CAPTURED_STEP.to_vec()]);
         assert!(
             matches!(read_model_cost_total(&paths), CostRead::NoModelCost),
             "the captured planner step has no model_cost"
         );
-
-        std::fs::remove_file(&parent_db).unwrap();
-        write_steps(&parent_db, &[with_model_cost(CAPTURED_STEP, 0.0)]);
-        match read_model_cost_total(&paths) {
-            CostRead::Total(usd) => assert!(usd.abs() < 1e-9, "{usd}"),
-            CostRead::NoModelCost => panic!("a recorded 0 must stay 0"),
-            CostRead::Unreadable => panic!("zero-cost db was unreadable"),
-        }
-
-        std::fs::remove_file(&parent_db).unwrap();
-        write_steps(
-            &parent_db,
-            &[CAPTURED_STEP.to_vec(), with_model_cost(CAPTURED_STEP, 0.25)],
-        );
-        write_steps(
-            &conv.join(format!("{child}.db")),
-            &[with_model_cost(CAPTURED_STEP, 0.25)],
-        );
-        write_steps(
-            &conv.join(format!("{decoy}.db")),
-            &[with_model_cost(CAPTURED_STEP, 9.0)],
-        );
+        write_steps(&conv.join(format!("{child}.db")), &[CAPTURED_STEP.to_vec()]);
         write_child_link(&summaries, parent, child);
-        match read_model_cost_total(&paths) {
-            CostRead::Total(usd) => {
-                assert!((usd - 0.5).abs() < 1e-6, "parent + child = {usd}, not 9.5");
-            }
-            CostRead::NoModelCost => panic!("priced steps were ignored"),
-            CostRead::Unreadable => panic!("priced db was unreadable"),
-        }
+        assert!(matches!(
+            read_model_cost_total(&paths),
+            CostRead::NoModelCost
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Rows that exist only in the `-wal` are part of the status-line total.
-    /// Reading them must not write the source `-shm`.
+    /// A WAL-only copy of the captured step is still not a dollar, and the
+    /// read must not write the source `-shm`.
     #[test]
-    fn wal_model_cost_is_read_without_touching_the_source_shm() {
+    fn wal_captured_step_is_read_without_touching_the_source_shm() {
         let dir = std::env::temp_dir().join(format!(
             "sparkmux-agy-wal-{}-{}",
             std::process::id(),
@@ -468,13 +437,18 @@ mod tests {
                  CREATE TABLE steps (idx INTEGER PRIMARY KEY, metadata BLOB);",
             )
             .unwrap();
-        let priced = with_model_cost(CAPTURED_STEP, 0.5);
         writer
             .execute(
                 "INSERT INTO steps (idx, metadata) VALUES (1, ?1)",
-                rusqlite::params![priced],
+                rusqlite::params![CAPTURED_STEP],
             )
             .unwrap();
+        let stored: Vec<u8> = writer
+            .query_row("SELECT metadata FROM steps WHERE idx = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored.as_slice(), CAPTURED_STEP);
         let wal = sidecar(&db, "-wal");
         assert!(
             std::fs::metadata(&wal).map(|meta| meta.len()).unwrap_or(0) > 0,
@@ -487,15 +461,22 @@ mod tests {
             summaries: dir.join("conversation_summaries.db"),
             id: parent.to_string(),
         };
-        match read_model_cost_total(&paths) {
-            CostRead::Total(usd) => assert!((usd - 0.5).abs() < 1e-6, "{usd}"),
-            CostRead::NoModelCost => panic!("wal row was invisible"),
-            CostRead::Unreadable => panic!("wal db was unreadable"),
-        }
+        assert!(
+            matches!(read_model_cost_total(&paths), CostRead::NoModelCost),
+            "the captured wal step is not a dollar"
+        );
         let after = std::fs::metadata(&shm).unwrap().modified().unwrap();
         assert_eq!(before, after, "reading cost wrote the source -shm");
         drop(writer);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn read_step(path: &Path) -> Vec<u8> {
+        let conn = Connection::open(path).unwrap();
+        conn.query_row("SELECT metadata FROM steps WHERE idx = 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
     }
 
     /// Field 9 is `model_usage`. Field 2 is input tokens, field 3 is output.

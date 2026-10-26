@@ -1974,8 +1974,8 @@ fn stamp_agy_status_cost(cost: &Map<String, Value>, cur: &mut Cursor) {
     cur.cost_ledger = Value::Object(ledger).to_string();
 }
 
-/// Sum `model_cost` from the conversation protobuf. Subagent databases are
-/// included once. `subagent_usd` is not added on top of that total.
+/// Publish `estimatedCostUsd` only from `session_usd_from_metadata`. A
+/// conversation whose steps omit `model_cost` leaves the ledger unstamped.
 fn note_agy_model_cost(transcript: &Path, cur: &mut Cursor) {
     let Some(paths) = super::agy_cost::conversation_paths(transcript) else {
         return;
@@ -2840,6 +2840,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Cost-summary stamp fixture. Not a live `transcript.jsonl`.
     #[test]
     fn agy_cost_summary_lands_on_the_cursor() {
         let scratch_dir = scratch("agy-cost");
@@ -2917,9 +2918,9 @@ mod tests {
 
     /// A real `brain/*/transcript.jsonl` planner row has token counters, a
     /// thinking string, and tool calls. It does not carry a dollar. The
-    /// session dollar is `model_cost` on the captured conversation step.
+    /// captured conversation step does not either.
     #[test]
-    fn agy_real_planner_rows_keep_tokens_and_status_line_total() {
+    fn agy_real_planner_rows_and_captured_step_have_no_dollar() {
         let scratch_dir = scratch("agy-real");
         let dir = scratch_dir
             .join("brain")
@@ -2966,41 +2967,30 @@ mod tests {
             .get("estimatedCostUsd")
             .is_none());
 
-        // Captured `steps.metadata` from conversation e5b88dc4. The raw blob
-        // has no model_cost. Field 10 is the fixed32 `GetModelCost` writes.
-        // Parent 0.25 + linked child 0.25 is the status-line total. The
-        // unlinked db's 9.0 is not `subagent_usd` and is not added.
+        // Unmodified capture. Compared to the included bytes before ingest.
         let id = "7bf2186c-d869-47d9-b2e9-55c01f8018ff";
-        let child = "c0ffee00-16a4-4c0b-8011-621243f0f559";
-        let decoy = "deadbeef-16a4-4c0b-8011-621243f0f559";
-        let conv = scratch_dir.join("conversations");
-        let priced =
-            super::super::agy_cost::with_model_cost(super::super::agy_cost::CAPTURED_STEP, 0.25);
+        let db_path = scratch_dir.join("conversations").join(format!("{id}.db"));
         super::super::agy_cost::write_steps(
-            &conv.join(format!("{id}.db")),
-            &[
-                super::super::agy_cost::CAPTURED_STEP.to_vec(),
-                priced.clone(),
-            ],
+            &db_path,
+            &[super::super::agy_cost::CAPTURED_STEP.to_vec()],
         );
-        super::super::agy_cost::write_steps(&conv.join(format!("{child}.db")), &[priced]);
-        super::super::agy_cost::write_steps(
-            &conv.join(format!("{decoy}.db")),
-            &[super::super::agy_cost::with_model_cost(
-                super::super::agy_cost::CAPTURED_STEP,
-                9.0,
-            )],
-        );
-        super::super::agy_cost::write_child_link(
-            &scratch_dir.join("conversation_summaries.db"),
-            id,
-            child,
-        );
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let stored: Vec<u8> = conn
+            .query_row("SELECT metadata FROM steps WHERE idx = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored.as_slice(), super::super::agy_cost::CAPTURED_STEP);
+        drop(conn);
         ingest(CliKind::Antigravity, &path, &mut cur, 0);
         assert!(!cur.cost_ledger.contains("quota"), "{}", cur.cost_ledger);
         assert!(!cur.cost_ledger.contains("subagent"), "{}", cur.cost_ledger);
         let stamped: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
-        assert!((stamped["estimatedCostUsd"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+        assert!(
+            stamped.get("estimatedCostUsd").is_none(),
+            "captured step is not a dollar: {}",
+            cur.cost_ledger
+        );
         assert_eq!(
             stamped["categories"]["input"]["tokens"].as_u64(),
             Some(4842)
