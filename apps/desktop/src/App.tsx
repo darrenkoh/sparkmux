@@ -1,4 +1,5 @@
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isTauriRuntime } from "./transport";
@@ -507,6 +508,16 @@ export default function App() {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => pushClientSize());
       });
+      const title = win ? `Sparkmux — ${session}:${win.name}` : `Sparkmux — ${session}`;
+      if (isTauriRuntime()) {
+        try {
+          await getCurrentWindow().setTitle(title);
+        } catch {
+          /* ACL optional */
+        }
+      } else {
+        document.title = title;
+      }
     },
     [applyWindow, pixelClientSize, pushClientSize],
   );
