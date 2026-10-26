@@ -2012,22 +2012,8 @@ body.is-resizing * {
   white-space: nowrap;
 }
 
-.status-env {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
 .status .sep {
   opacity: 0.45;
-}
-
-.status-loc {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 0 auto;
 }
 
 .status-metrics {
@@ -7907,14 +7893,6 @@ div.mini-subagents-head {
 .app.posture-phone-compact .status {
   padding: 4px 8px;
   gap: 6px;
-}
-
-.app.posture-phone-compact .status-env {
-  display: none;
-}
-
-.app.posture-phone-compact .status-loc {
-  max-width: 140px;
 }
 
 .app.posture-phone-compact .status-quota-card,

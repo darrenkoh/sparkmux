@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { LlmUsage, TmuxStatus } from "../types";
+import type { LlmUsage } from "../types";
 import { usageChips, type UsageChip } from "./llmUsage";
 import {
   buildSparklinePaths,
@@ -495,9 +495,6 @@ function HardwareHudCard({
 }
 
 export default function StatusBar({
-  status,
-  session,
-  windowName,
   telemetry,
   usage,
   outputOpen,
@@ -511,9 +508,6 @@ export default function StatusBar({
   webModalOpen,
   onWebServe,
 }: {
-  status: TmuxStatus | null;
-  session: string | null;
-  windowName: string | null;
   telemetry: AppTelemetry | null;
   usage?: LlmUsage | null;
   outputOpen: boolean;
@@ -527,10 +521,6 @@ export default function StatusBar({
   webModalOpen?: boolean;
   onWebServe?: () => void;
 }) {
-  const tmux = status?.version ?? "tmux";
-  const sock = status?.socket_name ? `-L ${status.socket_name}` : "-L sparkmux";
-  const loc =
-    session && windowName ? `${session}:${windowName}` : session ?? "—";
   const memory = formatMemory(telemetry?.memory_bytes);
   const cpu = formatCpu(telemetry?.cpu_percent);
   const chips = usageChips(usage, Date.now());
@@ -559,13 +549,6 @@ export default function StatusBar({
 
   return (
     <footer className="status">
-      <span className="status-env">
-        <span>{tmux}</span>
-        <span className="sep">·</span>
-        <span>{sock}</span>
-        <span className="sep">·</span>
-      </span>
-      <span className="status-loc">{loc}</span>
       <span className="status-metrics">
         {chips.length > 0 && (
           <span className="status-usage-row" role="region" aria-label="Model Quotas">
