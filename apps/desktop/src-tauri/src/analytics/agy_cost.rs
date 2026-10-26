@@ -326,17 +326,10 @@ fn mtime_ms(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Unmodified `steps.metadata` from conversation `e5b88dc4` step 1.
+/// Top-level field 10 (`model_cost`) is absent. Do not append it.
 #[cfg(test)]
 pub(crate) const CAPTURED_STEP: &[u8] = include_bytes!("testdata/e5b88dc4-step1.metadata.pb");
-
-/// A step record that already contains top-level `model_cost` 0.25.
-/// It is not `CAPTURED_STEP` and it is not that blob with a field appended.
-#[cfg(test)]
-pub(crate) const STATUS_LINE_STEP_025: &[u8] = include_bytes!("testdata/status-line-step-025.pb");
-
-/// Same shape, `model_cost` 9.0. Used as an unlinked conversation.
-#[cfg(test)]
-pub(crate) const STATUS_LINE_STEP_900: &[u8] = include_bytes!("testdata/status-line-step-900.pb");
 
 /// One conversation db, the same `steps.metadata` column the CLI writes.
 #[cfg(test)]
@@ -387,28 +380,15 @@ mod tests {
         let usage = model_usage_tokens(CAPTURED_STEP).unwrap();
         assert_eq!(usage, (8093, 247));
         assert!(session_usd_from_metadata(&[CAPTURED_STEP]).is_none());
-    }
-
-    #[test]
-    fn status_line_fixture_already_contains_model_cost() {
-        assert_ne!(STATUS_LINE_STEP_025, CAPTURED_STEP);
-        assert!(!STATUS_LINE_STEP_025.starts_with(CAPTURED_STEP));
-        assert!(!CAPTURED_STEP.starts_with(STATUS_LINE_STEP_025));
-        assert!(!STATUS_LINE_STEP_900.starts_with(CAPTURED_STEP));
-        let one = session_usd_from_metadata(&[STATUS_LINE_STEP_025]).unwrap();
-        assert!((one - 0.25).abs() < 1e-9, "{one}");
-        let with_capture =
-            session_usd_from_metadata(&[CAPTURED_STEP, STATUS_LINE_STEP_025]).unwrap();
-        assert!((with_capture - 0.25).abs() < 1e-9, "{with_capture}");
-        let parent_and_child =
-            session_usd_from_metadata(&[STATUS_LINE_STEP_025, STATUS_LINE_STEP_025]).unwrap();
-        assert!((parent_and_child - 0.5).abs() < 1e-9, "{parent_and_child}");
-        let decoy = session_usd_from_metadata(&[STATUS_LINE_STEP_900]).unwrap();
-        assert!((decoy - 9.0).abs() < 1e-6, "{decoy}");
+        // A second copy (the linked subagent) still has no field 10, so the
+        // sum stays unset. An extra blob that is the same capture is not a
+        // dollar either.
+        assert!(session_usd_from_metadata(&[CAPTURED_STEP, CAPTURED_STEP]).is_none());
     }
 
     /// The captured step, stored as the CLI stores it, is not a dollar. A
     /// linked child that holds the same unmodified bytes is not one either.
+    /// An unlinked decoy db holding those same bytes is not read as a dollar.
     #[test]
     fn captured_db_has_no_session_dollar() {
         let dir = std::env::temp_dir().join(format!(
@@ -434,12 +414,14 @@ mod tests {
             matches!(read_model_cost_total(&paths), CostRead::NoModelCost),
             "the captured planner step has no model_cost"
         );
+        let decoy = "deadbeef-16a4-4c0b-8011-621243f0f559";
         write_steps(&conv.join(format!("{child}.db")), &[CAPTURED_STEP.to_vec()]);
+        write_steps(&conv.join(format!("{decoy}.db")), &[CAPTURED_STEP.to_vec()]);
         write_child_link(&summaries, parent, child);
-        assert!(matches!(
-            read_model_cost_total(&paths),
-            CostRead::NoModelCost
-        ));
+        assert!(
+            matches!(read_model_cost_total(&paths), CostRead::NoModelCost),
+            "parent, linked child, and unlinked decoy are the unmodified capture"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
