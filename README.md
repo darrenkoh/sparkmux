@@ -56,6 +56,7 @@
 - [CLI Reference](#-cli-reference)
 - [Keyboard Shortcuts](#-keyboard-shortcuts)
 - [Configuration](#-configuration)
+- [Security](#-security)
 - [License](#-license)
 
 ---
@@ -449,6 +450,10 @@ last_session = ""
 A session you name from **New Session** is created under that name.
 
 ---
+
+## 🔒 Security
+
+Report a vulnerability in private. Supported versions and what is in scope are in [SECURITY.md](SECURITY.md).
 
 ## 🛡️ License
 
