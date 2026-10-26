@@ -67,7 +67,32 @@ fn config_path() -> Option<PathBuf> {
         .map(|dirs| dirs.config_dir().join("analytics.json"))
 }
 
+#[cfg(test)]
+static ANALYTICS_ROOT_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Tests point tab storage at a temp directory so a `tab_analytics` call does
+/// not write the user's sparkmux analytics directory.
+#[cfg(test)]
+pub(super) fn set_analytics_root_override(root: Option<PathBuf>) {
+    *ANALYTICS_ROOT_OVERRIDE
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = root;
+    if let Ok(mut cache) = STORAGE_CACHE.lock() {
+        *cache = None;
+    }
+}
+
 fn analytics_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Some(root) = ANALYTICS_ROOT_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
+            return Some(root);
+        }
+    }
     directories::ProjectDirs::from("", "", "sparkmux").map(|dirs| dirs.data_dir().join("analytics"))
 }
 

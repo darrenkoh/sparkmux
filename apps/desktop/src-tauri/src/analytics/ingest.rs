@@ -1856,10 +1856,11 @@ fn agy_cost_ledger(summary: &Map<String, Value>) -> Option<String> {
     Some(Value::Object(ledger).to_string())
 }
 
-fn note_agy_cost(obj: &Map<String, Value>, cur: &mut Cursor) {
-    let summary = obj
-        .get("cost_summary")
+fn agy_cost_summary_obj(obj: &Map<String, Value>) -> Option<&Map<String, Value>> {
+    obj.get("cost_summary")
         .or_else(|| obj.get("costSummary"))
+        .or_else(|| obj.get("conversation_cost_summary"))
+        .or_else(|| obj.get("conversationCostSummary"))
         .and_then(Value::as_object)
         .or_else(|| {
             if obj.contains_key("cumulative_total") || obj.contains_key("cumulativeTotal") {
@@ -1867,12 +1868,113 @@ fn note_agy_cost(obj: &Map<String, Value>, cur: &mut Cursor) {
             } else {
                 None
             }
-        });
-    let Some(summary) = summary else {
+        })
+}
+
+fn agy_ledger_map(cur: &Cursor) -> Map<String, Value> {
+    if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&cur.cost_ledger) {
+        if map.get("provider").and_then(Value::as_str) == Some("antigravity") {
+            return map;
+        }
+    }
+    let mut ledger = Map::new();
+    ledger.insert("provider".into(), Value::String("antigravity".into()));
+    ledger.insert("inputIncludesCache".into(), Value::Bool(false));
+    ledger
+}
+
+/// A conversation cost summary already priced each category. Later planner
+/// rows must not add those tokens again.
+fn agy_categories_priced(ledger: &Map<String, Value>) -> bool {
+    let Some(categories) = ledger.get("categories").and_then(Value::as_object) else {
+        return false;
+    };
+    categories.values().any(|category| {
+        category
+            .as_object()
+            .is_some_and(|row| f64_any(row, &["estimatedCostUsd", "estimated_cost_usd"]).is_some())
+    })
+}
+
+fn add_unpriced_tokens(categories: &mut Map<String, Value>, key: &str, add: u64) {
+    if add == 0 {
+        return;
+    }
+    let prev = categories
+        .get(key)
+        .and_then(Value::as_object)
+        .and_then(|row| row.get("tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let mut row = Map::new();
+    row.insert("tokens".into(), Value::from(prev.saturating_add(add)));
+    categories.insert(key.to_string(), Value::Object(row));
+}
+
+/// Real `PLANNER_RESPONSE` rows store `input_tokens`, `cache_read_tokens`, and
+/// `output_tokens`. `output_tokens` already includes thinking, so the thinking
+/// text and `tool_calls` are not billed again. No list price is invented.
+fn merge_agy_planner_buckets(obj: &Map<String, Value>, cur: &mut Cursor) {
+    let input = explicit_num(obj, &["input_tokens", "inputTokens"]);
+    let cache = explicit_num(
+        obj,
+        &["cache_read_tokens", "cacheReadTokens", "cachedReadTokens"],
+    );
+    let output = explicit_num(obj, &["output_tokens", "outputTokens"]);
+    if input.is_none() && cache.is_none() && output.is_none() {
+        return;
+    }
+    let mut ledger = agy_ledger_map(cur);
+    if agy_categories_priced(&ledger) {
+        return;
+    }
+    let mut categories = ledger
+        .get("categories")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    add_unpriced_tokens(&mut categories, "input", input.unwrap_or(0));
+    add_unpriced_tokens(&mut categories, "cacheRead", cache.unwrap_or(0));
+    add_unpriced_tokens(&mut categories, "output", output.unwrap_or(0));
+    if categories.is_empty() {
+        return;
+    }
+    ledger.insert("categories".into(), Value::Object(categories));
+    cur.cost_ledger = Value::Object(ledger).to_string();
+}
+
+/// Status-line `cost.total_usd` is the session dollar, and it already includes
+/// subagent spend. `subagent_usd`, the `estimated` flag, and quota are not added.
+fn stamp_agy_status_cost(cost: &Map<String, Value>, cur: &mut Cursor) {
+    if cost.contains_key("cumulative_total")
+        || cost.contains_key("cumulativeTotal")
+        || cost.contains_key("estimated_cost_usd")
+        || cost.contains_key("estimatedCostUsd")
+        || cost.get("total").and_then(Value::as_object).is_some()
+    {
+        if let Some(ledger) = agy_cost_ledger(cost) {
+            cur.cost_ledger = ledger;
+        }
+        return;
+    }
+    let Some(total) = f64_any(cost, &["total_usd", "totalUsd"]) else {
         return;
     };
-    if let Some(ledger) = agy_cost_ledger(summary) {
-        cur.cost_ledger = ledger;
+    let mut ledger = agy_ledger_map(cur);
+    put_f64(&mut ledger, "estimatedCostUsd", Some(total));
+    cur.cost_ledger = Value::Object(ledger).to_string();
+}
+
+fn note_agy_cost(obj: &Map<String, Value>, cur: &mut Cursor) {
+    if let Some(summary) = agy_cost_summary_obj(obj) {
+        if let Some(ledger) = agy_cost_ledger(summary) {
+            cur.cost_ledger = ledger;
+        }
+        return;
+    }
+    merge_agy_planner_buckets(obj, cur);
+    if let Some(cost) = obj.get("cost").and_then(Value::as_object) {
+        stamp_agy_status_cost(cost, cur);
     }
 }
 
@@ -2739,6 +2841,106 @@ mod tests {
                 .abs()
                 < 1e-9
         );
+
+        // A later planner row must not add its tokens onto a priced summary.
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"step_index":3,"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-10T01:00:20Z","thinking":"again","content":"later","input_tokens":99999,"cache_read_tokens":88888,"output_tokens":77777,"tool_calls":[{{"name":"view_file","args":{{"path":"a.rs"}}}}]}}"#
+        )
+        .unwrap();
+        drop(file);
+        ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        let again: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert!((again["estimatedCostUsd"].as_f64().unwrap() - 0.87).abs() < 1e-9);
+        assert_eq!(
+            again["categories"]["thinking"]["tokens"].as_i64(),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            again["categories"]["input"]["tokens"].as_i64(),
+            Some(100_000)
+        );
+        let _ = fs::remove_dir_all(&scratch_dir);
+    }
+
+    /// A real `brain/*/transcript.jsonl` planner row has token counters, a
+    /// thinking string, and tool calls. It does not carry `cost_summary`.
+    /// The session dollar is the status-line `cost.total_usd`.
+    #[test]
+    fn agy_real_planner_rows_keep_tokens_and_status_line_total() {
+        let scratch_dir = scratch("agy-real");
+        let dir = scratch_dir
+            .join("brain")
+            .join("7bf2186c-d869-47d9-b2e9-55c01f8018ff");
+        let logs = dir.join(".system_generated").join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let path = logs.join("transcript.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:05Z\",\"thinking\":\"look at the layout\",\"content\":\"checking\",\"input_tokens\":2623,\"cache_read_tokens\":18040,\"output_tokens\":95,\"tool_calls\":[{\"name\":\"view_file\",\"args\":{\"path\":\"src/main.rs\"}}]}\n",
+                "{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:08Z\",\"thinking\":\"narrow the match\",\"content\":\"done\",\"input_tokens\":2219,\"cache_read_tokens\":20137,\"output_tokens\":87,\"tool_calls\":[{\"name\":\"grep_search\",\"args\":{\"query\":\"cost\"}}]}\n",
+            ),
+        )
+        .unwrap();
+        let mut cur = Cursor::default();
+        let events = ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        let usage = events.iter().find(|event| event.k == "usage").unwrap();
+        assert!(
+            usage.tr > 0,
+            "thinking text still estimates a usage row: {}",
+            usage.tr
+        );
+        assert!(
+            !cur.cost_ledger.contains("estimatedCostUsd"),
+            "token rows are not a dollar stamp: {}",
+            cur.cost_ledger
+        );
+        assert!(!cur.cost_ledger.contains("pricing"), "{}", cur.cost_ledger);
+        assert!(!cur.cost_ledger.contains("quota"), "{}", cur.cost_ledger);
+        let ledger: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert_eq!(ledger["provider"], "antigravity");
+        assert_eq!(ledger["inputIncludesCache"], false);
+        assert!(ledger.get("thinking").is_none());
+        assert!(ledger["categories"].get("thinking").is_none());
+        assert!(ledger["categories"].get("tools").is_none());
+        assert_eq!(ledger["categories"]["input"]["tokens"].as_u64(), Some(4842));
+        assert_eq!(
+            ledger["categories"]["cacheRead"]["tokens"].as_u64(),
+            Some(38177)
+        );
+        assert_eq!(ledger["categories"]["output"]["tokens"].as_u64(), Some(182));
+        assert!(ledger["categories"]["input"]
+            .get("estimatedCostUsd")
+            .is_none());
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(
+            file,
+            r#"{{"cost":{{"total_usd":0.5,"subagent_usd":0.25,"estimated":false}},"quota":{{"used_percent":12}}}}"#
+        )
+        .unwrap();
+        drop(file);
+        ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        assert!(!cur.cost_ledger.contains("quota"), "{}", cur.cost_ledger);
+        assert!(!cur.cost_ledger.contains("subagent"), "{}", cur.cost_ledger);
+        let stamped: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert!((stamped["estimatedCostUsd"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+        assert_eq!(
+            stamped["categories"]["input"]["tokens"].as_u64(),
+            Some(4842)
+        );
+        assert_eq!(
+            stamped["categories"]["cacheRead"]["tokens"].as_u64(),
+            Some(38177)
+        );
+        assert_eq!(
+            stamped["categories"]["output"]["tokens"].as_u64(),
+            Some(182)
+        );
+        assert!(stamped["categories"].get("thinking").is_none());
+        assert!(stamped.get("pricing").is_none());
         let _ = fs::remove_dir_all(&scratch_dir);
     }
 }

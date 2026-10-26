@@ -410,7 +410,7 @@ fn safe_component(name: &str) -> bool {
     !name.is_empty() && !name.contains('/') && !name.contains('\\') && name != "." && name != ".."
 }
 
-fn encode_grok_path(path: &Path) -> String {
+pub(crate) fn encode_grok_path(path: &Path) -> String {
     let text = path.to_string_lossy();
     let text = text.trim_end_matches('/');
     percent_encode(text)

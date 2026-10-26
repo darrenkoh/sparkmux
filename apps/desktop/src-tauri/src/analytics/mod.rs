@@ -25,6 +25,10 @@ use crate::artifacts::default_roots;
 struct CachedStats {
     active_src: Option<String>,
     cursor_offset: u64,
+    /// Grok `usage.json` mtime. A tick rewrite does not move the chat offset.
+    usage_mtime: u64,
+    /// CLI `/usage` stamp. Compared so a new `costUsdTicks` leaves the cache.
+    cost_ledger: String,
     stats: TabAnalyticsStats,
     lifetime_stats: Option<TabAnalyticsStats>,
 }
@@ -40,6 +44,23 @@ static LIVE: Mutex<Option<LiveAnalytics>> = Mutex::new(None);
 
 fn live_lock() -> MutexGuard<'static, Option<LiveAnalytics>> {
     LIVE.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+#[cfg(test)]
+static ROOTS_OVERRIDE: Mutex<Option<crate::artifacts::TranscriptRoots>> = Mutex::new(None);
+
+fn analytics_roots() -> crate::artifacts::TranscriptRoots {
+    #[cfg(test)]
+    {
+        if let Some(roots) = ROOTS_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
+            return roots;
+        }
+    }
+    default_roots()
 }
 
 fn fresh_cursor(cursor: &Cursor) -> bool {
@@ -137,7 +158,7 @@ pub async fn tab_analytics(
             &cwd,
             &title,
             pid,
-            &default_roots(),
+            &analytics_roots(),
         ) else {
             return Ok(TabAnalyticsResponse {
                 enabled: is_enabled(),
@@ -243,9 +264,14 @@ pub async fn tab_analytics(
             }
         }
 
-        // Check if we can reuse cached stats when no new events arrived and cursor offset didn't change
+        // Reuse stats only when the chat offset and the usage stamp are unchanged.
+        // `usage.json` can gain a new `costUsdTicks` without appending chat bytes.
         let cached = live.stats_cache.get(&key).and_then(|c| {
-            if c.active_src == active_src && c.cursor_offset == cursor.offset {
+            if c.active_src == active_src
+                && c.cursor_offset == cursor.offset
+                && c.usage_mtime == cursor.usage_mtime
+                && c.cost_ledger == cursor.cost_ledger
+            {
                 Some((c.stats.clone(), c.lifetime_stats.clone()))
             } else {
                 None
@@ -308,6 +334,8 @@ pub async fn tab_analytics(
                 CachedStats {
                     active_src: active_src.clone(),
                     cursor_offset: cursor.offset,
+                    usage_mtime: cursor.usage_mtime,
+                    cost_ledger: cursor.cost_ledger.clone(),
                     stats: stats.clone(),
                     lifetime_stats: lifetime_stats.clone(),
                 },
@@ -383,5 +411,114 @@ mod tests {
         later.ti = 40;
         let kept = without_recorded(&stored, vec![stored[0].clone(), again, later.clone()]);
         assert_eq!(kept, vec![later]);
+    }
+
+    /// A Grok `usage.json` tick rewrite that does not append `chat_history`
+    /// must reach `tab_analytics`. The stats cache used to key only on the
+    /// chat offset, so the HUD kept the previous stamp.
+    #[test]
+    fn grok_cost_stamp_reaches_tab_analytics_without_new_chat_bytes() {
+        use std::time::{Duration, SystemTime};
+
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                *ROOTS_OVERRIDE
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = None;
+                storage::set_analytics_root_override(None);
+            }
+        }
+        let _reset = Reset;
+
+        let root = std::env::temp_dir().join(format!(
+            "sparkmux-tab-cost-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("work");
+        let grok_sessions = root.join("grok-sessions");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(root.join("claude")).unwrap();
+        std::fs::create_dir_all(root.join("agy")).unwrap();
+        let session = grok_sessions
+            .join(crate::artifacts::encode_grok_path(&project))
+            .join("costcache01");
+        std::fs::create_dir_all(&session).unwrap();
+        let chat = session.join("chat_history.jsonl");
+        std::fs::write(&chat, "{\"type\":\"user\",\"content\":\"hello\"}\n").unwrap();
+        let usage = session.join("usage.json");
+        let stamp = |ticks: i64| {
+            format!(
+                r#"{{"session":{{"costUsdTicks":{ticks},"inputTokens":1000,"outputTokens":10,"cachedReadTokens":0,"primaryModelId":"grok-4.7"}},"turns":[]}}"#
+            )
+        };
+        std::fs::write(&usage, stamp(11_000_000_000)).unwrap();
+
+        *ROOTS_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) =
+            Some(crate::artifacts::TranscriptRoots {
+                grok_sessions,
+                claude_projects: root.join("claude"),
+                grok_active_sessions: root.join("active_sessions.json"),
+                agy_root: root.join("agy"),
+            });
+        storage::set_analytics_root_override(Some(root.join("analytics")));
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cwd = project.to_string_lossy().to_string();
+        let first = rt
+            .block_on(tab_analytics(
+                "cost-cache".into(),
+                "tab".into(),
+                "grok".into(),
+                cwd.clone(),
+                String::new(),
+                0,
+            ))
+            .unwrap();
+        assert_eq!(first.cli.as_deref(), Some("grok"));
+        assert!(
+            first.transcript_path.as_deref().is_some_and(|path| {
+                path.contains("costcache01") && path.ends_with("chat_history.jsonl")
+            }),
+            "{:?}",
+            first.transcript_path
+        );
+        let first_ledger: serde_json::Value =
+            serde_json::from_str(&first.stats.cost_ledger).unwrap();
+        assert_eq!(first_ledger["costUsdTicks"].as_i64(), Some(11_000_000_000));
+
+        let chat_len = std::fs::metadata(&chat).unwrap().len();
+        std::fs::write(&usage, stamp(22_000_000_000)).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&usage)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(std::fs::metadata(&chat).unwrap().len(), chat_len);
+
+        let second = rt
+            .block_on(tab_analytics(
+                "cost-cache".into(),
+                "tab".into(),
+                "grok".into(),
+                cwd,
+                String::new(),
+                0,
+            ))
+            .unwrap();
+        let second_ledger: serde_json::Value =
+            serde_json::from_str(&second.stats.cost_ledger).unwrap();
+        assert_eq!(
+            second_ledger["costUsdTicks"].as_i64(),
+            Some(22_000_000_000),
+            "usage.json ticks must replace the cached stamp: {}",
+            second.stats.cost_ledger
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
