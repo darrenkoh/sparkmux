@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { openEditorPath, paneArtifacts } from "../api";
@@ -38,7 +38,6 @@ export default function ArtifactPanel({
   const [feed, setFeed] = useState<ArtifactFeed | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const unmountedRef = useRef(false);
   const paramsRef = useRef({ command, cwd, title, pid });
   paramsRef.current = { command, cwd, title, pid };
 
@@ -48,58 +47,56 @@ export default function ArtifactPanel({
     scrollHeight: 0,
   });
 
-  const tick = useCallback(() => {
-    const { command, cwd, title, pid } = paramsRef.current;
-    void paneArtifacts(command, cwd, title, pid)
-      .then((next) => {
-        if (unmountedRef.current) return;
-        setFeed((prev) => {
-          if (
-            prev &&
-            prev.cli === next.cli &&
-            prev.transcript_path === next.transcript_path &&
-            prev.file_len === next.file_len &&
-            prev.entries.length === next.entries.length &&
-            prev.error === next.error
-          ) {
-            const prevLast = prev.entries[prev.entries.length - 1];
-            const nextLast = next.entries[next.entries.length - 1];
+  useEffect(() => {
+    let cancelled = false;
+    const tick = () => {
+      const { command, cwd, title, pid } = paramsRef.current;
+      void paneArtifacts(command, cwd, title, pid)
+        .then((next) => {
+          if (cancelled) return;
+          setFeed((prev) => {
             if (
-              prevLast?.id === nextLast?.id &&
-              prevLast?.body === nextLast?.body &&
-              prevLast?.label === nextLast?.label
+              prev &&
+              prev.cli === next.cli &&
+              prev.transcript_path === next.transcript_path &&
+              prev.file_len === next.file_len &&
+              prev.entries.length === next.entries.length &&
+              prev.error === next.error
             ) {
-              return prev;
+              const prevLast = prev.entries[prev.entries.length - 1];
+              const nextLast = next.entries[next.entries.length - 1];
+              if (
+                prevLast?.id === nextLast?.id &&
+                prevLast?.body === nextLast?.body &&
+                prevLast?.label === nextLast?.label
+              ) {
+                return prev;
+              }
             }
-          }
-          return next;
+            return next;
+          });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setFeed((prev) =>
+            prev ?? {
+              cli: null,
+              transcript_path: null,
+              file_len: 0,
+              entries: [],
+              error: "Could not read the transcript.",
+            },
+          );
         });
-      })
-      .catch(() => {
-        if (unmountedRef.current) return;
-        setFeed((prev) =>
-          prev ?? {
-            cli: null,
-            transcript_path: null,
-            file_len: 0,
-            entries: [],
-            error: "Could not read the transcript.",
-          },
-        );
-      });
-  }, []);
-
-  useEffect(() => {
+    };
     tick();
-  }, [command, cwd, title, pid, tick]);
-
-  useEffect(() => {
     const id = window.setInterval(tick, 1000);
     return () => {
-      unmountedRef.current = true;
+      cancelled = true;
       window.clearInterval(id);
     };
-  }, [tick]);
+    // Title spins every frame. Reading it from paramsRef keeps one poll alive.
+  }, [command, cwd, pid]);
 
   const rawEntries = feed?.entries ?? [];
   const turns = groupArtifactTurns(rawEntries);
