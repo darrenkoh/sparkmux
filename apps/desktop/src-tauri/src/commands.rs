@@ -612,7 +612,7 @@ pub async fn stop_server_core(app: Option<&AppHandle>, state: &AppState) -> Resu
     inner.stopped = true;
     drop(inner);
     let _ = state.events_tx.send(ServerPushEvent::ServerStopped);
-    if let Some(app) = app {
+    if let Some(app) = app.cloned().or_else(|| state.app_handle()) {
         let _ = app.emit("server-stopped", ());
     }
     Ok(())
@@ -828,7 +828,7 @@ pub fn sync_active_target_core(
         }
     };
     if changed {
-        if let Some(app) = app {
+        if let Some(app) = app.cloned().or_else(|| state.app_handle()) {
             let _ = app.emit("active-target-changed", &target);
         }
         let _ = state

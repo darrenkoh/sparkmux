@@ -717,6 +717,7 @@ export default function App() {
 
   useEffect(() => {
     const onWindowFocus = () => {
+      lastPushedSizeRef.current = null;
       pushClientSize();
     };
     window.addEventListener("focus", onWindowFocus);

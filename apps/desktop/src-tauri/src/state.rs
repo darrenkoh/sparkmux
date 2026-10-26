@@ -90,6 +90,7 @@ pub struct AppState {
     pub events_tx: broadcast::Sender<ServerPushEvent>,
     pub is_headless: bool,
     pub web_urls: Arc<std::sync::Mutex<Vec<String>>>,
+    pub app_handle: Arc<std::sync::Mutex<Option<tauri::AppHandle>>>,
 }
 
 pub struct Inner {
@@ -145,7 +146,18 @@ impl AppState {
             events_tx,
             is_headless,
             web_urls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            app_handle: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        if let Ok(mut guard) = self.app_handle.lock() {
+            *guard = Some(handle);
+        }
+    }
+
+    pub fn app_handle(&self) -> Option<tauri::AppHandle> {
+        self.app_handle.lock().ok().and_then(|guard| guard.clone())
     }
 }
 

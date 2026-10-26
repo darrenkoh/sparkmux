@@ -149,6 +149,7 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+            app.state::<AppState>().set_app_handle(handle.clone());
             {
                 use tauri_plugin_notification::NotificationExt;
                 let _ = app.notification().on_action(move |_action| {

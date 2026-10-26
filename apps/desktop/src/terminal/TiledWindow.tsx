@@ -79,6 +79,8 @@ export default function TiledWindow({
           inputMode={paneModes?.get(paneId)}
           paneCols={fixedSize ? node.Pane.w : undefined}
           paneRows={fixedSize ? node.Pane.h : undefined}
+          tmuxCols={node.Pane.w}
+          tmuxRows={node.Pane.h}
         />
       </div>
     );

@@ -25,6 +25,9 @@ pub async fn connect_core(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    if let Some(app) = app {
+        state.set_app_handle(app.clone());
+    }
     let session = sparkmux_core::session_name(&session)
         .map_err(|e| map_error(&e))?
         .to_string();
@@ -63,20 +66,23 @@ pub async fn connect_core(
         inner = state.inner.lock().await;
     }
 
-    shutdown_locked(&mut inner).await;
+    shutdown_locked(&mut inner, false).await;
 
     tracing::info!(%session, cols, rows, "control_connect");
     let started = std::time::Instant::now();
     let ctl = sparkmux_core::ControlClient::spawn(bin, args)
         .await
         .map_err(|e| map_error(&e))?;
-    if let Err(e) = ctl.refresh_size(cols.max(2), rows.max(1)).await {
-        let _ = ctl.shutdown().await;
-        return Err(map_error(&e));
+    if app.is_some() || state.is_headless {
+        if let Err(e) = ctl.refresh_size(cols.max(2), rows.max(1)).await {
+            let _ = ctl.shutdown().await;
+            return Err(map_error(&e));
+        }
     }
 
     let channels = inner.channels.clone();
-    let pump = spawn_pump(app.cloned(), state.events_tx.clone(), &ctl, channels);
+    let pump_app = app.cloned().or_else(|| state.app_handle());
+    let pump = spawn_pump(pump_app, state.events_tx.clone(), &ctl, channels);
     inner.control = Some(Arc::new(ctl));
     inner.pump = Some(pump);
     inner.attached_session = Some(session.clone());
@@ -89,7 +95,7 @@ pub async fn connect_core(
 /// Desktop detach. Drops the control client and does not kill the tmux server.
 pub async fn disconnect_core(state: &AppState) -> Result<(), String> {
     let mut inner = state.inner.lock().await;
-    shutdown_locked(&mut inner).await;
+    shutdown_locked(&mut inner, true).await;
     Ok(())
 }
 
@@ -118,14 +124,16 @@ async fn ensure_screen(inner: &mut crate::state::Inner, session: &str) {
     }
 }
 
-async fn shutdown_locked(inner: &mut crate::state::Inner) {
+async fn shutdown_locked(inner: &mut crate::state::Inner, clear_channels: bool) {
     if let Some(handle) = inner.pump.take() {
         handle.abort();
     }
     // Detach the read-only client before the control client so quit does not
     // leave an extra client on the server.
     inner.screen.take();
-    inner.channels.lock().await.clear();
+    if clear_channels {
+        inner.channels.lock().await.clear();
+    }
     if let Some(ctl) = inner.control.take() {
         let _ = ctl.shutdown().await;
     }

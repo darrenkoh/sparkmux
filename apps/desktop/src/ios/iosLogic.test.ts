@@ -383,4 +383,10 @@ test("the phone map fills its segment and the peek stays 64px above the app inse
   assert.match(appPad, /padding-bottom:\s*env\(safe-area-inset-bottom\)/);
   assert.match(css, /\.scifi-center\.phone-map-fill > \.scifi-splitter-h/);
   assert.match(css, /\.scifi-center\.phone-map-fill > \.scifi-row \{\s*display:\s*none;/);
+
+  const scaleStart = css.indexOf(".term-overview-scale {");
+  const scaleEnd = css.indexOf("}", scaleStart);
+  const scaleRule = css.slice(scaleStart, scaleEnd);
+  assert.match(scaleRule, /width:\s*100%/);
+  assert.match(scaleRule, /height:\s*100%/);
 });

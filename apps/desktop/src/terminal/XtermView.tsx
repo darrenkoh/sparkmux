@@ -58,6 +58,8 @@ export default function XtermView({
   inputMode,
   paneCols,
   paneRows,
+  tmuxCols,
+  tmuxRows,
 }: {
   paneId: string;
   focused: boolean;
@@ -67,6 +69,8 @@ export default function XtermView({
   inputMode?: PaneInputMode;
   paneCols?: number;
   paneRows?: number;
+  tmuxCols?: number;
+  tmuxRows?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -78,6 +82,8 @@ export default function XtermView({
   const focusedRef = useRef(focused);
   const paneColsRef = useRef(paneCols);
   const paneRowsRef = useRef(paneRows);
+  const scheduleReseedRef = useRef<() => void>(() => {});
+  const lastTmuxSizeRef = useRef({ cols: tmuxCols ?? 0, rows: tmuxRows ?? 0 });
   const doFitRef = useRef<() => void>(() => {});
   const redrawCaretRef = useRef<(forceBottom?: boolean) => void>(() => {});
   const syncTmuxCursorRef = useRef<(forceBottom?: boolean) => void>(() => {});
@@ -559,6 +565,33 @@ export default function XtermView({
     let reseedTimer: number | undefined;
     let subscribed = false;
 
+    const scheduleReseed = () => {
+      if (!subscribed || unmounted) return;
+      if (cursorTimer) window.clearTimeout(cursorTimer);
+      cursorTimer = window.setTimeout(() => {
+        if (!unmounted) syncTmuxCursor();
+      }, 120);
+      if (reseedTimer) window.clearTimeout(reseedTimer);
+      reseedTimer = window.setTimeout(() => {
+        if (unmounted) return;
+        seedState.seeded = false;
+        void bindPaneOutput(paneId, seedState, {
+          seed: paintSeed,
+          write: (bytes) => {
+            term.write(bytes, () => {
+              if (!unmounted && !applyingSeed) {
+                const buf = term.buffer.active;
+                if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
+                  scrollCursorIntoView(buf.cursorY, buf.cursorX);
+                }
+              }
+            });
+          },
+        });
+      }, 150);
+    };
+    scheduleReseedRef.current = scheduleReseed;
+
     const doFit = () => {
       if (applyingSeed || unmounted) return;
       if (paneColsRef.current && paneRowsRef.current) {
@@ -583,28 +616,7 @@ export default function XtermView({
       lastCols = term.cols;
       lastRows = term.rows;
       if (hadGrid) {
-        if (cursorTimer) window.clearTimeout(cursorTimer);
-        cursorTimer = window.setTimeout(() => {
-          if (!unmounted) syncTmuxCursor();
-        }, 120);
-        if (reseedTimer) window.clearTimeout(reseedTimer);
-        reseedTimer = window.setTimeout(() => {
-          if (unmounted) return;
-          seedState.seeded = false;
-          void bindPaneOutput(paneId, seedState, {
-            seed: paintSeed,
-            write: (bytes) => {
-              term.write(bytes, () => {
-                if (!unmounted && !applyingSeed) {
-                  const buf = term.buffer.active;
-                  if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
-                    scrollCursorIntoView(buf.cursorY, buf.cursorX);
-                  }
-                }
-              });
-            },
-          });
-        }, 150);
+        scheduleReseed();
       }
       if (subscribed) return;
       subscribed = true;
@@ -644,6 +656,7 @@ export default function XtermView({
     return () => {
       unmounted = true;
       doFitRef.current = () => {};
+      scheduleReseedRef.current = () => {};
       redrawCaretRef.current = () => {};
       syncTmuxCursorRef.current = () => {};
       scrollCursorIntoViewRef.current = () => {};
@@ -680,6 +693,15 @@ export default function XtermView({
       }
     });
   }, [paneCols, paneRows]);
+
+  useEffect(() => {
+    if (!tmuxCols || !tmuxRows) return;
+    const prev = lastTmuxSizeRef.current;
+    lastTmuxSizeRef.current = { cols: tmuxCols, rows: tmuxRows };
+    if (prev.cols > 0 && prev.rows > 0 && (prev.cols !== tmuxCols || prev.rows !== tmuxRows)) {
+      scheduleReseedRef.current();
+    }
+  }, [tmuxCols, tmuxRows]);
 
   useEffect(() => {
     const term = termRef.current;
