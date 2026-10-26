@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
   chronicleHologram,
@@ -16,7 +16,6 @@ import {
   type ChronicleKeyState,
 } from "./chronicleKeys";
 import {
-  acceptHologram,
   generationFromSession,
   resolveActiveAfterPoll,
   sameGeneration,
@@ -71,10 +70,12 @@ export default function ChronicleView(props: {
   sceneSlotRef: RefObject<HTMLDivElement | null>;
 }) {
   const { command, cwd, title, pid, onKeyContext, applyRef, sceneSlotRef } = props;
-  const [sceneSlot, setSceneSlot] = useState<HTMLDivElement | null>(null);
+  const [sceneSlot, setSceneSlot] = useState<HTMLDivElement | null>(() => sceneSlotRef.current);
   const trackRef = useRef<HTMLDivElement>(null);
   const activeCardRef = useRef<HTMLDivElement | null>(null);
   const viewerBodyRef = useRef<HTMLDivElement | null>(null);
+  const isDraggingRef = useRef(false);
+  const paneKeyRef = useRef<string | null>(null);
 
   const [session, setSession] = useState<ChronicleSession | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,8 +101,10 @@ export default function ChronicleView(props: {
   const activePath = activeId?.startsWith("now:") ? activeId.slice(4) : (activeStation?.path ?? pathRef.current);
   if (activePath) pathRef.current = activePath;
 
-  const nowAvailable = (path: string) =>
-    session?.now.some((entry) => entry.path === path && entry.available) ?? false;
+  const nowAvailable = useCallback(
+    (path: string) => session?.now.some((entry) => entry.path === path && entry.available) ?? false,
+    [session],
+  );
 
   const select = (id: string | null, nextStale: boolean) => {
     activeRef.current = id;
@@ -112,7 +115,7 @@ export default function ChronicleView(props: {
   const domain = useMemo(() => {
     if (!session) return [];
     return scrubDomain(session.stations, activeId ?? "", nowAvailable);
-  }, [session, activeId]);
+  }, [session, activeId, nowAvailable]);
 
   const activeIndex = domain.indexOf(activeId ?? "");
   const activeFraction = domain.length > 1 && activeIndex >= 0 ? activeIndex / (domain.length - 1) : 1;
@@ -120,16 +123,29 @@ export default function ChronicleView(props: {
   const isLast = activeIndex >= domain.length - 1;
   const activeOrdinal = activeStation ? activeStation.ordinal : (activeId?.startsWith("now:") ? session?.stations.length ?? 0 : -1);
 
-  // Auto-scroll the active card in the horizontal deck into view
+  // Auto-scroll the active card horizontally into view in the revision deck
   useEffect(() => {
-    if (activeCardRef.current) {
-      activeCardRef.current.scrollIntoView({
-        behavior: "smooth",
-        inline: "center",
-        block: "nearest",
-      });
+    const card = activeCardRef.current;
+    const deck = card?.parentElement;
+    if (card && deck) {
+      const cardLeft = card.offsetLeft;
+      const cardWidth = card.offsetWidth;
+      const deckWidth = deck.clientWidth;
+      const targetScroll = cardLeft - (deckWidth - cardWidth) / 2;
+      deck.scrollTo({ left: targetScroll, behavior: isDraggingRef.current ? "auto" : "smooth" });
     }
   }, [activeId]);
+
+  const handleTogglePlay = () => {
+    if (!isPlaying && session && session.stations.length > 0) {
+      const dom = scrubDomain(session.stations, activeRef.current ?? "", nowAvailable);
+      const isAtEnd = dom.length > 0 && activeRef.current === dom[dom.length - 1];
+      if (isAtEnd && dom[0]) {
+        select(dom[0], false);
+      }
+    }
+    setIsPlaying((prev) => !prev);
+  };
 
   // Auto-play timeline revisions
   useEffect(() => {
@@ -143,7 +159,7 @@ export default function ChronicleView(props: {
       }
     }, 1400);
     return () => clearInterval(interval);
-  }, [isPlaying, session]);
+  }, [isPlaying, session, nowAvailable]);
 
   const handlePrev = () => {
     if (!session) return;
@@ -160,6 +176,7 @@ export default function ChronicleView(props: {
   const handleTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const track = trackRef.current;
     if (!track || !session || session.stations.length === 0) return;
+    isDraggingRef.current = true;
     const rect = track.getBoundingClientRect();
     const updateFromPointer = (clientX: number) => {
       const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
@@ -172,6 +189,7 @@ export default function ChronicleView(props: {
     updateFromPointer(e.clientX);
     const onMove = (ev: PointerEvent) => updateFromPointer(ev.clientX);
     const onUp = () => {
+      isDraggingRef.current = false;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
@@ -202,25 +220,34 @@ export default function ChronicleView(props: {
   };
 
   useLayoutEffect(() => {
-    setSceneSlot(sceneSlotRef.current);
+    if (sceneSlotRef.current) {
+      setSceneSlot(sceneSlotRef.current);
+    }
   }, [sceneSlotRef]);
 
   useEffect(() => {
     let cancel = false;
     let token = 0;
-    activeRef.current = null;
-    newestRef.current = null;
-    genRef.current = null;
-    appliedRef.current = null;
-    failedHologramRef.current = null;
-    pathRef.current = null;
-    setSession(null);
-    setActiveId(null);
-    setStale(false);
-    setHologram(null);
-    setHologramError(null);
-    setError(null);
-    setLoading(false);
+
+    const paneKey = `${pid}:${cwd}`;
+    const isNewPane = paneKeyRef.current !== paneKey;
+    paneKeyRef.current = paneKey;
+
+    if (isNewPane) {
+      activeRef.current = null;
+      newestRef.current = null;
+      genRef.current = null;
+      appliedRef.current = null;
+      failedHologramRef.current = null;
+      pathRef.current = null;
+      setSession(null);
+      setActiveId(null);
+      setStale(false);
+      setHologram(null);
+      setHologramError(null);
+      setError(null);
+      setLoading(false);
+    }
 
     const load = () => {
       const my = ++token;
@@ -283,7 +310,7 @@ export default function ChronicleView(props: {
       activeId: activeId ?? "",
       nowAvailable,
     });
-  }, [onKeyContext, activeId, session]);
+  }, [onKeyContext, activeId, session, nowAvailable]);
 
   useEffect(() => {
     if (!session || !activeId || stale) {
@@ -297,14 +324,16 @@ export default function ChronicleView(props: {
     failedHologramRef.current = null;
     setHologramError(null);
     setLoading(true);
-    setHologram(null);
+    // Only blank hologram when switching to a different station ID, never during generation background updates
+    if (appliedRef.current?.id !== activeId) {
+      setHologram(null);
+    }
 
     chronicleHologram(command, cwd, title, pid, activeId)
       .then((body) => {
         if (cancel) return;
-        const current = genRef.current;
         const currentId = activeRef.current ?? "";
-        if (!current || !acceptHologram(body.station_id, currentId, generation, current)) {
+        if (body.station_id !== currentId) {
           setLoading(false);
           return;
         }
@@ -424,7 +453,7 @@ export default function ChronicleView(props: {
         className={`graph-mode-btn ${isPlaying ? "on" : ""}`}
         aria-pressed={isPlaying}
         title={isPlaying ? "Pause auto-play" : "Auto-play revision stream"}
-        onClick={() => setIsPlaying(!isPlaying)}
+        onClick={handleTogglePlay}
       >
         {isPlaying ? "❚❚ PAUSE" : "▶ PLAY"}
       </button>
@@ -783,7 +812,7 @@ export default function ChronicleView(props: {
           </header>
 
           <div ref={viewerBodyRef} className="viewer-code-container" tabIndex={0}>
-            {loading ? (
+            {loading && !hologram ? (
               <div className="viewer-loading-state">
                 <span className="scifi-spinner" />
                 <span>RECONSTRUCTING STEP CODE…</span>
