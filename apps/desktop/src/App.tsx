@@ -6,8 +6,10 @@ import {
   agentAttentionRank,
   appShellHeight,
   isMobilePosture,
+  paneStateAfterHubOpen,
   paneStripTiled,
   togglePaneZoom,
+  type HubOpenCommit,
 } from "./ios/posture";
 import { pinchFontSize } from "./ios/touchKeys";
 import { useDevicePosture } from "./ios/useDevicePosture";
@@ -425,10 +427,12 @@ export default function App() {
   }, [hostSize, sizingMode]);
 
   const applyWindow = useCallback(
-    async (win: TmuxWindow | undefined) => {
+    async (win: TmuxWindow | undefined, commit?: HubOpenCommit) => {
       paneFitRef.current.clear();
-      setZoomedPaneId(null);
-      setPhoneTiled(false);
+      if (!commit) {
+        setZoomedPaneId(null);
+        setPhoneTiled(false);
+      }
       if (!win) {
         setVisibleWindowId(null);
         setLayout(null);
@@ -448,7 +452,11 @@ export default function App() {
         setLayout(first ? fallbackLayout(first) : null);
         showToast("could not parse window layout");
       }
-      const pane = win.panes.find((p) => p.active) ?? win.panes[0];
+      const requested = commit?.focusedPane;
+      const pane =
+        (requested ? win.panes.find((p) => p.id === requested) : undefined) ??
+        win.panes.find((p) => p.active) ??
+        win.panes[0];
       if (pane) {
         chromeFocus.current = "terminal";
         setFocusedPane(pane.id);
@@ -459,12 +467,16 @@ export default function App() {
           existing.focus();
         }
       }
+      if (commit) {
+        setPhoneTiled(commit.zoom.phoneTiled);
+        setZoomedPaneId(commit.zoom.zoomedPaneId);
+      }
     },
     [showToast],
   );
 
   const connectTo = useCallback(
-    async (session: string, preferredWindow?: string) => {
+    async (session: string, preferredWindow?: string, commit?: HubOpenCommit) => {
       const { cols, rows } = pixelClientSize();
       const curSess = snapRef.current.sessions.find((s) => s.name === session);
       const expectedWin =
@@ -491,7 +503,7 @@ export default function App() {
           : undefined) ??
         sess?.windows.find((w) => w.active) ??
         sess?.windows[0];
-      await applyWindow(win);
+      await applyWindow(win, commit);
       requestAnimationFrame(() => {
         requestAnimationFrame(() => pushClientSize());
       });
@@ -1417,9 +1429,18 @@ export default function App() {
     chromeFocus.current = "sidebar";
     const sess = snap.sessions.find((s) => s.name === sessionName);
     const win = sess?.windows.find((w) => w.id === windowId);
+    const switchesWindow =
+      attachedRef.current !== sessionName || visibleRef.current !== windowId;
+    const activePaneId = win?.panes.find((p) => p.active)?.id ?? win?.panes[0]?.id ?? null;
+    const commit = paneStateAfterHubOpen({
+      live: { phoneTiled, zoomedPaneId },
+      focusedPane,
+      requestedPaneId: paneId,
+      switchesWindow,
+      activePaneId,
+    });
     if (paneId) {
       setSelection({ kind: "pane", id: paneId, sessionName, windowId });
-      setFocusedPane(paneId);
     } else {
       setSelection({
         kind: "window",
@@ -1429,10 +1450,15 @@ export default function App() {
       });
     }
     if (attachedRef.current !== sessionName) {
-      await connectTo(sessionName, windowId);
+      await connectTo(sessionName, windowId, commit);
     } else if (visibleRef.current !== windowId) {
-      await applyWindow(win);
+      await applyWindow(win, commit);
     }
+    // connectTo and applyWindow focus the window's active pane and clear zoom.
+    // Commit the pre-switch decision after those awaits.
+    setFocusedPane(commit.focusedPane);
+    setPhoneTiled(commit.zoom.phoneTiled);
+    setZoomedPaneId(commit.zoom.zoomedPaneId);
     if (paneId) {
       void focusPane(paneId);
       getTerm(paneId)?.focus();

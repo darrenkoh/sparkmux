@@ -201,23 +201,51 @@ export function cycleTargetIndex(currentIndex: number, total: number, deltaX: nu
 /** Horizontal travel before the header captures the pointer. */
 export const HEADER_SWIPE_CAPTURE_PX = 10;
 
+export const HEADER_CONTROLS = [
+  "agents",
+  "session",
+  "views",
+  "output",
+  "gits",
+  "stats",
+  "map",
+  "recipes",
+  "sizing",
+] as const;
+
+export type HeaderControl = (typeof HEADER_CONTROLS)[number];
+
+export function headerControlFromAttr(value: string | null | undefined): HeaderControl | null {
+  if (!value) return null;
+  return (HEADER_CONTROLS as readonly string[]).includes(value) ? (value as HeaderControl) : null;
+}
+
 export interface HeaderPointerState {
   tracking: boolean;
   originX: number;
   originY: number;
   capture: boolean;
-  /** The click after a real swipe must not open the hub or Views. */
+  downControl: HeaderControl | null;
+  /** The click after pointerup must not run the control a second time. */
   suppressClick: boolean;
 }
 
 export function idleHeaderPointer(): HeaderPointerState {
-  return { tracking: false, originX: 0, originY: 0, capture: false, suppressClick: false };
+  return {
+    tracking: false,
+    originX: 0,
+    originY: 0,
+    capture: false,
+    downControl: null,
+    suppressClick: false,
+  };
 }
 
 export interface HeaderPointerEvent {
   type: "down" | "move" | "up" | "cancel";
   x: number;
   y: number;
+  control?: HeaderControl | null;
 }
 
 /**
@@ -231,7 +259,13 @@ export function reduceHeaderPointer(
   event: HeaderPointerEvent,
   currentIndex: number,
   total: number,
-): { state: HeaderPointerState; nextIndex: number | null; captureNow: boolean } {
+): {
+  state: HeaderPointerState;
+  nextIndex: number | null;
+  captureNow: boolean;
+  /** Set when pointerup did not cycle. Capture swallows click, so this is the activation. */
+  activate: HeaderControl | null;
+} {
   if (event.type === "down") {
     return {
       state: {
@@ -239,18 +273,21 @@ export function reduceHeaderPointer(
         originX: event.x,
         originY: event.y,
         capture: false,
+        downControl: event.control ?? null,
         suppressClick: false,
       },
       nextIndex: null,
       captureNow: false,
+      activate: null,
     };
   }
-  if (!state.tracking) return { state, nextIndex: null, captureNow: false };
+  if (!state.tracking) return { state, nextIndex: null, captureNow: false, activate: null };
   if (event.type === "cancel") {
     return {
-      state: { ...state, tracking: false, capture: false, suppressClick: false },
+      state: { ...state, tracking: false, capture: false, downControl: null, suppressClick: false },
       nextIndex: null,
       captureNow: false,
+      activate: null,
     };
   }
   if (event.type === "move") {
@@ -264,20 +301,24 @@ export function reduceHeaderPointer(
       state: captureNow ? { ...state, capture: true } : state,
       nextIndex: null,
       captureNow,
+      activate: null,
     };
   }
   const nextIndex = cycleTargetIndex(currentIndex, total, event.x - state.originX);
   const changed = nextIndex !== currentIndex;
+  const activate = changed ? null : state.downControl;
   return {
     state: {
       tracking: false,
       originX: state.originX,
       originY: state.originY,
       capture: false,
-      suppressClick: changed,
+      downControl: null,
+      suppressClick: changed || activate != null,
     },
     nextIndex: changed ? nextIndex : null,
     captureNow: false,
+    activate,
   };
 }
 
@@ -305,6 +346,49 @@ export function paneStripTiled(state: PaneZoomState): boolean {
 export function togglePaneZoom(state: PaneZoomState, focusId: string | null): PaneZoomState {
   if (state.zoomedPaneId != null) return { phoneTiled: true, zoomedPaneId: null };
   return { phoneTiled: false, zoomedPaneId: focusId };
+}
+
+/**
+ * Hub Open on another pane of a zoomed window must move the zoom with the focus.
+ * The phone-compact effect bails out while a zoom is already set, and a tiled
+ * landscape or iPad stage stays tiled.
+ */
+export function zoomAfterPaneOpen(state: PaneZoomState, paneId: string | null): PaneZoomState {
+  if (!paneId || state.zoomedPaneId == null || state.zoomedPaneId === paneId) return state;
+  return { phoneTiled: state.phoneTiled, zoomedPaneId: paneId };
+}
+
+export interface HubOpenCommit {
+  focusedPane: string | null;
+  zoom: PaneZoomState;
+}
+
+/**
+ * Focus and zoom to commit after a hub jump. `live` is the zoom from before the jump.
+ * A requested pane always wins, including across windows, so a later wipe cannot
+ * substitute the window's active pane. A null zoom stays null. Switching windows
+ * with no requested pane is the wipe.
+ */
+export function paneStateAfterHubOpen(input: {
+  live: PaneZoomState;
+  focusedPane: string | null;
+  requestedPaneId: string | null;
+  switchesWindow: boolean;
+  activePaneId: string | null;
+}): HubOpenCommit {
+  if (input.requestedPaneId) {
+    return {
+      focusedPane: input.requestedPaneId,
+      zoom: zoomAfterPaneOpen(input.live, input.requestedPaneId),
+    };
+  }
+  if (input.switchesWindow) {
+    return {
+      focusedPane: input.activePaneId,
+      zoom: { phoneTiled: false, zoomedPaneId: null },
+    };
+  }
+  return { focusedPane: input.focusedPane, zoom: input.live };
 }
 
 /** 0 waiting, 1 failed, 2 running, 3 finished. Unknown states stay with running. */

@@ -7,14 +7,17 @@ import {
   appShellHeight,
   cycleTargetIndex,
   headerClickOpens,
+  headerControlFromAttr,
   idleHeaderPointer,
   isMobilePosture,
   paneStripTiled,
   readPostureOverride,
   reduceHeaderPointer,
   resolvePosture,
+  paneStateAfterHubOpen,
   togglePaneZoom,
   writePostureOverride,
+  zoomAfterPaneOpen,
   type HeaderPointerState,
   type PostureStorage,
   type SegmentRect,
@@ -383,29 +386,75 @@ test("a header swipe captures before the finger leaves the bar and the next tap 
   assert.equal(moved.state.suppressClick, true);
   state = moved.state;
 
+  assert.equal(moved.activate, null);
   const swallowed = headerClickOpens(state);
   assert.equal(swallowed.opens, false);
   assert.equal(swallowed.state.suppressClick, false);
 
   // The click never arrived because the swipe ended on a different control.
+  // The next press clears that suppression and pointerup activates the control.
   state = moved.state;
-  const nextPress = step(state, "down", 12, 4);
+  const nextPress = reduceHeaderPointer(state, { type: "down", x: 12, y: 4, control: "agents" }, 1, 3);
   assert.equal(nextPress.state.suppressClick, false);
-  const nextUp = step(nextPress.state, "up", 14, 5);
+  const nextUp = reduceHeaderPointer(nextPress.state, { type: "up", x: 14, y: 5 }, 1, 3);
   assert.equal(nextUp.nextIndex, null);
-  assert.equal(nextUp.state.suppressClick, false);
+  assert.equal(nextUp.activate, "agents");
+  assert.equal(nextUp.state.suppressClick, true);
   const opened = headerClickOpens(nextUp.state);
-  assert.equal(opened.opens, true);
+  assert.equal(opened.opens, false);
 
   const bar = readFileSync(new URL("./MobileTopBar.tsx", import.meta.url), "utf8");
   assert.match(bar, /setPointerCapture\(event\.pointerId\)/);
   assert.match(bar, /reduceHeaderPointer/);
   assert.match(bar, /headerClickOpens/);
+  assert.match(bar, /result\.activate/);
+  assert.match(bar, /data-header-control="agents"/);
+  assert.match(bar, /data-header-control="session"/);
+  assert.match(bar, /data-header-control="views"/);
+  assert.match(bar, /data-header-control=\{view\.id\}/);
+  assert.match(bar, /data-header-control="recipes"/);
+  assert.match(bar, /data-header-control="sizing"/);
   assert.match(bar, /touchAction:\s*"none"/);
   const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
   const barAt = css.indexOf(".mobile-top-bar {");
   const barBlock = css.slice(barAt, css.indexOf("}", barAt));
   assert.match(barBlock, /touch-action:\s*none/);
+});
+
+test("a 10–48px header move activates the pointerdown control", () => {
+  assert.equal(headerControlFromAttr("views"), "views");
+  assert.equal(headerControlFromAttr("output"), "output");
+  assert.equal(headerControlFromAttr("nope"), null);
+
+  let state = idleHeaderPointer();
+  let step = reduceHeaderPointer(state, { type: "down", x: 0, y: 0, control: "views" }, 0, 3);
+  state = step.state;
+  step = reduceHeaderPointer(state, { type: "move", x: 20, y: 1 }, 0, 3);
+  assert.equal(step.captureNow, true);
+  assert.equal(step.activate, null);
+  state = step.state;
+  step = reduceHeaderPointer(state, { type: "up", x: 40, y: 2 }, 0, 3);
+  assert.equal(step.nextIndex, null);
+  assert.equal(step.activate, "views");
+  assert.equal(headerClickOpens(step.state).opens, false);
+
+  state = idleHeaderPointer();
+  step = reduceHeaderPointer(state, { type: "down", x: 0, y: 0, control: "output" }, 0, 3);
+  state = step.state;
+  step = reduceHeaderPointer(state, { type: "move", x: 16, y: 0 }, 0, 3);
+  state = step.state;
+  step = reduceHeaderPointer(state, { type: "up", x: 16, y: 30 }, 0, 3);
+  assert.equal(step.nextIndex, null);
+  assert.equal(step.activate, "output");
+
+  state = idleHeaderPointer();
+  step = reduceHeaderPointer(state, { type: "down", x: 0, y: 0, control: "sizing" }, 1, 4);
+  state = step.state;
+  step = reduceHeaderPointer(state, { type: "move", x: 60, y: 0 }, 1, 4);
+  state = step.state;
+  step = reduceHeaderPointer(state, { type: "up", x: 70, y: 4 }, 1, 4);
+  assert.equal(step.nextIndex, 2);
+  assert.equal(step.activate, null);
 });
 
 test("landscape and ipad zoom shows Tile and the next tap tiles", () => {
@@ -425,6 +474,91 @@ test("landscape and ipad zoom shows Tile and the next tap tiles", () => {
   const mobile = app.slice(shellStart, shellEnd);
   assert.match(mobile, /paneStripTiled\(\{ phoneTiled, zoomedPaneId \}\)/);
   assert.match(mobile, /togglePaneZoom\(/);
+});
+
+test("opening another pane of a zoomed window points the zoom at that pane", () => {
+  const zoomed = { phoneTiled: false, zoomedPaneId: "%0" };
+  assert.deepEqual(zoomAfterPaneOpen(zoomed, "%1"), { phoneTiled: false, zoomedPaneId: "%1" });
+  assert.deepEqual(zoomAfterPaneOpen(zoomed, "%0"), zoomed);
+  assert.deepEqual(zoomAfterPaneOpen({ phoneTiled: false, zoomedPaneId: null }, "%1"), {
+    phoneTiled: false,
+    zoomedPaneId: null,
+  });
+
+  const sameWindow = {
+    focusedPane: "%0",
+    switchesWindow: false,
+    activePaneId: "%0",
+  };
+  assert.deepEqual(
+    paneStateAfterHubOpen({ ...sameWindow, live: zoomed, requestedPaneId: "%1" }),
+    { focusedPane: "%1", zoom: { phoneTiled: false, zoomedPaneId: "%1" } },
+  );
+  assert.deepEqual(
+    paneStateAfterHubOpen({
+      ...sameWindow,
+      live: { phoneTiled: false, zoomedPaneId: null },
+      requestedPaneId: "%1",
+    }),
+    { focusedPane: "%1", zoom: { phoneTiled: false, zoomedPaneId: null } },
+  );
+  assert.deepEqual(
+    paneStateAfterHubOpen({
+      live: zoomed,
+      focusedPane: "%0",
+      requestedPaneId: "%1",
+      switchesWindow: true,
+      activePaneId: "%9",
+    }),
+    { focusedPane: "%1", zoom: { phoneTiled: false, zoomedPaneId: "%1" } },
+  );
+  assert.deepEqual(
+    paneStateAfterHubOpen({
+      live: { phoneTiled: false, zoomedPaneId: "%1" },
+      focusedPane: "%0",
+      requestedPaneId: "%1",
+      switchesWindow: true,
+      activePaneId: "%9",
+    }),
+    { focusedPane: "%1", zoom: { phoneTiled: false, zoomedPaneId: "%1" } },
+  );
+  assert.deepEqual(
+    paneStateAfterHubOpen({
+      live: { phoneTiled: true, zoomedPaneId: null },
+      focusedPane: "%0",
+      requestedPaneId: "%1",
+      switchesWindow: true,
+      activePaneId: "%9",
+    }),
+    { focusedPane: "%1", zoom: { phoneTiled: true, zoomedPaneId: null } },
+  );
+  assert.deepEqual(
+    paneStateAfterHubOpen({
+      live: zoomed,
+      focusedPane: "%0",
+      requestedPaneId: null,
+      switchesWindow: true,
+      activePaneId: "%9",
+    }),
+    { focusedPane: "%9", zoom: { phoneTiled: false, zoomedPaneId: null } },
+  );
+
+  const app = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+  const jump = app.indexOf("async function jumpToTarget");
+  const nextFn = app.indexOf("function renderSidebar", jump);
+  const body = app.slice(jump, nextFn);
+  const connectAt = body.indexOf("await connectTo");
+  const applyAt = body.indexOf("await applyWindow");
+  assert.ok(connectAt !== -1 && applyAt > connectAt);
+  const before = body.slice(0, connectAt);
+  assert.equal(before.includes("setFocusedPane("), false);
+  assert.equal(before.includes("setZoomedPaneId("), false);
+  assert.match(before, /paneStateAfterHubOpen\(/);
+  const after = body.slice(applyAt);
+  assert.match(after, /setFocusedPane\(commit\.focusedPane\)/);
+  assert.match(after, /setZoomedPaneId\(commit\.zoom\.zoomedPaneId\)/);
+  assert.match(body, /await connectTo\(sessionName, windowId, commit\)/);
+  assert.match(body, /await applyWindow\(win, commit\)/);
 });
 
 test("agent attention ranks waiting, then failed, then running, then finished", () => {

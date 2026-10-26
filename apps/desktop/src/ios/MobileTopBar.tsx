@@ -2,8 +2,10 @@ import { useRef, useState } from "react";
 
 import {
   headerClickOpens,
+  headerControlFromAttr,
   idleHeaderPointer,
   reduceHeaderPointer,
+  type HeaderControl,
   type HeaderPointerState,
 } from "./posture";
 import type { MobileSizingMode } from "./terminalSizing";
@@ -74,16 +76,54 @@ export default function MobileTopBar({
   const urgent = waitingCount > 0;
   const sessionLabel = `${sessionName || "Session"} › ${windowName || "Window"} ▾`;
 
+  function controlFromTarget(target: EventTarget | null): HeaderControl | null {
+    const el =
+      target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+    return headerControlFromAttr(
+      el?.closest("[data-header-control]")?.getAttribute("data-header-control"),
+    );
+  }
+
+  function runHeaderControl(control: HeaderControl) {
+    switch (control) {
+      case "agents":
+      case "session":
+        setViewsOpen(false);
+        onOpenHub();
+        return;
+      case "views":
+        setViewsOpen((open) => !open);
+        return;
+      case "recipes":
+        setViewsOpen(false);
+        onOpenRecipes();
+        return;
+      case "sizing":
+        setViewsOpen(false);
+        onToggleSizing();
+        return;
+      default:
+        setViewsOpen(false);
+        onOpenView(control);
+    }
+  }
+
   function applyPointer(event: React.PointerEvent<HTMLElement>, type: "down" | "move" | "up" | "cancel") {
     const result = reduceHeaderPointer(
       pointer.current,
-      { type, x: event.clientX, y: event.clientY },
+      {
+        type,
+        x: event.clientX,
+        y: event.clientY,
+        control: type === "down" ? controlFromTarget(event.target) : null,
+      },
       currentIndex,
       targetCount,
     );
     pointer.current = result.state;
     if (result.captureNow) event.currentTarget.setPointerCapture(event.pointerId);
     if (result.nextIndex != null) onCycle(result.nextIndex);
+    if (result.activate) runHeaderControl(result.activate);
   }
 
   function onPointerDown(event: React.PointerEvent<HTMLElement>) {
@@ -136,6 +176,7 @@ export default function MobileTopBar({
         <button
           type="button"
           className={`agents-pill${urgent ? " attn-pulse" : ""}`}
+          data-header-control="agents"
           aria-label={urgent ? `${waitingCount} waiting` : `${agentCount} agents`}
           onClick={openHub}
         >
@@ -145,6 +186,7 @@ export default function MobileTopBar({
         <button
           type="button"
           className="mobile-crumb"
+          data-header-control="session"
           aria-label="Session and window"
           onClick={openHub}
         >
@@ -154,6 +196,7 @@ export default function MobileTopBar({
         <button
           type="button"
           className="views-pill"
+          data-header-control="views"
           aria-expanded={viewsOpen}
           aria-label="Views"
           onClick={() => {
@@ -170,9 +213,12 @@ export default function MobileTopBar({
                 key={view.id}
                 type="button"
                 role="menuitem"
+                data-header-control={view.id}
                 onClick={() => {
-                  setViewsOpen(false);
-                  onOpenView(view.id);
+                  openIfTap(() => {
+                    setViewsOpen(false);
+                    onOpenView(view.id);
+                  });
                 }}
               >
                 {view.label}
@@ -181,9 +227,12 @@ export default function MobileTopBar({
             <button
               type="button"
               role="menuitem"
+              data-header-control="recipes"
               onClick={() => {
-                setViewsOpen(false);
-                onOpenRecipes();
+                openIfTap(() => {
+                  setViewsOpen(false);
+                  onOpenRecipes();
+                });
               }}
             >
               Recipes (?)
@@ -191,9 +240,12 @@ export default function MobileTopBar({
             <button
               type="button"
               role="menuitem"
+              data-header-control="sizing"
               onClick={() => {
-                setViewsOpen(false);
-                onToggleSizing();
+                openIfTap(() => {
+                  setViewsOpen(false);
+                  onToggleSizing();
+                });
               }}
             >
               {sizingMode === "fit-phone" ? "Fit Device" : "Mirror Desktop"} ({cols}×{rows})
