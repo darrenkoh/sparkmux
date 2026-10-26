@@ -314,7 +314,7 @@ On startup the terminal prints a pairing URL for this computer, then the same pa
 sparkmux-desktop --serve --bind 100.64.1.2 --port 7420
 ```
 
-The first successful visit stores a sign-in cookie named `sparkmux_session` and removes `?token=` from the address bar. In Safari, use **Share → Add to Home Screen** for a full-screen icon. Later launches stay signed in for 30 days.
+The first successful visit stores a sign-in cookie named `sparkmux_session` and removes `?token=` from the address bar. In Safari, use **Share → Add to Home Screen** for a full-screen icon. The cookie lasts 30 days while this server process keeps the same token. Stopping the server and starting it again issues a new token, so the old link and cookie no longer sign in.
 
 A page opened without the token shows a pairing form. Type the token from the printed URL.
 
@@ -322,9 +322,9 @@ A page opened without the token shows a pairing form. Type the token from the pr
 |---|---|---|
 | `--port`, `-p` | `7420` | Listen port |
 | `--bind`, `-b` | `0.0.0.0` | Listen address. The default accepts a phone on the LAN or an address already on the host, such as Tailscale. `--bind 127.0.0.1` keeps the page on this machine. |
-| `--token` | saved token, or a new one | Bearer token. `SPARKMUX_WEB_TOKEN` sets the same value. |
+| `--token` | a new token each start | Bearer token. `SPARKMUX_WEB_TOKEN` pins one for this process. |
 
-With no `--token` and no `SPARKMUX_WEB_TOKEN`, the server reuses `web_token` in the config directory and creates that file on the first run. The value is 64 hex characters (32 random bytes). `--token` and `SPARKMUX_WEB_TOKEN` apply to the current run and leave that file as it is. Treat the printed URL as a secret: anyone who can open it can type into your panes.
+With no `--token` and no `SPARKMUX_WEB_TOKEN`, each start generates a new 64-character hex token (32 random bytes). A token from an earlier start stops working. `--token` and `SPARKMUX_WEB_TOKEN` pin the token for this process only. Treat the printed URL as a secret: anyone who can open it can type into your panes.
 
 Stopping the serve process closes the page. The tmux server stays up. Start serve again and the same sessions are there.
 
@@ -447,8 +447,6 @@ last_session = ""
 ```
 
 A session you name from **New Session** is created under that name.
-
-The iPhone and iPad pairing token, when the server generates one, is stored beside this file as `web_token`.
 
 ---
 

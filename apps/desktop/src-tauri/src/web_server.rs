@@ -1,7 +1,6 @@
 //! HTTP and WebSocket server for the Sparkmux iOS web app (`sparkmux serve`).
 
 use std::collections::HashSet;
-use std::fs;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -298,32 +297,24 @@ const LOGIN_HTML: &str = r#"<!doctype html>
 </body>
 </html>"#;
 
-pub fn resolve_token(explicit: Option<String>) -> Result<String, String> {
-    if let Some(token) = explicit
+/// Pairing secret for this server process.
+///
+/// An explicit token or `SPARKMUX_WEB_TOKEN` is used as given. Otherwise each
+/// start mints a new 32-byte token. A previous run's URL and cookie stop working.
+pub fn resolve_token(explicit: Option<String>) -> String {
+    if let Some(token) = trimmed_token(explicit) {
+        return token;
+    }
+    if let Some(token) = trimmed_token(std::env::var("SPARKMUX_WEB_TOKEN").ok()) {
+        return token;
+    }
+    generate_token()
+}
+
+fn trimmed_token(value: Option<String>) -> Option<String> {
+    value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-    {
-        return Ok(token);
-    }
-    if let Ok(env) = std::env::var("SPARKMUX_WEB_TOKEN") {
-        let env = env.trim().to_string();
-        if !env.is_empty() {
-            return Ok(env);
-        }
-    }
-    let dirs = directories::ProjectDirs::from("", "", "sparkmux")
-        .ok_or_else(|| "could not resolve config directory".to_string())?;
-    let path = dirs.config_dir().join("web_token");
-    if let Ok(existing) = fs::read_to_string(&path) {
-        let existing = existing.trim().to_string();
-        if !existing.is_empty() {
-            return Ok(existing);
-        }
-    }
-    let token = generate_token();
-    fs::create_dir_all(dirs.config_dir()).map_err(|err| err.to_string())?;
-    fs::write(&path, &token).map_err(|err| err.to_string())?;
-    Ok(token)
 }
 
 fn generate_token() -> String {
@@ -361,7 +352,7 @@ async fn open_web(
     opts: ServeOptions,
     is_headless: bool,
 ) -> Result<RunningWeb, String> {
-    let token = resolve_token(opts.token.clone())?;
+    let token = resolve_token(opts.token.clone());
     let addr: SocketAddr = format!("{}:{}", opts.bind, opts.port)
         .parse()
         .map_err(|err| format!("invalid bind address: {err}"))?;
@@ -1198,6 +1189,37 @@ mod tests {
     }
 
     #[test]
+    fn each_start_mints_a_different_pairing_token() {
+        let first = generate_token();
+        let second = generate_token();
+        assert_ne!(first, second);
+        assert!(is_fresh_token(&first), "{first}");
+        assert!(is_fresh_token(&second), "{second}");
+        assert_eq!(resolve_token(Some("  pinned  ".into())), "pinned");
+        let blank = resolve_token(Some("   ".into()));
+        let pinned = std::env::var("SPARKMUX_WEB_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if let Some(pinned) = pinned {
+            assert_eq!(blank, pinned);
+        } else {
+            assert!(is_fresh_token(&blank), "{blank}");
+        }
+        let src = include_str!("web_server.rs");
+        let start = src.find("pub fn resolve_token").expect("resolve_token");
+        let rest = &src[start..];
+        let end = rest.find("\nfn generate_token").expect("generate_token");
+        let body = &rest[..end];
+        assert!(!body.contains("web_token"));
+        assert!(body.contains("generate_token()"));
+    }
+
+    fn is_fresh_token(token: &str) -> bool {
+        token.len() == 64 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }
+
+    #[test]
     fn the_pairing_qr_follows_each_address() {
         let urls = vec![
             "http://127.0.0.1:7420/?token=tok".to_string(),
@@ -1251,6 +1273,41 @@ mod tests {
         let url = url.expect("page");
         let again = http_get(&url).await;
         assert!(again.is_err(), "server still accepted {again:?}");
+    }
+
+    #[tokio::test]
+    async fn restarting_the_remote_server_mints_a_new_token() {
+        let slot = WebServeSlot::default();
+        let state = AppState::new();
+        let opts = || ServeOptions {
+            bind: "127.0.0.1".into(),
+            port: 0,
+            token: None,
+        };
+        let first = slot.start(state.clone(), opts()).await.expect("start");
+        let first_token = token_from_pairing_url(&first.links[0].url);
+        slot.stop().await.expect("stop");
+        let second = slot.start(state, opts()).await.expect("start again");
+        let second_token = token_from_pairing_url(&second.links[0].url);
+        slot.stop().await.expect("stop");
+        let pinned = std::env::var("SPARKMUX_WEB_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if let Some(pinned) = pinned {
+            assert_eq!(first_token, pinned);
+            assert_eq!(second_token, pinned);
+        } else {
+            assert_ne!(first_token, second_token);
+            assert!(is_fresh_token(&first_token), "{first_token}");
+            assert!(is_fresh_token(&second_token), "{second_token}");
+        }
+    }
+
+    fn token_from_pairing_url(url: &str) -> String {
+        url.split_once("token=")
+            .map(|(_, token)| token.to_string())
+            .unwrap_or_default()
     }
 
     async fn http_get(url: &str) -> Result<String, String> {
