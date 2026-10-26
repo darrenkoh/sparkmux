@@ -457,12 +457,16 @@ function costChip(cost: NonNullable<LlmUsage["cost"]>): UsageChip {
 }
 
 function pricePart(part: UsageCostPart): { usd: number; estimated: boolean } {
+  const known = finiteUsd(part.known_usd);
+  // A recorded total is `/usage`'s figure. Token rows must not grow it.
+  if (!part.estimated) return { usd: known, estimated: false };
   const models = part.models ?? [];
   const extra = models.length > 0 ? estimateTotalCost(models, undefined, 0, 0, 0, 0) : 0;
-  return {
-    usd: finiteUsd(part.known_usd) + finiteUsd(extra),
-    estimated: part.estimated || models.length > 0,
-  };
+  // No recorded dollars: the chip is the token-rate estimate alone.
+  // A positive known amount plus an estimate is the "today" split, where
+  // yesterday's stamp is absent and today's messages are still unpriced.
+  if (known === 0) return { usd: finiteUsd(extra), estimated: true };
+  return { usd: known + finiteUsd(extra), estimated: true };
 }
 
 function finiteUsd(value: number): number {

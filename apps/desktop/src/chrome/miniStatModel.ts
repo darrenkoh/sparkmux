@@ -1,5 +1,5 @@
 import type { SubagentStat, TabAnalyticsStats, ToolStat } from "../api";
-import { estimateTotalCost } from "./analyticsFormat.ts";
+import { sessionCostFromStats } from "./analyticsFormat.ts";
 import { cliLabel } from "./artifactModel.ts";
 
 /** A primary agent or subagent is live when its last event is this recent. */
@@ -55,7 +55,8 @@ export interface AggregatedMiniStats {
   reasoningTokens: number;
   cacheReadTokens: number;
   cacheHitRate: number;
-  estimatedCostUsd: number;
+  /** Null when the CLI omitted the session total. */
+  estimatedCostUsd: number | null;
   toolCalls: number;
   toolErrors: number;
   avgToolLatencyMs: number;
@@ -212,22 +213,12 @@ export function aggregateMiniStats(
   const outputTokens = num(stats?.total_output_tokens);
   const reasoningTokens = num(stats?.total_reasoning_tokens);
   const cacheReadTokens = num(stats?.total_cache_read_tokens);
-  const cacheWriteTokens = num(stats?.total_cache_write_tokens);
   const cacheBase = inputTokens + cacheReadTokens;
   const linesAdded = num(stats?.lines_added);
   const linesRemoved = num(stats?.lines_removed);
   const lineBase = linesAdded + linesRemoved;
 
-  const cost = stats
-    ? estimateTotalCost(
-        stats.models ?? [],
-        stats.active_model,
-        inputTokens,
-        outputTokens,
-        cacheReadTokens,
-        cacheWriteTokens,
-      )
-    : 0;
+  const cost = sessionCostFromStats(stats, cli);
 
   return {
     agent: {
@@ -247,7 +238,7 @@ export function aggregateMiniStats(
     reasoningTokens,
     cacheReadTokens,
     cacheHitRate: cacheBase > 0 ? (cacheReadTokens / cacheBase) * 100 : 0,
-    estimatedCostUsd: finite(Math.max(0, cost)),
+    estimatedCostUsd: cost.usd,
     toolCalls: num(stats?.tool_calls),
     toolErrors: num(stats?.tool_errors),
     avgToolLatencyMs: avgToolLatencyMs(stats?.tools),

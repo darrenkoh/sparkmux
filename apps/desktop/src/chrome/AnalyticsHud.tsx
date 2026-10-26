@@ -15,9 +15,12 @@ import {
   formatMs,
   formatDuration,
   formatUsd,
+  formatSessionUsd,
   estimateCost,
   estimateTotalCost,
   estimateCostSavings,
+  sessionCostFromStats,
+  type SessionCost,
 } from "./analyticsFormat";
 import { phoneMapFillsSegment } from "./phoneHudLayout";
 import TerrainViewport from "./TerrainViewport";
@@ -42,7 +45,34 @@ export interface AnalyticsHudProps {
   initialPhonePane?: "map" | "telemetry" | "events";
 }
 
-export { formatBytes, formatNum, formatMs, formatUsd, estimateCost, estimateTotalCost, estimateCostSavings };
+export {
+  formatBytes,
+  formatNum,
+  formatMs,
+  formatUsd,
+  formatSessionUsd,
+  estimateCost,
+  estimateTotalCost,
+  estimateCostSavings,
+  sessionCostFromStats,
+};
+
+function sessionCostTitle(session: SessionCost, savings: number): string {
+  const amount = formatSessionUsd(session.usd);
+  const head =
+    session.usd == null
+      ? "Session cost: —"
+      : session.stamped
+        ? `Session cost: ${amount}`
+        : `Estimated session cost: ${amount}`;
+  const models = session.models
+    .map((row) => `${row.model} ${formatSessionUsd(row.usd)}`)
+    .join(" · ");
+  const parts = [head];
+  if (models) parts.push(models);
+  if (savings > 0) parts.push(`Cache savings: ${formatUsd(savings)}`);
+  return parts.join(" · ");
+}
 
 const STORAGE_KEY_HUD_LEFT_WIDTH = "sparkmux_hud_left_width";
 const STORAGE_KEY_HUD_TELEMETRY_SPLIT = "sparkmux_hud_telemetry_split";
@@ -843,14 +873,8 @@ export default function AnalyticsHud({
     promptTokens > 0
       ? ((st?.total_cache_read_tokens ?? 0) / promptTokens) * 100
       : 0;
-  const estCost = estimateTotalCost(
-    st?.models,
-    st?.active_model,
-    st?.total_input_tokens ?? 0,
-    st?.total_output_tokens ?? 0,
-    st?.total_cache_read_tokens ?? 0,
-    st?.total_cache_write_tokens ?? 0,
-  );
+  const session = sessionCostFromStats(st, data?.cli);
+  const estCost = session.usd;
   const estSavings = estimateCostSavings(
     st?.models,
     st?.active_model,
@@ -1411,7 +1435,7 @@ export default function AnalyticsHud({
                   {/* Card 3 (Bottom-Left): Session Economy */}
                   <div
                     className="context-card"
-                    title={`Total estimated session cost: ${formatUsd(estCost)} · Cache savings: ${formatUsd(estSavings)}`}
+                    title={sessionCostTitle(session, estSavings)}
                   >
                     <div className="card-header">
                       <small>03 · SESSION ECONOMY</small>
@@ -1422,12 +1446,12 @@ export default function AnalyticsHud({
                       )}
                     </div>
                     <div className="card-body-val">
-                      <b style={{ color: "#facc15" }}>{formatUsd(estCost)}</b>
-                      <span className="card-sub-tag">EST. COST</span>
+                      <b style={{ color: "#facc15" }}>{formatSessionUsd(estCost)}</b>
+                      <span className="card-sub-tag">{session.stamped ? "COST" : "EST. COST"}</span>
                     </div>
                     <div className="card-footer">
                       <span>
-                        {st?.total_cache_read_tokens
+                        {estCost != null && estCost > 0 && st?.total_cache_read_tokens
                           ? `${((estSavings / Math.max(0.001, estCost + estSavings)) * 100).toFixed(0)}% saved via cache`
                           : "Uncached baseline"}
                       </span>

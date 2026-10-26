@@ -36,6 +36,18 @@ export function formatUsd(cost: number): string {
   return `$${cost.toFixed(2)}`;
 }
 
+/**
+ * Session cost the way Claude `/usage` prints it.
+ * Above $0.50 rounds to cents. A smaller positive amount keeps four decimals.
+ * An omitted total is an em dash, not `$0.00` and not `< $0.01`.
+ */
+export function formatSessionUsd(cost: number | null | undefined): string {
+  if (cost == null || !Number.isFinite(cost)) return "—";
+  if (cost <= 0) return "$0.00";
+  if (cost > 0.5) return `$${cost.toFixed(2)}`;
+  return `$${cost.toFixed(4)}`;
+}
+
 export interface ModelPricing {
   inRate: number; // USD per 1M tokens
   outRate: number;
@@ -199,6 +211,352 @@ export function estimateCostSavings(
   const { inRate, cacheReadRate } = getModelPricing(fallbackModel);
   const discount = Math.max(0, inRate - cacheReadRate);
   return (Math.max(0, totalCacheReadTokens) / 1_000_000) * discount;
+}
+
+/** 10^10 ticks = 1 USD. Grok `/usage` divides `costUsdTicks` by this. */
+export const GROK_USD_TICKS = 10_000_000_000;
+
+export interface LedgerModelRow {
+  costUSD?: number | null;
+  costUsdTicks?: number | null;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedReadTokens?: number;
+  cacheReadTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+}
+
+export interface LedgerCategory {
+  tokens?: number;
+  estimatedCostUsd?: number | null;
+}
+
+/**
+ * One CLI usage ledger, in the shape `/usage` reads.
+ * Grok `inputTokens` include `cachedReadTokens` when `inputIncludesCache` is set.
+ * Claude `inputTokens` are already uncached.
+ */
+export interface UsageLedger {
+  provider?: "grok" | "claude" | "antigravity" | string;
+  model?: string;
+  /** Grok session `costUsdTicks`. Absent when the CLI omitted the total. */
+  costUsdTicks?: number | null;
+  costIsPartial?: boolean;
+  usageIsIncomplete?: boolean;
+  /** Claude `cost-state.totalCostUSD`, including a recorded zero. */
+  totalCostUSD?: number | null;
+  hasUnknownModelCost?: boolean;
+  /**
+   * Antigravity conversation cost summary cumulative total
+   * (`total.cumulative_total.estimated_cost_usd`).
+   */
+  estimatedCostUsd?: number | null;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedReadTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  toolTokens?: number;
+  /** True when `inputTokens` already include cached reads (Grok `usage.json`). */
+  inputIncludesCache?: boolean;
+  modelUsage?: Record<string, LedgerModelRow>;
+  categories?: {
+    input?: LedgerCategory;
+    cacheRead?: LedgerCategory;
+    output?: LedgerCategory;
+    thinking?: LedgerCategory;
+    tools?: LedgerCategory;
+  };
+  pricing?: {
+    inputPricePerMillionTokens?: number;
+    outputPricePerMillionTokens?: number;
+    cacheReadPricePerMillionTokens?: number;
+    modelName?: string;
+  };
+  /** Quota percent from Antigravity `/usage`. Never a dollar amount. */
+  quotaPercent?: number | null;
+}
+
+export interface SessionCostModel {
+  model: string;
+  usd: number;
+}
+
+export interface SessionCost {
+  /** Null when the CLI omitted the total. Not a rate-table stand-in. */
+  usd: number | null;
+  /** True when `usd` is the CLI's recorded stamp. */
+  stamped: boolean;
+  models: SessionCostModel[];
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function nonNeg(value: unknown): number {
+  if (!finiteNumber(value) || value <= 0) return 0;
+  return value;
+}
+
+function ledgerProvider(ledger: UsageLedger): string {
+  const named = (ledger.provider || "").toLowerCase();
+  if (named === "grok" || named === "claude" || named === "antigravity" || named === "agy") {
+    return named === "agy" ? "antigravity" : named;
+  }
+  if (finiteNumber(ledger.totalCostUSD) || ledger.hasUnknownModelCost === true) return "claude";
+  if (
+    finiteNumber(ledger.estimatedCostUsd) ||
+    ledger.categories != null ||
+    ledger.pricing != null
+  ) {
+    return "antigravity";
+  }
+  if (
+    finiteNumber(ledger.costUsdTicks) ||
+    ledger.costIsPartial === true ||
+    ledger.usageIsIncomplete === true
+  ) {
+    return "grok";
+  }
+  const model = (ledger.model || "").toLowerCase();
+  if (model.includes("grok")) return "grok";
+  if (model.includes("claude")) return "claude";
+  if (model.includes("gemini") || model.includes("argon")) return "antigravity";
+  return "";
+}
+
+function rowCacheRead(row: LedgerModelRow): number {
+  return nonNeg(row.cachedReadTokens ?? row.cacheReadTokens ?? row.cacheReadInputTokens);
+}
+
+function rowCacheWrite(row: LedgerModelRow): number {
+  return nonNeg(row.cacheCreationTokens ?? row.cacheCreationInputTokens ?? row.cacheWriteTokens);
+}
+
+/** Fresh input once. Grok's inclusive counter loses its cached reads here. */
+function freshInput(row: LedgerModelRow, inputIncludesCache: boolean): number {
+  const input = nonNeg(row.inputTokens);
+  if (!inputIncludesCache) return input;
+  return Math.max(0, input - rowCacheRead(row));
+}
+
+function priceTokenRow(model: string | undefined, row: LedgerModelRow, inputIncludesCache: boolean): number {
+  return estimateCost(
+    model,
+    freshInput(row, inputIncludesCache),
+    nonNeg(row.outputTokens),
+    rowCacheRead(row),
+    rowCacheWrite(row),
+  );
+}
+
+function fallbackFromRates(ledger: UsageLedger, inputIncludesCache: boolean): number {
+  const rows = ledger.modelUsage;
+  if (rows && Object.keys(rows).length > 0) {
+    let sum = 0;
+    let priced = false;
+    for (const [name, row] of Object.entries(rows)) {
+      const hasTokens =
+        nonNeg(row.inputTokens) > 0 ||
+        nonNeg(row.outputTokens) > 0 ||
+        rowCacheRead(row) > 0 ||
+        rowCacheWrite(row) > 0;
+      if (!hasTokens) continue;
+      priced = true;
+      sum += priceTokenRow(name, row, inputIncludesCache);
+    }
+    if (priced) return sum;
+  }
+  return priceTokenRow(
+    ledger.model,
+    {
+      inputTokens: ledger.inputTokens,
+      outputTokens: ledger.outputTokens,
+      cachedReadTokens: ledger.cachedReadTokens ?? ledger.cacheReadTokens,
+      cacheCreationTokens: ledger.cacheCreationTokens,
+    },
+    inputIncludesCache,
+  );
+}
+
+function grokModelCosts(ledger: UsageLedger): SessionCostModel[] {
+  const rows = ledger.modelUsage;
+  if (!rows) return [];
+  const models: SessionCostModel[] = [];
+  for (const [name, row] of Object.entries(rows)) {
+    if (!finiteNumber(row.costUsdTicks)) continue;
+    models.push({ model: name, usd: row.costUsdTicks / GROK_USD_TICKS });
+  }
+  return models;
+}
+
+function claudeModelCosts(ledger: UsageLedger): SessionCostModel[] {
+  const rows = ledger.modelUsage;
+  if (!rows) return [];
+  const models: SessionCostModel[] = [];
+  for (const [name, row] of Object.entries(rows)) {
+    if (!finiteNumber(row.costUSD)) continue;
+    models.push({ model: name, usd: row.costUSD });
+  }
+  return models;
+}
+
+function categoryTokens(category: LedgerCategory | undefined, fallback: unknown): number {
+  if (category && finiteNumber(category.tokens)) return Math.max(0, category.tokens);
+  return nonNeg(fallback);
+}
+
+function categoryAmount(
+  category: LedgerCategory | undefined,
+  tokens: number,
+  rate: number | undefined,
+): number | null {
+  if (category && finiteNumber(category.estimatedCostUsd)) return category.estimatedCostUsd;
+  if (!finiteNumber(rate)) return null;
+  return (Math.max(0, tokens) / 1_000_000) * rate;
+}
+
+/**
+ * Antigravity fallback when the cumulative stamp is absent.
+ * Each category is priced once from its own `estimatedCostUsd` or, failing
+ * that, from the ledger pricing block. Thinking uses the output rate and is
+ * not folded into the output token count. Tools are not dropped.
+ * Gemini and Argon without a pricing block are not priced as Sonnet or Flash.
+ */
+function antigravityFallback(ledger: UsageLedger): number | null {
+  const pricing = ledger.pricing;
+  const inRate = pricing?.inputPricePerMillionTokens;
+  const outRate = pricing?.outputPricePerMillionTokens;
+  const cacheRate = pricing?.cacheReadPricePerMillionTokens;
+  const cats = ledger.categories;
+  const parts: Array<[LedgerCategory | undefined, number, number | undefined]> = [
+    [cats?.input, categoryTokens(cats?.input, ledger.inputTokens), inRate],
+    [
+      cats?.cacheRead,
+      categoryTokens(cats?.cacheRead, ledger.cachedReadTokens ?? ledger.cacheReadTokens),
+      cacheRate,
+    ],
+    [cats?.output, categoryTokens(cats?.output, ledger.outputTokens), outRate],
+    [cats?.thinking, categoryTokens(cats?.thinking, ledger.reasoningTokens), outRate],
+    [cats?.tools, categoryTokens(cats?.tools, ledger.toolTokens), outRate],
+  ];
+  let sum = 0;
+  let any = false;
+  for (const [category, tokens, rate] of parts) {
+    const amount = categoryAmount(category, tokens, rate);
+    if (amount == null) continue;
+    if (amount === 0 && !(category && finiteNumber(category.estimatedCostUsd)) && tokens === 0) {
+      continue;
+    }
+    any = true;
+    sum += amount;
+  }
+  return any ? sum : null;
+}
+
+/**
+ * Session USD for one CLI ledger. The HUD and the mini-stat both call this.
+ * A complete stamp wins. A partial or incomplete Grok total with no ticks is
+ * left empty. Token rates run only when that CLI recorded no stamp.
+ */
+export function sessionCost(ledger: UsageLedger): SessionCost {
+  const provider = ledgerProvider(ledger);
+  if (provider === "grok") {
+    const partial = ledger.costIsPartial === true || ledger.usageIsIncomplete === true;
+    if (finiteNumber(ledger.costUsdTicks)) {
+      return {
+        usd: ledger.costUsdTicks / GROK_USD_TICKS,
+        stamped: true,
+        models: partial ? [] : grokModelCosts(ledger),
+      };
+    }
+    if (partial) return { usd: null, stamped: false, models: [] };
+    return {
+      usd: fallbackFromRates(ledger, ledger.inputIncludesCache !== false),
+      stamped: false,
+      models: [],
+    };
+  }
+  if (provider === "claude") {
+    if (finiteNumber(ledger.totalCostUSD)) {
+      return {
+        usd: ledger.totalCostUSD,
+        stamped: true,
+        models: claudeModelCosts(ledger),
+      };
+    }
+    return {
+      usd: fallbackFromRates(ledger, ledger.inputIncludesCache === true),
+      stamped: false,
+      models: [],
+    };
+  }
+  if (provider === "antigravity") {
+    if (finiteNumber(ledger.estimatedCostUsd)) {
+      return { usd: ledger.estimatedCostUsd, stamped: true, models: [] };
+    }
+    return { usd: antigravityFallback(ledger), stamped: false, models: [] };
+  }
+  return {
+    usd: fallbackFromRates(ledger, ledger.inputIncludesCache === true),
+    stamped: false,
+    models: [],
+  };
+}
+
+export interface SessionCostLedgerStats {
+  cost_ledger?: string | null;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_cache_read_tokens?: number;
+  total_cache_write_tokens?: number;
+  total_reasoning_tokens?: number;
+  active_model?: string;
+  models?: ModelUsageTokens[];
+}
+
+/** The stats object the HUD holds, reduced to the ledger `sessionCost` reads. */
+export function sessionCostFromStats(
+  stats: SessionCostLedgerStats | null | undefined,
+  cli?: string | null,
+): SessionCost {
+  if (!stats) return { usd: 0, stamped: false, models: [] };
+  const raw = stats.cost_ledger?.trim();
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as UsageLedger;
+      if (parsed && typeof parsed === "object") return sessionCost(parsed);
+    } catch {
+      // A torn ledger falls through to the token totals.
+    }
+  }
+  const modelUsage: Record<string, LedgerModelRow> = {};
+  for (const row of stats.models ?? []) {
+    if (!row?.model) continue;
+    modelUsage[row.model] = {
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cacheReadTokens: row.cache_read_tokens,
+      cacheWriteTokens: row.cache_write_tokens ?? 0,
+    };
+  }
+  return sessionCost({
+    provider: cli || undefined,
+    model: stats.active_model,
+    inputTokens: stats.total_input_tokens,
+    outputTokens: stats.total_output_tokens,
+    cacheReadTokens: stats.total_cache_read_tokens,
+    cacheCreationTokens: stats.total_cache_write_tokens,
+    reasoningTokens: stats.total_reasoning_tokens,
+    inputIncludesCache: false,
+    modelUsage: Object.keys(modelUsage).length > 0 ? modelUsage : undefined,
+  });
 }
 
 

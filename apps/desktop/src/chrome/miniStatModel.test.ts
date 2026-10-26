@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import type { SubagentStat, TabAnalyticsStats } from "../api.ts";
-import { estimateTotalCost } from "./analyticsFormat.ts";
+import { estimateTotalCost, GROK_USD_TICKS } from "./analyticsFormat.ts";
 import {
   LIVE_THRESHOLD_MS,
   aggregateMiniStats,
@@ -326,6 +326,135 @@ test("cache hit, cost, tool latency, and code churn", () => {
   assert.equal(agg.toolCalls, 6);
   assert.equal(agg.toolErrors, 2);
   assertFiniteTree(agg satisfies AggregatedMiniStats);
+});
+
+test("mini-stat Grok session cost uses the ledger stamp", () => {
+  const ticks = 12_345_000_000;
+  const agg = aggregateMiniStats(
+    stats({
+      cost_ledger: JSON.stringify({
+        provider: "grok",
+        model: "grok-4.7",
+        inputIncludesCache: true,
+        inputTokens: 2_000_000,
+        cachedReadTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        reasoningTokens: 500_000,
+        costUsdTicks: ticks,
+      }),
+      total_input_tokens: 1_000_000,
+      total_output_tokens: 1_000_000,
+      total_cache_read_tokens: 1_000_000,
+      total_reasoning_tokens: 500_000,
+      active_model: "grok-4.7",
+      models: [
+        {
+          model: "grok-4.7",
+          calls: 2,
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+          cache_read_tokens: 1_000_000,
+          cache_write_tokens: 0,
+          reasoning_tokens: 500_000,
+        },
+      ],
+    }),
+    "grok",
+    0,
+  );
+  const flat = estimateTotalCost(
+    [
+      {
+        model: "grok-4.7",
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+        cache_write_tokens: 0,
+      },
+    ],
+    "grok-4.7",
+    1_000_000,
+    1_000_000,
+    1_000_000,
+    0,
+  );
+  assert.equal(agg.estimatedCostUsd, ticks / GROK_USD_TICKS);
+  assert.notEqual(agg.estimatedCostUsd, flat);
+});
+
+test("mini-stat Claude session cost uses totalCostUSD", () => {
+  const agg = aggregateMiniStats(
+    stats({
+      cost_ledger: JSON.stringify({
+        provider: "claude",
+        totalCostUSD: 1.48,
+        hasUnknownModelCost: true,
+        modelUsage: {
+          "claude-sonnet-4-5": {
+            costUSD: 1.11,
+            inputTokens: 100_000,
+            outputTokens: 10_000,
+            cacheCreationInputTokens: 20_000,
+          },
+        },
+      }),
+      total_input_tokens: 100_000,
+      total_output_tokens: 10_000,
+      total_cache_write_tokens: 20_000,
+      active_model: "claude-sonnet-4-5",
+    }),
+    "claude",
+    0,
+  );
+  assert.equal(agg.estimatedCostUsd, 1.48);
+});
+
+test("mini-stat Antigravity session cost uses the cumulative total", () => {
+  const agg = aggregateMiniStats(
+    stats({
+      cost_ledger: JSON.stringify({
+        provider: "antigravity",
+        estimatedCostUsd: 0.87,
+        reasoningTokens: 1_000_000,
+        categories: {
+          thinking: { tokens: 1_000_000, estimatedCostUsd: 0.4 },
+          tools: { tokens: 10_000, estimatedCostUsd: 0.05 },
+        },
+        pricing: {
+          modelName: "gemini-4-argon",
+          outputPricePerMillionTokens: 10,
+        },
+      }),
+      total_reasoning_tokens: 1_000_000,
+      active_model: "gemini-4-argon",
+    }),
+    "antigravity",
+    0,
+  );
+  assert.equal(agg.estimatedCostUsd, 0.87);
+});
+
+test("a partial Grok ledger leaves the mini-stat cost empty", () => {
+  const agg = aggregateMiniStats(
+    stats({
+      cost_ledger: JSON.stringify({
+        provider: "grok",
+        costIsPartial: true,
+        model: "grok-4.7",
+        inputIncludesCache: true,
+        inputTokens: 2_000_000,
+        cachedReadTokens: 1_000_000,
+        outputTokens: 1_000_000,
+      }),
+      total_input_tokens: 1_000_000,
+      total_output_tokens: 1_000_000,
+      total_cache_read_tokens: 1_000_000,
+      active_model: "grok-4.7",
+    }),
+    "grok",
+    0,
+  );
+  assert.equal(agg.estimatedCostUsd, null);
 });
 
 test("zero tool calls and zero line churn do not produce NaN", () => {

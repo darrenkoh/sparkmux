@@ -81,6 +81,9 @@ pub struct Cursor {
     pub pending: HashMap<String, (i64, String)>,
     #[serde(default)]
     pub model: String,
+    /// JSON object `sessionCost` reads. The CLI's recorded stamp, not a reprice.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cost_ledger: String,
     #[serde(default)]
     pub ctx_used: u64,
     #[serde(default)]
@@ -779,6 +782,9 @@ fn grok_usage(path: &Path, cur: &mut Cursor, now: i64, out: &mut Vec<Event>) {
         return;
     };
     cur.usage_mtime = mtime;
+    if let Some(session) = obj.get("session").and_then(Value::as_object) {
+        cur.cost_ledger = grok_cost_ledger(session);
+    }
     let Some(turns) = obj.get("turns").and_then(Value::as_array) else {
         return;
     };
@@ -1079,6 +1085,11 @@ fn claude_record(
     cur.last_ts = cur.last_ts.max(ts);
     let meta = obj.get("isMeta").and_then(Value::as_bool) == Some(true);
     match str_of(obj, "type") {
+        "cost-state" => {
+            if let Some(ledger) = claude_cost_ledger(obj) {
+                cur.cost_ledger = ledger;
+            }
+        }
         "system" => {
             if str_of(obj, "subtype") == "turn_duration" {
                 // Wall clock for one user turn, including tool calls.
@@ -1314,6 +1325,7 @@ fn agy_step(
     saw_after: &mut bool,
     out: &mut Vec<Event>,
 ) {
+    note_agy_cost(obj, cur);
     let record = str_of(obj, "type");
     if agy_bookkeeping(record) || history_blob_line(obj) {
         return;
@@ -1526,6 +1538,344 @@ pub(crate) fn agy_failed(obj: &Map<String, Value>) -> bool {
     }
 }
 
+fn json_f64(value: f64) -> Option<Value> {
+    serde_json::Number::from_f64(value).map(Value::Number)
+}
+
+fn f64_any(obj: &Map<String, Value>, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        let Some(value) = obj.get(*key) else {
+            continue;
+        };
+        if let Some(number) = value.as_f64() {
+            if number.is_finite() {
+                return Some(number);
+            }
+        }
+    }
+    None
+}
+
+fn i64_any(obj: &Map<String, Value>, keys: &[&str]) -> Option<i64> {
+    for key in keys {
+        let Some(value) = obj.get(*key) else {
+            continue;
+        };
+        if let Some(number) = value.as_i64() {
+            return Some(number);
+        }
+        if let Some(number) = value.as_u64() {
+            return i64::try_from(number).ok();
+        }
+    }
+    None
+}
+
+fn flag_any(obj: &Map<String, Value>, keys: &[&str]) -> bool {
+    keys.iter()
+        .any(|key| obj.get(*key).and_then(Value::as_bool) == Some(true))
+}
+
+fn put_f64(obj: &mut Map<String, Value>, key: &str, value: Option<f64>) {
+    if let Some(number) = value.and_then(json_f64) {
+        obj.insert(key.to_string(), number);
+    }
+}
+
+fn put_i64(obj: &mut Map<String, Value>, key: &str, value: Option<i64>) {
+    if let Some(number) = value {
+        obj.insert(key.to_string(), Value::from(number));
+    }
+}
+
+/// Grok `usage.json` `session` object. `inputTokens` still include cached reads.
+fn grok_cost_ledger(session: &Map<String, Value>) -> String {
+    let mut ledger = Map::new();
+    ledger.insert("provider".into(), Value::String("grok".into()));
+    ledger.insert("inputIncludesCache".into(), Value::Bool(true));
+    put_i64(
+        &mut ledger,
+        "costUsdTicks",
+        i64_any(session, &["costUsdTicks", "cost_usd_ticks"]),
+    );
+    ledger.insert(
+        "costIsPartial".into(),
+        Value::Bool(flag_any(session, &["costIsPartial", "cost_is_partial"])),
+    );
+    ledger.insert(
+        "usageIsIncomplete".into(),
+        Value::Bool(flag_any(
+            session,
+            &["usageIsIncomplete", "usage_is_incomplete"],
+        )),
+    );
+    ledger.insert(
+        "inputTokens".into(),
+        Value::from(u64_of(session, "inputTokens")),
+    );
+    ledger.insert(
+        "outputTokens".into(),
+        Value::from(u64_of(session, "outputTokens")),
+    );
+    ledger.insert(
+        "cachedReadTokens".into(),
+        Value::from(u64_of(session, "cachedReadTokens")),
+    );
+    ledger.insert(
+        "cacheCreationTokens".into(),
+        Value::from(u64_of(session, "cacheCreationTokens")),
+    );
+    ledger.insert(
+        "reasoningTokens".into(),
+        Value::from(u64_of(session, "reasoningTokens")),
+    );
+    let model = str_of(session, "primaryModelId");
+    if !model.is_empty() {
+        ledger.insert("model".into(), Value::String(model.to_string()));
+    }
+    if let Some(usage) = session.get("modelUsage").and_then(Value::as_object) {
+        let mut models = Map::new();
+        for (name, row) in usage {
+            let Some(row) = row.as_object() else {
+                continue;
+            };
+            let mut one = Map::new();
+            put_i64(
+                &mut one,
+                "costUsdTicks",
+                i64_any(row, &["costUsdTicks", "cost_usd_ticks"]),
+            );
+            one.insert(
+                "inputTokens".into(),
+                Value::from(u64_of(row, "inputTokens")),
+            );
+            one.insert(
+                "outputTokens".into(),
+                Value::from(u64_of(row, "outputTokens")),
+            );
+            one.insert(
+                "cachedReadTokens".into(),
+                Value::from(u64_of(row, "cachedReadTokens")),
+            );
+            one.insert(
+                "cacheCreationTokens".into(),
+                Value::from(u64_of(row, "cacheCreationTokens")),
+            );
+            models.insert(name.clone(), Value::Object(one));
+        }
+        if !models.is_empty() {
+            ledger.insert("modelUsage".into(), Value::Object(models));
+        }
+    }
+    Value::Object(ledger).to_string()
+}
+
+/// Latest Claude `cost-state`. `totalCostUSD` is `/usage`'s Total cost.
+fn claude_cost_ledger(obj: &Map<String, Value>) -> Option<String> {
+    let total = f64_any(obj, &["totalCostUSD", "total_cost_usd"])?;
+    let mut ledger = Map::new();
+    ledger.insert("provider".into(), Value::String("claude".into()));
+    ledger.insert("inputIncludesCache".into(), Value::Bool(false));
+    put_f64(&mut ledger, "totalCostUSD", Some(total));
+    ledger.insert(
+        "hasUnknownModelCost".into(),
+        Value::Bool(flag_any(
+            obj,
+            &["hasUnknownModelCost", "has_unknown_model_cost"],
+        )),
+    );
+    if let Some(usage) = obj.get("modelUsage").and_then(Value::as_object) {
+        let mut models = Map::new();
+        for (name, row) in usage {
+            let Some(row) = row.as_object() else {
+                continue;
+            };
+            let mut one = Map::new();
+            put_f64(
+                &mut one,
+                "costUSD",
+                f64_any(row, &["costUSD", "costUsd", "cost_usd"]),
+            );
+            one.insert(
+                "inputTokens".into(),
+                Value::from(u64_of(row, "inputTokens")),
+            );
+            one.insert(
+                "outputTokens".into(),
+                Value::from(u64_of(row, "outputTokens")),
+            );
+            one.insert(
+                "cacheReadInputTokens".into(),
+                Value::from(u64_of(row, "cacheReadInputTokens")),
+            );
+            one.insert(
+                "cacheCreationInputTokens".into(),
+                Value::from(u64_of(row, "cacheCreationInputTokens")),
+            );
+            models.insert(name.clone(), Value::Object(one));
+        }
+        if !models.is_empty() {
+            ledger.insert("modelUsage".into(), Value::Object(models));
+        }
+    }
+    Some(Value::Object(ledger).to_string())
+}
+
+fn agy_category(section: &Map<String, Value>, snake: &str, camel: &str) -> Option<Value> {
+    let cat = section
+        .get(snake)
+        .or_else(|| section.get(camel))
+        .and_then(Value::as_object)?;
+    let mut out = Map::new();
+    if let Some(tokens) = i64_any(cat, &["tokens"]) {
+        if tokens >= 0 {
+            out.insert("tokens".into(), Value::from(tokens));
+        }
+    }
+    put_f64(
+        &mut out,
+        "estimatedCostUsd",
+        f64_any(cat, &["estimated_cost_usd", "estimatedCostUsd"]),
+    );
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
+    }
+}
+
+fn agy_pricing(obj: &Map<String, Value>) -> Option<Value> {
+    let pricing = obj
+        .get("pricing")
+        .and_then(Value::as_object)
+        .or_else(|| obj.get("model_pricing").and_then(Value::as_object))?;
+    let mut out = Map::new();
+    put_f64(
+        &mut out,
+        "inputPricePerMillionTokens",
+        f64_any(
+            pricing,
+            &[
+                "input_price_per_million_tokens",
+                "inputPricePerMillionTokens",
+            ],
+        ),
+    );
+    put_f64(
+        &mut out,
+        "outputPricePerMillionTokens",
+        f64_any(
+            pricing,
+            &[
+                "output_price_per_million_tokens",
+                "outputPricePerMillionTokens",
+            ],
+        ),
+    );
+    put_f64(
+        &mut out,
+        "cacheReadPricePerMillionTokens",
+        f64_any(
+            pricing,
+            &[
+                "cache_read_price_per_million_tokens",
+                "cacheReadPricePerMillionTokens",
+            ],
+        ),
+    );
+    let model = str_of(pricing, "model_name");
+    let model = if model.is_empty() {
+        str_of(pricing, "modelName")
+    } else {
+        model
+    };
+    if !model.is_empty() {
+        out.insert("modelName".into(), Value::String(model.to_string()));
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
+    }
+}
+
+/// Antigravity `ConversationCostSummary`. The session figure is the cumulative
+/// total, which already includes the turn and subagent cost when the CLI folded
+/// them in. Quota percents are not copied.
+fn agy_cost_ledger(summary: &Map<String, Value>) -> Option<String> {
+    let total = summary.get("total").and_then(Value::as_object);
+    let cumulative = total
+        .and_then(|item| {
+            item.get("cumulative_total")
+                .or_else(|| item.get("cumulativeTotal"))
+        })
+        .and_then(Value::as_object)
+        .or_else(|| {
+            summary
+                .get("cumulative_total")
+                .or_else(|| summary.get("cumulativeTotal"))
+                .and_then(Value::as_object)
+        });
+    let section = cumulative.unwrap_or(summary);
+    let mut ledger = Map::new();
+    ledger.insert("provider".into(), Value::String("antigravity".into()));
+    ledger.insert("inputIncludesCache".into(), Value::Bool(false));
+    put_f64(
+        &mut ledger,
+        "estimatedCostUsd",
+        f64_any(section, &["estimated_cost_usd", "estimatedCostUsd"]),
+    );
+    let mut categories = Map::new();
+    for (snake, camel, key) in [
+        ("input", "input", "input"),
+        ("cache_read", "cacheRead", "cacheRead"),
+        ("output", "output", "output"),
+        ("thinking", "thinking", "thinking"),
+        ("tools", "tools", "tools"),
+    ] {
+        if let Some(category) = agy_category(section, snake, camel) {
+            categories.insert(key.to_string(), category);
+        }
+    }
+    if !categories.is_empty() {
+        ledger.insert("categories".into(), Value::Object(categories));
+    }
+    if let Some(pricing) = agy_pricing(summary).or_else(|| agy_pricing(section)) {
+        ledger.insert("pricing".into(), pricing);
+    }
+    let model = str_of(summary, "model");
+    if !model.is_empty() {
+        ledger.insert("model".into(), Value::String(model.to_string()));
+    }
+    if ledger.len() <= 2
+        && !ledger.contains_key("estimatedCostUsd")
+        && !ledger.contains_key("pricing")
+    {
+        return None;
+    }
+    Some(Value::Object(ledger).to_string())
+}
+
+fn note_agy_cost(obj: &Map<String, Value>, cur: &mut Cursor) {
+    let summary = obj
+        .get("cost_summary")
+        .or_else(|| obj.get("costSummary"))
+        .and_then(Value::as_object)
+        .or_else(|| {
+            if obj.contains_key("cumulative_total") || obj.contains_key("cumulativeTotal") {
+                Some(obj)
+            } else {
+                None
+            }
+        });
+    let Some(summary) = summary else {
+        return;
+    };
+    if let Some(ledger) = agy_cost_ledger(summary) {
+        cur.cost_ledger = ledger;
+    }
+}
+
 fn remember_agy_tool(cur: &mut Cursor, ts: i64, name: String) {
     if cur.pending.len() >= PENDING_CAP {
         take_oldest_pending(cur);
@@ -1660,6 +2010,7 @@ mod tests {
         assert_eq!(cur.ctx_used, 20011);
         assert_eq!(cur.ctx_window, 256000);
         assert_eq!(cur.lines_added, 7);
+        assert!(cur.cost_ledger.is_empty());
         assert!(events.windows(2).all(|w| w[0].t <= w[1].t));
 
         // Nothing new: nothing emitted.
@@ -2249,5 +2600,145 @@ mod tests {
             .iter()
             .any(|ev| ev.k == event::TOOL && ev.n == "read_file"));
         assert_eq!(out.iter().filter(|ev| ev.k == event::ASK).count(), 1);
+    }
+
+    #[test]
+    fn grok_session_cost_lands_on_the_cursor() {
+        let dir = scratch("grok-cost").join("01a1cost-session");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("usage.json"),
+            r#"{"session":{"costUsdTicks":12345000000,"costIsPartial":false,"usageIsIncomplete":false,"inputTokens":2000000,"cachedReadTokens":1000000,"outputTokens":1000000,"reasoningTokens":500000,"primaryModelId":"grok-4.7","modelUsage":{"grok-4.7":{"costUsdTicks":8000000000,"inputTokens":2000000,"outputTokens":1000000,"cachedReadTokens":1000000}}},"turns":[]}"#,
+        )
+        .unwrap();
+        let chat = dir.join("chat_history.jsonl");
+        fs::write(&chat, "{\"type\":\"user\",\"content\":\"hello\"}\n").unwrap();
+        let mut cur = Cursor::default();
+        ingest(CliKind::Grok, &chat, &mut cur, 0);
+        let ledger: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert_eq!(ledger["provider"], "grok");
+        assert_eq!(ledger["inputIncludesCache"], true);
+        assert_eq!(ledger["costUsdTicks"].as_i64(), Some(12_345_000_000));
+        assert_eq!(
+            ledger["modelUsage"]["grok-4.7"]["costUsdTicks"].as_i64(),
+            Some(8_000_000_000)
+        );
+        assert_eq!(ledger["cachedReadTokens"].as_u64(), Some(1_000_000));
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
+
+        let partial = scratch("grok-partial").join("01a1part-session");
+        fs::create_dir_all(&partial).unwrap();
+        fs::write(
+            partial.join("usage.json"),
+            r#"{"session":{"costIsPartial":true,"usageIsIncomplete":true,"inputTokens":2000000,"cachedReadTokens":1000000,"outputTokens":1000000,"primaryModelId":"grok-4.7"},"turns":[]}"#,
+        )
+        .unwrap();
+        let chat = partial.join("chat_history.jsonl");
+        fs::write(&chat, "{\"type\":\"user\",\"content\":\"hello\"}\n").unwrap();
+        let mut cur = Cursor::default();
+        ingest(CliKind::Grok, &chat, &mut cur, 0);
+        let ledger: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert_eq!(ledger["costIsPartial"], true);
+        assert_eq!(ledger["usageIsIncomplete"], true);
+        assert!(ledger.get("costUsdTicks").is_none());
+        let _ = fs::remove_dir_all(partial.parent().unwrap());
+    }
+
+    #[test]
+    fn claude_cost_state_lands_on_the_cursor() {
+        let dir = scratch("claude-cost");
+        let path = dir.join("aaaaaaaa-1111.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"cost-state\",\"totalCostUSD\":0.5,\"hasUnknownModelCost\":false,\"modelUsage\":{\"claude-sonnet-4-5\":{\"costUSD\":0.5,\"inputTokens\":10,\"outputTokens\":1,\"cacheReadInputTokens\":0,\"cacheCreationInputTokens\":0}}}\n",
+                "{\"type\":\"assistant\",\"timestamp\":\"2026-04-30T22:09:30Z\",\"message\":{\"id\":\"m1\",\"model\":\"claude-sonnet-4-5\",\"usage\":{\"input_tokens\":100000,\"output_tokens\":10000,\"cache_creation_input_tokens\":20000}}}\n",
+                "{\"type\":\"cost-state\",\"totalCostUSD\":1.48,\"hasUnknownModelCost\":true,\"modelUsage\":{\"claude-sonnet-4-5\":{\"costUSD\":1.11,\"inputTokens\":100000,\"outputTokens\":10000,\"cacheReadInputTokens\":50000,\"cacheCreationInputTokens\":20000},\"claude-haiku-4-5\":{\"costUSD\":0.22,\"inputTokens\":1000,\"outputTokens\":100}}}\n",
+            ),
+        )
+        .unwrap();
+        let mut cur = Cursor::default();
+        ingest(CliKind::Claude, &path, &mut cur, 0);
+        let ledger: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert_eq!(ledger["provider"], "claude");
+        assert_eq!(ledger["inputIncludesCache"], false);
+        assert!((ledger["totalCostUSD"].as_f64().unwrap() - 1.48).abs() < 1e-9);
+        assert_eq!(ledger["hasUnknownModelCost"], true);
+        assert!(
+            (ledger["modelUsage"]["claude-sonnet-4-5"]["costUSD"]
+                .as_f64()
+                .unwrap()
+                - 1.11)
+                .abs()
+                < 1e-9
+        );
+        assert_eq!(
+            ledger["modelUsage"]["claude-sonnet-4-5"]["cacheCreationInputTokens"].as_u64(),
+            Some(20_000)
+        );
+        assert!(
+            (ledger["modelUsage"]["claude-haiku-4-5"]["costUSD"]
+                .as_f64()
+                .unwrap()
+                - 0.22)
+                .abs()
+                < 1e-9
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn agy_cost_summary_lands_on_the_cursor() {
+        let scratch_dir = scratch("agy-cost");
+        let dir = scratch_dir
+            .join("brain")
+            .join("eeeeeeee-5555-4555-8555-555555555555");
+        let logs = dir.join(".system_generated").join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        let path = logs.join("transcript.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"step_index\":2,\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-10T01:00:05Z\",\"content\":\"priced\",\"model\":\"gemini-4-argon\",\"cost_summary\":{\"model\":\"gemini-4-argon\",\"quota_percent\":40,\"pricing\":{\"model_name\":\"gemini-4-argon\",\"input_price_per_million_tokens\":1.25,\"output_price_per_million_tokens\":10,\"cache_read_price_per_million_tokens\":0.125},\"total\":{\"cumulative_total\":{\"estimated_cost_usd\":0.87,\"input\":{\"tokens\":100000,\"estimated_cost_usd\":0.1},\"cache_read\":{\"tokens\":200000,\"estimated_cost_usd\":0.02},\"output\":{\"tokens\":50000,\"estimated_cost_usd\":0.3},\"thinking\":{\"tokens\":1000000,\"estimated_cost_usd\":0.4},\"tools\":{\"tokens\":10000,\"estimated_cost_usd\":0.05}}}}}\n",
+            ),
+        )
+        .unwrap();
+        let mut cur = Cursor::default();
+        ingest(CliKind::Antigravity, &path, &mut cur, 0);
+        assert!(!cur.cost_ledger.contains("quota"), "{}", cur.cost_ledger);
+        let ledger: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert_eq!(ledger["provider"], "antigravity");
+        assert!((ledger["estimatedCostUsd"].as_f64().unwrap() - 0.87).abs() < 1e-9);
+        assert_eq!(ledger["model"], "gemini-4-argon");
+        assert_eq!(
+            ledger["categories"]["thinking"]["tokens"].as_i64(),
+            Some(1_000_000)
+        );
+        assert!(
+            (ledger["categories"]["thinking"]["estimatedCostUsd"]
+                .as_f64()
+                .unwrap()
+                - 0.4)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (ledger["categories"]["tools"]["estimatedCostUsd"]
+                .as_f64()
+                .unwrap()
+                - 0.05)
+                .abs()
+                < 1e-9
+        );
+        assert_eq!(ledger["pricing"]["modelName"], "gemini-4-argon");
+        assert!(
+            (ledger["pricing"]["inputPricePerMillionTokens"]
+                .as_f64()
+                .unwrap()
+                - 1.25)
+                .abs()
+                < 1e-9
+        );
+        let _ = fs::remove_dir_all(&scratch_dir);
     }
 }

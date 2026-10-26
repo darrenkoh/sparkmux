@@ -87,9 +87,7 @@ struct MsgUse {
 struct Summary {
     start_ms: Option<i64>,
     total_usd: Option<f64>,
-    unknown: bool,
     saw_cost: bool,
-    priced_models: bool,
     bedrock_model: bool,
     messages: HashMap<String, MsgUse>,
     anon: u32,
@@ -100,9 +98,7 @@ impl Summary {
         Self {
             start_ms: None,
             total_usd: None,
-            unknown: false,
             saw_cost: false,
-            priced_models: false,
             bedrock_model: false,
             messages: HashMap::new(),
             anon: 0,
@@ -549,17 +545,13 @@ fn started_today(summary: &Summary, midnight_ms: i64) -> bool {
 }
 
 fn trusted_usd(summary: &Summary) -> Option<f64> {
-    if !summary.saw_cost || summary.unknown {
+    if !summary.saw_cost {
         return None;
     }
-    let total = summary.total_usd.unwrap_or(0.0);
-    if total > 0.0 || summary.priced_models {
-        return Some(total);
-    }
-    if summary.messages.is_empty() {
-        return Some(0.0);
-    }
-    None
+    // `totalCostUSD` is the Total cost `/usage` prints, including a recorded
+    // zero. `hasUnknownModelCost` does not replace that stamp, and `modelUsage`
+    // is not added on as a second token-rate estimate.
+    summary.total_usd
 }
 
 fn summarize(path: &Path) -> Summary {
@@ -680,16 +672,10 @@ fn take_cost(summary: &mut Summary, obj: &Map<String, Value>) {
     if let Some(usd) = obj.get("totalCostUSD").and_then(nonneg_f64) {
         summary.total_usd = Some(usd);
     }
-    if obj.get("hasUnknownModelCost").and_then(Value::as_bool) == Some(true) {
-        summary.unknown = true;
-    }
     if let Some(ts) = obj.get("startTime").and_then(timestamp_ms) {
         note_start(summary, ts);
     }
     if let Some(models) = obj.get("modelUsage").and_then(Value::as_object) {
-        if !models.is_empty() {
-            summary.priced_models = true;
-        }
         for key in models.keys() {
             note_model(summary, key);
         }
@@ -931,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_price_returns_tokens_for_an_estimate() {
+    fn unknown_model_cost_keeps_the_recorded_total() {
         let dir = scratch("unknown");
         let path = write_jsonl(
             &dir,
@@ -944,18 +930,37 @@ mod tests {
         );
         let cost = rollup_files(std::slice::from_ref(&path), Some(&path), MIDNIGHT);
         assert_eq!(cost.session.known_usd, 0.0);
-        assert!(cost.session.estimated);
-        assert_eq!(cost.session.models.len(), 1);
-        assert_eq!(cost.session.models[0].input_tokens, 10);
-        assert_eq!(cost.session.models[0].output_tokens, 1);
-        assert_eq!(cost.session.models[0].cache_read_tokens, 0);
-        assert!(cost.today.estimated);
-        assert_eq!(cost.today.models[0].input_tokens, 10);
+        assert!(!cost.session.estimated);
+        assert!(cost.session.models.is_empty());
+        assert_eq!(cost.today.known_usd, 0.0);
+        assert!(!cost.today.estimated);
+        assert!(cost.today.models.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn zero_total_with_tokens_and_no_model_price_is_an_estimate() {
+    fn unknown_model_cost_with_a_positive_total_is_not_repriced() {
+        let dir = scratch("unknown-positive");
+        let path = write_jsonl(
+            &dir,
+            "session.jsonl",
+            &format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{TODAY}\",\"message\":{{\"id\":\"m1\",\"model\":\"claude-sonnet-4-5\",\"usage\":{{\"input_tokens\":1000000,\"output_tokens\":1000}}}}}}\n\
+                 {{\"type\":\"cost-state\",\"totalCostUSD\":2.5,\"hasUnknownModelCost\":true,\"startTime\":\"{TODAY}\",\"modelUsage\":{{\"claude-sonnet-4-5\":{{\"costUSD\":2.5}}}}}}\n"
+            ),
+        );
+        let cost = rollup_files(std::slice::from_ref(&path), Some(&path), MIDNIGHT);
+        assert_eq!(cost.session.known_usd, 2.5);
+        assert!(!cost.session.estimated);
+        assert!(cost.session.models.is_empty());
+        assert_eq!(cost.today.known_usd, 2.5);
+        assert!(!cost.today.estimated);
+        assert!(cost.today.models.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zero_total_with_tokens_stays_the_recorded_zero() {
         let dir = scratch("empty-price");
         let path = write_jsonl(
             &dir,
@@ -966,7 +971,25 @@ mod tests {
             ),
         );
         let cost = rollup_files(std::slice::from_ref(&path), Some(&path), MIDNIGHT);
+        assert_eq!(cost.session.known_usd, 0.0);
+        assert!(!cost.session.estimated);
+        assert!(cost.session.models.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_cost_state_falls_back_to_token_models() {
+        let dir = scratch("no-stamp");
+        let path = write_jsonl(
+            &dir,
+            "session.jsonl",
+            &format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{TODAY}\",\"message\":{{\"id\":\"m1\",\"model\":\"claude-sonnet-4-5\",\"usage\":{{\"input_tokens\":1000,\"output_tokens\":0}}}}}}\n"
+            ),
+        );
+        let cost = rollup_files(std::slice::from_ref(&path), Some(&path), MIDNIGHT);
         assert!(cost.session.estimated);
+        assert_eq!(cost.session.known_usd, 0.0);
         assert_eq!(cost.session.models[0].input_tokens, 1000);
         let _ = std::fs::remove_dir_all(&dir);
     }

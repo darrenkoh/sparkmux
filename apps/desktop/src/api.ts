@@ -607,6 +607,11 @@ export interface TabAnalyticsStats {
   recent_events: AnalyticsEvent[];
   /** Child agents. Their tokens and tools are already included in the totals. */
   subagents?: SubagentStat[];
+  /**
+   * CLI usage ledger for this session. The HUD and mini-stat pass it to
+   * `sessionCost`. Empty when the CLI has not written one.
+   */
+  cost_ledger?: string;
 }
 
 export interface AnalyticsConfig {

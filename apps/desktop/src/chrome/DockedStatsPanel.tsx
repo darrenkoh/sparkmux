@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { tabAnalytics, type TabAnalyticsResponse } from "../api";
-import { formatDuration, formatMs, formatNum, formatUsd } from "./analyticsFormat";
+import { formatDuration, formatMs, formatNum, formatSessionUsd } from "./analyticsFormat";
 import { cliLabel } from "./artifactModel";
 import { aggregateMiniStats, type ChannelBreakdownItem } from "./miniStatModel";
 import TerrainViewport from "./TerrainViewport";
@@ -196,7 +196,7 @@ function DockedStatsPanelImpl({
           </div>
           <div className="mini-kpi-cell">
             <span className="mini-kpi-label">COST · CACHE</span>
-            <span className="mini-kpi-value mini-cost">{formatUsd(summary.estimatedCostUsd)}</span>
+            <span className="mini-kpi-value mini-cost">{formatSessionUsd(summary.estimatedCostUsd)}</span>
             <span className="mini-kpi-sub">{summary.cacheHitRate.toFixed(0)}% cache hit</span>
             <span className="mini-cache-bar" aria-hidden="true">
               <span style={{ width: `${Math.max(0, Math.min(100, summary.cacheHitRate))}%` }} />

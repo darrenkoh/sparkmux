@@ -117,6 +117,11 @@ pub struct TabAnalyticsStats {
     /// already included in the totals above.
     #[serde(default)]
     pub subagents: Vec<SubagentStat>,
+    /// CLI usage ledger for this session (`usage.json`, Claude `cost-state`,
+    /// or an Antigravity cost summary). The HUD prices this string with the
+    /// same function as the mini-stat. Empty when the CLI wrote no ledger.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cost_ledger: String,
 }
 
 /// Shortest column. A two-minute session still grows a new node every 15 seconds.

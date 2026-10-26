@@ -7,10 +7,14 @@ import {
   formatMs,
   formatDuration,
   formatUsd,
+  formatSessionUsd,
   estimateCost,
   estimateTotalCost,
   estimateCostSavings,
   getModelPricing,
+  GROK_USD_TICKS,
+  sessionCost,
+  sessionCostFromStats,
 } from "./analyticsFormat.ts";
 
 test("formatBytes formats small and large bytes correctly", () => {
@@ -116,6 +120,349 @@ test("estimateCostSavings computes prompt caching discount correctly", () => {
   ];
   const modelSavings = estimateCostSavings(models, undefined, 0);
   assert.ok(Math.abs(modelSavings - 1.80) < 0.0001);
+});
+
+const GROK_DIVERGE = {
+  provider: "grok" as const,
+  model: "grok-4.7",
+  inputIncludesCache: true,
+  inputTokens: 2_000_000,
+  cachedReadTokens: 1_000_000,
+  outputTokens: 1_000_000,
+  reasoningTokens: 500_000,
+  costUsdTicks: 12_345_000_000,
+  modelUsage: {
+    "grok-4.7": {
+      costUsdTicks: 8_000_000_000,
+      inputTokens: 2_000_000,
+      outputTokens: 1_000_000,
+      cachedReadTokens: 1_000_000,
+      reasoningTokens: 500_000,
+    },
+  },
+};
+
+test("Grok session cost equals costUsdTicks and not the flat reprice", () => {
+  const cost = sessionCost(GROK_DIVERGE);
+  const stamped = GROK_DIVERGE.costUsdTicks / GROK_USD_TICKS;
+  const uncached = estimateCost("grok-4.7", 1_000_000, 1_000_000, 1_000_000, 0);
+  const doubleCounted = estimateCost("grok-4.7", 2_000_000, 1_000_000, 1_000_000, 0);
+  const withReasoning = estimateCost("grok-4.7", 1_000_000, 1_500_000, 1_000_000, 0);
+  assert.equal(cost.stamped, true);
+  assert.equal(cost.usd, stamped);
+  assert.notEqual(cost.usd, uncached);
+  assert.notEqual(cost.usd, doubleCounted);
+  assert.notEqual(cost.usd, withReasoning);
+  assert.ok(Math.abs(uncached - 2.89) < 1e-9);
+  assert.deepEqual(cost.models, [{ model: "grok-4.7", usd: 8_000_000_000 / GROK_USD_TICKS }]);
+  assert.notEqual(cost.models[0].usd, uncached);
+
+  const fromStats = sessionCostFromStats(
+    {
+      cost_ledger: JSON.stringify(GROK_DIVERGE),
+      total_input_tokens: 1_000_000,
+      total_output_tokens: 1_000_000,
+      total_cache_read_tokens: 1_000_000,
+      total_reasoning_tokens: 500_000,
+      active_model: "grok-4.7",
+      models: [
+        {
+          model: "grok-4.7",
+          input_tokens: 1_000_000,
+          output_tokens: 1_000_000,
+          cache_read_tokens: 1_000_000,
+        },
+      ],
+    },
+    "grok",
+  );
+  assert.equal(fromStats.usd, stamped);
+  assert.equal(fromStats.stamped, true);
+  assert.notEqual(fromStats.usd, uncached);
+});
+
+test("a partial Grok ledger is not a rate-table stand-in", () => {
+  const partial = {
+    provider: "grok" as const,
+    model: "grok-4.7",
+    inputIncludesCache: true,
+    costIsPartial: true,
+    usageIsIncomplete: true,
+    inputTokens: 2_000_000,
+    cachedReadTokens: 1_000_000,
+    outputTokens: 1_000_000,
+    reasoningTokens: 500_000,
+    modelUsage: {
+      "grok-4.7": {
+        costUsdTicks: 50_000_000_000,
+        inputTokens: 2_000_000,
+        outputTokens: 1_000_000,
+        cachedReadTokens: 1_000_000,
+      },
+    },
+  };
+  const cost = sessionCost(partial);
+  const flat = estimateCost("grok-4.7", 1_000_000, 1_000_000, 1_000_000, 0);
+  assert.equal(cost.usd, null);
+  assert.equal(cost.stamped, false);
+  assert.deepEqual(cost.models, []);
+  assert.notEqual(cost.usd, flat);
+  assert.notEqual(cost.usd, 50_000_000_000 / GROK_USD_TICKS);
+
+  const fromStats = sessionCostFromStats(
+    {
+      cost_ledger: JSON.stringify(partial),
+      total_input_tokens: 1_000_000,
+      total_output_tokens: 1_000_000,
+      total_cache_read_tokens: 1_000_000,
+      active_model: "grok-4.7",
+    },
+    "grok",
+  );
+  assert.equal(fromStats.usd, null);
+  assert.notEqual(fromStats.usd, flat);
+
+  const withTicks = sessionCost({ ...partial, costUsdTicks: 12_345_000_000 });
+  assert.equal(withTicks.usd, 12_345_000_000 / GROK_USD_TICKS);
+  assert.equal(withTicks.stamped, true);
+  assert.deepEqual(withTicks.models, []);
+});
+
+test("Grok uncached input is billed once when the stamp is absent", () => {
+  const ledger = {
+    provider: "grok" as const,
+    model: "grok-4.7",
+    inputIncludesCache: true,
+    inputTokens: 2_000_000,
+    cachedReadTokens: 1_000_000,
+    outputTokens: 100_000,
+    reasoningTokens: 1_000_000,
+  };
+  const cost = sessionCost(ledger);
+  const once = estimateCost("grok-4.7", 1_000_000, 100_000, 1_000_000, 0);
+  const doubled = estimateCost("grok-4.7", 2_000_000, 100_000, 1_000_000, 0);
+  const reasoningAsOutput = estimateCost("grok-4.7", 1_000_000, 1_100_000, 1_000_000, 0);
+  assert.equal(cost.stamped, false);
+  assert.equal(cost.usd, once);
+  assert.notEqual(cost.usd, doubled);
+  assert.notEqual(cost.usd, reasoningAsOutput);
+});
+
+test("Claude session cost equals totalCostUSD and per-model costUSD", () => {
+  // costUSD is the stamp `/usage` prints. The sonnet row's cache-write
+  // charge and the haiku row's web-search charge are already inside it.
+  const ledger = {
+    provider: "claude" as const,
+    totalCostUSD: 1.48,
+    hasUnknownModelCost: true,
+    inputIncludesCache: false,
+    modelUsage: {
+      "claude-sonnet-4-5": {
+        costUSD: 1.11,
+        inputTokens: 100_000,
+        outputTokens: 10_000,
+        cacheReadInputTokens: 50_000,
+        cacheCreationInputTokens: 20_000,
+      },
+      "claude-haiku-4-5": {
+        costUSD: 0.22,
+        inputTokens: 1_000,
+        outputTokens: 100,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        webSearchRequests: 4,
+      },
+    },
+  };
+  const cost = sessionCost(ledger);
+  const list = estimateTotalCost(
+    [
+      {
+        model: "claude-sonnet-4-5",
+        input_tokens: 100_000,
+        output_tokens: 10_000,
+        cache_read_tokens: 50_000,
+        cache_write_tokens: 20_000,
+      },
+      {
+        model: "claude-haiku-4-5",
+        input_tokens: 1_000,
+        output_tokens: 100,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+      },
+    ],
+    "claude-sonnet-4-5",
+    101_000,
+    10_100,
+    50_000,
+    20_000,
+  );
+  assert.equal(cost.stamped, true);
+  assert.equal(cost.usd, 1.48);
+  assert.notEqual(cost.usd, list);
+  assert.notEqual(cost.usd, 1.11 + 0.22);
+  assert.notEqual(cost.usd, 1.48 + list);
+  assert.deepEqual(cost.models, [
+    { model: "claude-sonnet-4-5", usd: 1.11 },
+    { model: "claude-haiku-4-5", usd: 0.22 },
+  ]);
+  assert.notEqual(
+    cost.models[0].usd,
+    estimateCost("claude-sonnet-4-5", 100_000, 10_000, 50_000, 20_000),
+  );
+
+  const fromStats = sessionCostFromStats(
+    {
+      cost_ledger: JSON.stringify(ledger),
+      total_input_tokens: 100_000,
+      total_output_tokens: 10_000,
+      total_cache_read_tokens: 50_000,
+      total_cache_write_tokens: 20_000,
+      active_model: "claude-sonnet-4-5",
+    },
+    "claude",
+  );
+  assert.equal(fromStats.usd, 1.48);
+  assert.equal(fromStats.models[1].usd, 0.22);
+
+  const recordedZero = sessionCost({
+    provider: "claude",
+    totalCostUSD: 0,
+    hasUnknownModelCost: false,
+    inputTokens: 100_000,
+    outputTokens: 10_000,
+    model: "claude-sonnet-4-5",
+  });
+  assert.equal(recordedZero.usd, 0);
+  assert.equal(recordedZero.stamped, true);
+  assert.notEqual(recordedZero.usd, estimateCost("claude-sonnet-4-5", 100_000, 10_000, 0, 0));
+});
+
+test("formatSessionUsd matches Claude /usage decimals", () => {
+  assert.equal(formatSessionUsd(1.234), "$1.23");
+  assert.equal(formatSessionUsd(0.51), "$0.51");
+  assert.equal(formatSessionUsd(0.5), "$0.5000");
+  assert.equal(formatSessionUsd(0.143), "$0.1430");
+  assert.equal(formatSessionUsd(0.004), "$0.0040");
+  assert.notEqual(formatSessionUsd(0.004), "< $0.01");
+  assert.notEqual(formatSessionUsd(0.143), "$0.14");
+  assert.equal(formatSessionUsd(0), "$0.00");
+  assert.equal(formatSessionUsd(null), "—");
+  assert.equal(formatUsd(0.004), "< $0.01");
+});
+
+test("Claude uncached input is not reduced by cache reads", () => {
+  const ledger = {
+    provider: "claude" as const,
+    model: "claude-sonnet-4-5",
+    inputTokens: 1_000,
+    outputTokens: 100,
+    cacheReadTokens: 5_000,
+    cacheCreationTokens: 200,
+    reasoningTokens: 50_000,
+  };
+  const cost = sessionCost(ledger);
+  const once = estimateCost("claude-sonnet-4-5", 1_000, 100, 5_000, 200);
+  const stripped = estimateCost("claude-sonnet-4-5", 0, 100, 5_000, 200);
+  const reasoningAsOutput = estimateCost("claude-sonnet-4-5", 1_000, 50_100, 5_000, 200);
+  assert.equal(cost.stamped, false);
+  assert.equal(cost.usd, once);
+  assert.notEqual(cost.usd, stripped);
+  assert.notEqual(cost.usd, reasoningAsOutput);
+});
+
+const AGY_CUMULATIVE = {
+  provider: "antigravity" as const,
+  model: "gemini-4-argon",
+  estimatedCostUsd: 0.87,
+  reasoningTokens: 1_000_000,
+  toolTokens: 10_000,
+  quotaPercent: 40,
+  categories: {
+    input: { tokens: 100_000, estimatedCostUsd: 0.1 },
+    cacheRead: { tokens: 200_000, estimatedCostUsd: 0.02 },
+    output: { tokens: 50_000, estimatedCostUsd: 0.3 },
+    thinking: { tokens: 1_000_000, estimatedCostUsd: 0.4 },
+    tools: { tokens: 10_000, estimatedCostUsd: 0.05 },
+  },
+  pricing: {
+    modelName: "gemini-4-argon",
+    inputPricePerMillionTokens: 1.25,
+    outputPricePerMillionTokens: 10,
+    cacheReadPricePerMillionTokens: 0.125,
+  },
+};
+
+test("Antigravity session cost equals the cumulative estimated_cost_usd", () => {
+  const cost = sessionCost(AGY_CUMULATIVE);
+  const thinkingAgain = 0.87 + (1_000_000 / 1_000_000) * 10;
+  assert.equal(cost.stamped, true);
+  assert.equal(cost.usd, 0.87);
+  assert.notEqual(cost.usd, thinkingAgain);
+  assert.notEqual(cost.usd, 40);
+  assert.notEqual(cost.usd, 0.4);
+
+  const fromStats = sessionCostFromStats(
+    {
+      cost_ledger: JSON.stringify(AGY_CUMULATIVE),
+      total_input_tokens: 100_000,
+      total_output_tokens: 50_000,
+      total_reasoning_tokens: 1_000_000,
+      active_model: "gemini-4-argon",
+    },
+    "antigravity",
+  );
+  assert.equal(fromStats.usd, 0.87);
+  assert.equal(fromStats.stamped, true);
+  assert.notEqual(fromStats.usd, thinkingAgain);
+});
+
+test("Antigravity Argon fallback uses the pricing block", () => {
+  const ledger = {
+    provider: "antigravity" as const,
+    model: "gemini-4-argon",
+    inputTokens: 1_000_000,
+    cacheReadTokens: 2_000_000,
+    outputTokens: 100_000,
+    reasoningTokens: 50_000,
+    toolTokens: 10_000,
+    pricing: {
+      modelName: "gemini-4-argon",
+      inputPricePerMillionTokens: 1.25,
+      outputPricePerMillionTokens: 10,
+      cacheReadPricePerMillionTokens: 0.125,
+    },
+  };
+  const cost = sessionCost(ledger);
+  // "gemini" contains "mini", so the shared rate table prices Argon as Flash.
+  const catalog = getModelPricing("gemini-4-argon");
+  assert.equal(catalog.inRate, 0.25);
+  assert.equal(catalog.outRate, 1.25);
+  const sonnet = getModelPricing("claude-sonnet-4-5");
+  assert.equal(sonnet.inRate, 3);
+  assert.equal(sonnet.outRate, 15);
+  const asFlash = estimateCost("gemini-4-argon", 1_000_000, 160_000, 2_000_000, 0);
+  const asSonnet = estimateCost("claude-sonnet-4-5", 1_000_000, 160_000, 2_000_000, 0);
+  assert.equal(cost.stamped, false);
+  assert.ok(cost.usd != null && Math.abs(cost.usd - 3.1) < 1e-9);
+  assert.notEqual(cost.usd, asFlash);
+  assert.notEqual(cost.usd, asSonnet);
+  assert.ok(Math.abs((cost.usd ?? 0) - 3.6) > 0.01);
+  assert.ok(Math.abs((cost.usd ?? 0) - 3.0) > 0.01);
+});
+
+test("a quota percent is not a dollar cost", () => {
+  const cost = sessionCost({
+    provider: "antigravity",
+    model: "gemini-4-argon",
+    quotaPercent: 40,
+  });
+  assert.equal(cost.usd, null);
+  assert.equal(cost.stamped, false);
+  assert.equal(formatSessionUsd(cost.usd), "—");
+  assert.notEqual(cost.usd, 40);
+  assert.notEqual(cost.usd, 0.4);
 });
 
 

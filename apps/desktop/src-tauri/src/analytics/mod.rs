@@ -282,6 +282,9 @@ pub async fn tab_analytics(
                 &active_model,
             );
             apply_child_totals(&mut stats, &cursor);
+            // One session's `/usage` stamp. Lifetime totals across transcripts
+            // are not that figure, so only the focused session carries it.
+            stats.cost_ledger.clone_from(&cursor.cost_ledger);
 
             let lifetime_stats =
                 if active_src.is_some() && all_events.len() > events_to_analyze.len() {

@@ -82,6 +82,31 @@ test("an unpriced bedrock session is labeled from token rates", () => {
   assert.match(chips[0].title, /Estimated from token rates/);
 });
 
+test("a recorded bedrock total is not grown by a token-rate estimate", () => {
+  const models = [
+    {
+      model: "claude-sonnet-4-5",
+      input_tokens: 1_000_000,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+    },
+  ];
+  const chips = usageChips(
+    usage({
+      cli: "claude",
+      cost: {
+        session: { known_usd: 1.5, estimated: false, models },
+        today: { known_usd: 1.5, estimated: false, models },
+      },
+    }),
+    NOW,
+  );
+  assert.equal(chips[0].text, "Claude $1.50 session · $1.50 today");
+  assert.match(chips[0].title, /Recorded by Claude/);
+  assert.doesNotMatch(chips[0].text, /est\./);
+});
+
 test("a tiny bedrock cost keeps four decimals", () => {
   const chips = usageChips(
     usage({
