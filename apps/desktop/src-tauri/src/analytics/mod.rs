@@ -708,4 +708,141 @@ mod tests {
         assert!(stamped["categories"].get("tools").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Parent `model_cost` 0.25 plus the linked child 0.25 is the status-line
+    /// total. The unlinked 9.0 is not added. The priced blobs are a separate
+    /// fixture; the captured planner step is stored beside them unchanged.
+    #[test]
+    fn agy_status_line_fixture_includes_the_child_once() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                *ROOTS_OVERRIDE
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = None;
+                storage::set_analytics_root_override(None);
+            }
+        }
+        let _lock = ROOTS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let _reset = Reset;
+
+        let root = std::env::temp_dir().join(format!(
+            "sparkmux-tab-agy-priced-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("work");
+        let agy = root.join("agy");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(root.join("claude")).unwrap();
+        std::fs::create_dir_all(root.join("grok-sessions")).unwrap();
+        let id = "a1b2c3d4-16a4-4c0b-8011-621243f0f559";
+        let child = "c0ffee00-16a4-4c0b-8011-621243f0f559";
+        let decoy = "deadbeef-16a4-4c0b-8011-621243f0f559";
+        let logs = agy
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::create_dir_all(agy.join("cache")).unwrap();
+        let cwd = project.to_string_lossy().to_string();
+        let mut index = serde_json::Map::new();
+        index.insert(cwd.clone(), serde_json::Value::String(id.to_string()));
+        std::fs::write(
+            agy.join("cache").join("last_conversations.json"),
+            serde_json::Value::Object(index).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            logs.join("transcript.jsonl"),
+            concat!(
+                "{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-26T04:11:00Z\",\"thinking\":\"look at the layout\",\"content\":\"checking\",\"input_tokens\":2623,\"cache_read_tokens\":18040,\"output_tokens\":95,\"tool_calls\":[{\"name\":\"view_file\",\"args\":{\"path\":\"src/main.rs\"}}]}\n",
+                "{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-26T04:11:04Z\",\"thinking\":\"narrow the match\",\"content\":\"done\",\"input_tokens\":2219,\"cache_read_tokens\":20137,\"output_tokens\":87,\"tool_calls\":[{\"name\":\"grep_search\",\"args\":{\"query\":\"cost\"}}]}\n",
+            ),
+        )
+        .unwrap();
+
+        let conv = agy.join("conversations");
+        let parent_db = conv.join(format!("{id}.db"));
+        agy_cost::write_steps(
+            &parent_db,
+            &[
+                agy_cost::CAPTURED_STEP.to_vec(),
+                agy_cost::STATUS_LINE_STEP_025.to_vec(),
+            ],
+        );
+        agy_cost::write_steps(
+            &conv.join(format!("{child}.db")),
+            &[agy_cost::STATUS_LINE_STEP_025.to_vec()],
+        );
+        agy_cost::write_steps(
+            &conv.join(format!("{decoy}.db")),
+            &[agy_cost::STATUS_LINE_STEP_900.to_vec()],
+        );
+        agy_cost::write_child_link(&agy.join("conversation_summaries.db"), id, child);
+        let conn = rusqlite::Connection::open(&parent_db).unwrap();
+        let stored: Vec<u8> = conn
+            .query_row("SELECT metadata FROM steps WHERE idx = 2", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored.as_slice(), agy_cost::STATUS_LINE_STEP_025);
+        let captured: Vec<u8> = conn
+            .query_row("SELECT metadata FROM steps WHERE idx = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(captured.as_slice(), agy_cost::CAPTURED_STEP);
+        drop(conn);
+
+        *ROOTS_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) =
+            Some(crate::artifacts::TranscriptRoots {
+                grok_sessions: root.join("grok-sessions"),
+                claude_projects: root.join("claude"),
+                grok_active_sessions: root.join("active_sessions.json"),
+                agy_root: agy,
+            });
+        storage::set_analytics_root_override(Some(root.join("analytics")));
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let response = rt
+            .block_on(tab_analytics(
+                "agy-priced".into(),
+                "tab".into(),
+                "agy".into(),
+                cwd,
+                String::new(),
+                0,
+            ))
+            .unwrap();
+        let ledger: serde_json::Value = serde_json::from_str(&response.stats.cost_ledger).unwrap();
+        let usd = ledger["estimatedCostUsd"].as_f64().unwrap();
+        assert!(
+            (usd - 0.5).abs() < 1e-9,
+            "session cost {usd} != parent 0.25 + child 0.25"
+        );
+        assert!((usd - 9.5).abs() > 1.0, "unlinked decoy must not be added");
+        assert!(
+            ledger.get("pricing").is_none(),
+            "{}",
+            response.stats.cost_ledger
+        );
+        assert!(!response.stats.cost_ledger.contains("subagent"));
+        assert!(!response.stats.cost_ledger.contains("quota"));
+        assert_eq!(ledger["categories"]["input"]["tokens"].as_u64(), Some(4842));
+        assert_eq!(
+            ledger["categories"]["cacheRead"]["tokens"].as_u64(),
+            Some(38177)
+        );
+        assert_eq!(ledger["categories"]["output"]["tokens"].as_u64(), Some(182));
+        assert!(ledger["categories"].get("thinking").is_none());
+        assert!(ledger["categories"].get("tools").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
