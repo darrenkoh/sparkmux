@@ -3251,7 +3251,7 @@ mod tests {
             stats_at < graph_at,
             "Gits sits beside Stats on the status bar"
         );
-        assert!(panel.contains("aria-label=\"Logs\""));
+        assert!(panel.contains("aria-label=\"Prompt Logs\""));
         assert!(
             !panel.contains("aria-label=\"Open changed files graph\""),
             "the logs panel keeps a close button; Gits stays on the status bar"

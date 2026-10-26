@@ -22,7 +22,7 @@ export interface MobileFullscreenViewProps {
 
 const SWITCH: { id: MobileCompanion; label: string }[] = [
   { id: "output", label: "Logs" },
-  { id: "gits", label: "Gits" },
+  { id: "gits", label: "GIT" },
   { id: "stats", label: "Stats" },
   { id: "map", label: "3D Map" },
 ];
@@ -58,7 +58,7 @@ export default function MobileFullscreenView({
           ← Terminal
         </button>
         <strong className="mobile-fullscreen-title">{sessionLabel}</strong>
-        <div className="mobile-fullscreen-switch" role="tablist" aria-label="Logs Gits Stats 3D Map">
+        <div className="mobile-fullscreen-switch" role="tablist" aria-label="Logs GIT Stats 3D Map">
           {SWITCH.map((item) => (
             <button
               key={item.id}

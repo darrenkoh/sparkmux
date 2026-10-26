@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.64
+
+### Features & Improvements
+
+- **Status Bar Segmented Action Pill**:
+  - Unified the footer action triggers (`Logs`, `Stats`, `GIT`, `Remote`) into a single bordered capsule pill with section dividers and subtle hover/active states.
+  - Progressive responsiveness: on narrower window widths, footer pills automatically collapse into sleek circular icon badges to avoid overflow, while preserving full detail tooltips and hover HUD cards.
+- **Prompt Logs Styling & Docked Defaults**:
+  - Prominently styled the "Prompt Logs" header in bright terminal green (`#4ade80`), with matching green accents for the collapsed prompt logs state.
+  - Clicking the "Stats" button in the status bar now defaults directly to the docked Mini STAT area map.
+  - Seamless, borderless panel integration inside the docked companion sidebar.
+
 ## 0.1.63
 
 ### Features & Improvements

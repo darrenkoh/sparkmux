@@ -821,6 +821,7 @@ body.is-resizing * {
 
 .artifact-title > span:first-child {
   font-weight: 600;
+  color: #4ade80;
 }
 
 .artifact-actions {
@@ -2913,51 +2914,287 @@ body.is-resizing * {
   color: #facc15;
 }
 
-.status-output {
+/* Segmented Action Pill (Logs · Stats · GIT · Remote) */
+.status-action-pill {
   margin-left: 8px;
   display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: #1a1e26;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  border-radius: var(--radius);
-  padding: 2px 8px;
-  cursor: pointer;
+  align-items: stretch;
+  background: rgba(22, 27, 34, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 9999px;
+  overflow: hidden;
   flex: 0 0 auto;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.status-output.open {
-  border-color: var(--accent);
+.status-action-pill:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.status-pill-btn {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 14px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  user-select: none;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.status-pill-btn:not(:last-child) {
+  border-right: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.status-pill-btn:first-child {
+  padding-left: 10px;
+}
+
+.status-pill-btn:last-child {
+  padding-right: 10px;
+}
+
+.status-pill-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  z-index: 1;
+}
+
+.status-pill-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.status-pill-btn-svg {
+  display: block;
+}
+
+.status-pill-btn-text {
+  display: inline;
+  white-space: nowrap;
+}
+
+.status-output {
+  color: var(--fg);
 }
 
 .status-output:hover {
   background: var(--row-hover);
 }
 
-.status-stats {
-  margin-left: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: #1a1e26;
-  border: 1px solid var(--border);
-  color: #ff9a3c;
-  border-radius: var(--radius);
-  padding: 2px 8px;
-  cursor: pointer;
-  flex: 0 0 auto;
-  font-weight: 500;
-  letter-spacing: 0.05em;
+.status-output.open {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--accent);
 }
 
-.status-stats.open {
-  border-color: #ff9a3c;
-  background: rgba(255, 154, 60, 0.12);
+.status-stats {
+  color: #ff9a3c;
+  letter-spacing: 0.04em;
 }
 
 .status-stats:hover {
-  background: rgba(255, 154, 60, 0.18);
+  background: rgba(255, 154, 60, 0.14);
+}
+
+.status-stats.open {
+  background: rgba(255, 154, 60, 0.22);
+}
+
+.status-graph {
+  color: #2dd4bf;
+  letter-spacing: 0.04em;
+}
+
+.status-graph:hover {
+  background: rgba(45, 212, 191, 0.14);
+}
+
+.status-graph.open {
+  background: rgba(45, 212, 191, 0.22);
+}
+
+.status-remote {
+  color: #94a3b8;
+  letter-spacing: 0.03em;
+  gap: 6px;
+}
+
+.status-remote.running {
+  color: #38bdf8;
+}
+
+.status-remote:hover {
+  background: rgba(56, 189, 248, 0.12);
+  color: #f1f5f9;
+}
+
+.status-remote.open {
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+}
+
+/* =========================================================================
+   PROGRESSIVE FOOTER RESPONSIVENESS
+   On compact / narrow screen widths, collapse pills and buttons into
+   sleek circular icons so nothing wraps or overflows.
+   ========================================================================= */
+
+/* Step 1 (<= 1180px): Hide minor tracks, windows, and telemetry sparklines */
+@media (max-width: 1180px) {
+  .status-pill-window,
+  .status-pill-track,
+  .status-hardware canvas,
+  .status-hardware .mini-sparkline,
+  .status-hardware .cpu-histogram {
+    display: none;
+  }
+}
+
+/* Step 2 (<= 1020px): Hide model name from quota pills and labels from action pill */
+@media (max-width: 1020px) {
+  .status-usage .status-pill-name {
+    display: none;
+  }
+
+  .status-action-pill .status-pill-btn-text {
+    display: none;
+  }
+
+  .status-pill-btn {
+    padding: 2px 7px;
+    min-width: 26px;
+    justify-content: center;
+  }
+
+  .status-pill-btn:first-child {
+    padding-left: 8px;
+  }
+
+  .status-pill-btn:last-child {
+    padding-right: 8px;
+  }
+}
+
+/* Step 3 (<= 880px): Turn all footer status pills into circular icon badges */
+@media (max-width: 880px) {
+  .status-metrics {
+    gap: 5px;
+  }
+
+  .status-metrics .sep {
+    display: none;
+  }
+
+  .status-usage-row {
+    gap: 4px;
+  }
+
+  .status-pill {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    padding: 0;
+    border-radius: 50%;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .status-pill-head {
+    gap: 0;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .status-pill-name,
+  .status-pill-value {
+    display: none;
+  }
+
+  .status-pill-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .status-recipes {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 50%;
+  }
+
+  .status-action-pill {
+    margin-left: 4px;
+  }
+
+  .status-pill-btn {
+    padding: 2px 6px;
+    min-width: 24px;
+    height: 22px;
+  }
+
+  .status-pill-btn:first-child {
+    padding-left: 7px;
+  }
+
+  .status-pill-btn:last-child {
+    padding-right: 7px;
+  }
+}
+
+/* Step 4 (<= 760px): Ultra-compact for smallest windows */
+@media (max-width: 760px) {
+  .status {
+    padding: 4px 8px;
+    gap: 4px;
+  }
+
+  .status-metrics {
+    gap: 4px;
+  }
+
+  .status-pill {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+  }
+
+  .status-pill-icon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .model-halo-ring {
+    width: 15px;
+    height: 15px;
+  }
+
+  .status-action-pill {
+    margin-left: 3px;
+  }
+
+  .status-pill-btn {
+    padding: 1px 5px;
+    min-width: 22px;
+    height: 20px;
+  }
+
+  .status-recipes {
+    width: 20px;
+    height: 20px;
+    margin-left: 3px;
+  }
 }
 
 .toast {
@@ -4954,16 +5191,16 @@ code {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  color: var(--text-dim);
+  color: #4ade80;
   font-size: 11px;
   letter-spacing: 0.06em;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .docked-open-output-btn {
-  background: rgba(255, 154, 60, 0.15);
-  border: 1px solid rgba(255, 154, 60, 0.4);
-  color: #ff9a3c;
+  background: rgba(74, 222, 128, 0.15);
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  color: #4ade80;
   padding: 4px 10px;
   border-radius: 4px;
   font-size: 11px;
@@ -4972,8 +5209,8 @@ code {
 }
 
 .docked-open-output-btn:hover {
-  background: rgba(255, 154, 60, 0.25);
-  border-color: #ff9a3c;
+  background: rgba(74, 222, 128, 0.25);
+  border-color: #4ade80;
 }
 
 .docked-stats-panel {
@@ -5603,64 +5840,6 @@ div.mini-subagents-head {
   }
 }
 
-.status-graph {
-  margin-left: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: #1a1e26;
-  border: 1px solid #2dd4bf;
-  color: #2dd4bf;
-  border-radius: var(--radius);
-  padding: 2px 8px;
-  cursor: pointer;
-  flex: 0 0 auto;
-  font-weight: 500;
-  letter-spacing: 0.05em;
-}
-
-.status-graph.open {
-  border-color: #2dd4bf;
-  background: rgba(45, 212, 191, 0.12);
-}
-
-.status-graph:hover {
-  background: rgba(45, 212, 191, 0.18);
-  border-color: #2dd4bf;
-}
-
-.status-remote {
-  margin-left: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: #1a1e26;
-  border: 1px solid var(--border);
-  color: #94a3b8;
-  border-radius: var(--radius);
-  padding: 2px 8px;
-  cursor: pointer;
-  flex: 0 0 auto;
-  font-weight: 500;
-  letter-spacing: 0.03em;
-  transition: all 0.15s ease;
-}
-
-.status-remote.running {
-  color: #38bdf8;
-  border-color: rgba(56, 189, 248, 0.35);
-}
-
-.status-remote.open {
-  border-color: #38bdf8;
-  background: rgba(56, 189, 248, 0.14);
-}
-
-.status-remote:hover {
-  background: rgba(56, 189, 248, 0.12);
-  color: #f1f5f9;
-}
-
 .status-remote-dot {
   width: 6px;
   height: 6px;
@@ -5681,13 +5860,14 @@ div.mini-subagents-head {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #1a1e26;
-  border: 1px solid var(--border);
+  background: rgba(22, 27, 34, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   color: var(--fg);
   border-radius: var(--radius);
   padding: 2px 6px;
   cursor: pointer;
   flex: 0 0 auto;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .status-recipes-icon {
@@ -5698,6 +5878,7 @@ div.mini-subagents-head {
 
 .status-recipes:hover {
   background: var(--row-hover);
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 .modal.recipe-modal {

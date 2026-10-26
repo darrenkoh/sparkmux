@@ -137,21 +137,21 @@ export default function ArtifactPanel({
   return (
     <aside
       className={`artifact-panel${isDocked ? " docked" : ""}`}
-      aria-label="Logs"
+      aria-label="Prompt Logs"
       onMouseDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
       <header className="artifact-head">
         <div className="artifact-title">
-          <span>Logs</span>
+          <span>Prompt Logs</span>
         </div>
         <div className="artifact-actions">
           <button
             type="button"
             className="mini-stat-btn"
             onClick={onCollapse}
-            title="Close Logs"
-            aria-label="Close Logs"
+            title="Close Prompt Logs"
+            aria-label="Close Prompt Logs"
           >
             ✕
           </button>

@@ -43,7 +43,7 @@ export interface MobileTopBarProps {
 
 const VIEWS: { id: MobileCompanion; label: string }[] = [
   { id: "output", label: "Logs" },
-  { id: "gits", label: "Gits" },
+  { id: "gits", label: "GIT" },
   { id: "stats", label: "Stats" },
   { id: "map", label: "3D Map" },
 ];

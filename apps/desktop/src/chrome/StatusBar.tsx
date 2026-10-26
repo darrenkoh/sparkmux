@@ -651,57 +651,77 @@ export default function StatusBar({
           />
         </div>
       </span>
-      <button
-        type="button"
-        className={`status-output${outputOpen ? " open" : ""}`}
-        aria-pressed={outputOpen}
-        aria-label="Agent output"
-        title="Show Grok, Claude, and Antigravity output"
-        onClick={onOutput}
-      >
-        Output
-      </button>
-      {onAnalytics && (
+      <div className="status-action-pill" role="group" aria-label="Status actions">
         <button
           type="button"
-          className={`status-stats${analyticsOpen ? " open" : ""}`}
-          aria-pressed={analyticsOpen}
-          aria-label="Agent telemetry & stats HUD"
-          title="Show Sci-Fi Telemetry & Analytics HUD"
-          onClick={onAnalytics}
+          className={`status-pill-btn status-output${outputOpen ? " open" : ""}`}
+          aria-pressed={outputOpen}
+          aria-label="Agent output"
+          title="Show Grok, Claude, and Antigravity logs"
+          onClick={onOutput}
         >
-          ◈ Stats
+          <span className="status-pill-btn-icon" aria-hidden="true">
+            <svg
+              className="status-pill-btn-svg"
+              viewBox="0 0 16 16"
+              width="12"
+              height="12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+            >
+              <path d="M3 4.5h10M3 8h10M3 11.5h6" />
+            </svg>
+          </span>
+          <span className="status-pill-btn-text">Logs</span>
         </button>
-      )}
-      {onGraph && (
-        <button
-          type="button"
-          className={`status-graph${graphOpen ? " open" : ""}`}
-          aria-pressed={graphOpen}
-          aria-label="Changed files graph"
-          title="Show files changing in this repo"
-          onClick={onGraph}
-        >
-          ⬡ Gits
-        </button>
-      )}
-      {onWebServe && (
-        <button
-          type="button"
-          className={`status-remote${webRunning ? " running" : ""}${webModalOpen ? " open" : ""}`}
-          aria-pressed={webModalOpen}
-          aria-label="Remote server URLs"
-          title={
-            webRunning
-              ? "Remote server running — click to view URLs & QR code"
-              : "Remote server offline — click to configure & start"
-          }
-          onClick={onWebServe}
-        >
-          <span className={`status-remote-dot${webRunning ? " active" : ""}`} aria-hidden="true" />
-          Remote
-        </button>
-      )}
+        {onAnalytics && (
+          <button
+            type="button"
+            className={`status-pill-btn status-stats${analyticsOpen ? " open" : ""}`}
+            aria-pressed={analyticsOpen}
+            aria-label="Agent telemetry & stats HUD"
+            title="Show Sci-Fi Telemetry & Analytics HUD"
+            onClick={onAnalytics}
+          >
+            <span className="status-pill-btn-icon" aria-hidden="true">◈</span>
+            <span className="status-pill-btn-text">Stats</span>
+          </button>
+        )}
+        {onGraph && (
+          <button
+            type="button"
+            className={`status-pill-btn status-graph${graphOpen ? " open" : ""}`}
+            aria-pressed={graphOpen}
+            aria-label="Changed files graph"
+            title="Show files changing in this repo"
+            onClick={onGraph}
+          >
+            <span className="status-pill-btn-icon" aria-hidden="true">⬡</span>
+            <span className="status-pill-btn-text">GIT</span>
+          </button>
+        )}
+        {onWebServe && (
+          <button
+            type="button"
+            className={`status-pill-btn status-remote${webRunning ? " running" : ""}${webModalOpen ? " open" : ""}`}
+            aria-pressed={webModalOpen}
+            aria-label="Remote server URLs"
+            title={
+              webRunning
+                ? "Remote server running — click to view URLs & QR code"
+                : "Remote server offline — click to configure & start"
+            }
+            onClick={onWebServe}
+          >
+            <span className="status-pill-btn-icon" aria-hidden="true">
+              <span className={`status-remote-dot${webRunning ? " active" : ""}`} />
+            </span>
+            <span className="status-pill-btn-text">Remote</span>
+          </button>
+        )}
+      </div>
       <button
         type="button"
         className="status-recipes"

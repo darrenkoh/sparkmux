@@ -1875,7 +1875,7 @@ export default function App() {
                       3D map
                     </button>
                     <button type="button" onClick={() => setOutputOpen(true)}>
-                      Output
+                      Logs
                     </button>
                     <button
                       type="button"
@@ -1884,7 +1884,7 @@ export default function App() {
                         setGraphOpen(true);
                       }}
                     >
-                      Gits
+                      GIT
                     </button>
                   </div>
                 )}
@@ -1967,13 +1967,13 @@ export default function App() {
                             style={{ height: `${dockSplitRatio * 100}%` }}
                           >
                             <div className="docked-collapsed-inner">
-                              <span>LOGS COLLAPSED</span>
+                              <span>PROMPT LOGS COLLAPSED</span>
                               <button
                                 type="button"
                                 className="docked-open-output-btn"
                                 onClick={() => setOutputOpen(true)}
                               >
-                                + OPEN LOGS
+                                + OPEN PROMPT LOGS
                               </button>
                             </div>
                           </div>
@@ -2065,7 +2065,13 @@ export default function App() {
         graphOpen={graphOpen}
         onAnalytics={() => {
           setGraphOpen(false);
-          setAnalyticsOpen((open) => !open);
+          if (analyticsOpen || statsDocked) {
+            setAnalyticsOpen(false);
+            setStatsDocked(false);
+          } else {
+            setAnalyticsOpen(false);
+            setStatsDocked(true);
+          }
         }}
         onGraph={() => {
           setAnalyticsOpen(false);

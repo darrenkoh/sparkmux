@@ -10,9 +10,9 @@ import {
 export type SheetTab = "output" | "map" | "gits" | "stats" | "agents";
 
 const TABS: { id: SheetTab; label: string }[] = [
-  { id: "output", label: "Output" },
+  { id: "output", label: "Logs" },
   { id: "map", label: "3D Map" },
-  { id: "gits", label: "Gits" },
+  { id: "gits", label: "GIT" },
   { id: "stats", label: "Stats" },
   { id: "agents", label: "Agents" },
 ];
