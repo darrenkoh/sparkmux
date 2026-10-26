@@ -19,6 +19,7 @@ import {
   estimateTotalCost,
   estimateCostSavings,
 } from "./analyticsFormat";
+import { phoneMapFillsSegment } from "./phoneHudLayout";
 import TerrainViewport from "./TerrainViewport";
 import TokenSpectrumChart from "./TokenSpectrumChart";
 
@@ -36,6 +37,9 @@ export interface AnalyticsHudProps {
   isStandaloneWindow?: boolean;
   pinned?: boolean;
   onTogglePin?: () => void;
+  /** Phone postures swap the three-column cockpit for one full-bleed segment. */
+  phoneLayout?: boolean;
+  initialPhonePane?: "map" | "telemetry" | "events";
 }
 
 export { formatBytes, formatNum, formatMs, formatUsd, estimateCost, estimateTotalCost, estimateCostSavings };
@@ -362,7 +366,13 @@ export default function AnalyticsHud({
   isStandaloneWindow = false,
   pinned = false,
   onTogglePin,
+  phoneLayout = false,
+  initialPhonePane = "map",
 }: AnalyticsHudProps) {
+  const [phonePane, setPhonePane] = useState<"map" | "telemetry" | "events">(initialPhonePane);
+  useEffect(() => {
+    if (phoneLayout) setPhonePane(initialPhonePane);
+  }, [phoneLayout, initialPhonePane]);
   const [data, setData] = useState<TabAnalyticsResponse | null>(null);
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -1031,10 +1041,43 @@ export default function AnalyticsHud({
           </div>
         </header>
 
-        {/* 3-Column Sci-Fi Grid Layout */}
+        {phoneLayout && (
+          <div className="scifi-phone-switch" role="tablist" aria-label="Stats sections">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={phonePane === "map"}
+              className={phonePane === "map" ? "on" : ""}
+              onClick={() => setPhonePane("map")}
+            >
+              🌐 3D Map
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={phonePane === "telemetry"}
+              className={phonePane === "telemetry" ? "on" : ""}
+              onClick={() => setPhonePane("telemetry")}
+            >
+              📊 Telemetry
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={phonePane === "events"}
+              className={phonePane === "events" ? "on" : ""}
+              onClick={() => setPhonePane("events")}
+            >
+              ⚡ Events
+            </button>
+          </div>
+        )}
+
+        {/* 3-Column Sci-Fi Grid Layout. Phone postures show one segment at a time. */}
         <div
-          className="scifi-content"
-          style={{ gridTemplateColumns: `${leftWidth}px 8px 1fr 340px` }}
+          className={`scifi-content${phoneLayout ? " phone-segmented" : ""}`}
+          data-phone-pane={phoneLayout ? phonePane : undefined}
+          style={phoneLayout ? undefined : { gridTemplateColumns: `${leftWidth}px 8px 1fr 340px` }}
         >
           {/* LEFT COLUMN: Telemetry Radar, KPIs & Tools */}
           <aside className="scifi-col left">
@@ -1250,8 +1293,12 @@ export default function AnalyticsHud({
           />
 
           <main
-            className="scifi-center"
-            style={{ ["--hud-bottom-row-height" as any]: `${centerRowHeight}px` }}
+            className={`scifi-center${phoneMapFillsSegment(phoneLayout, phonePane) ? " phone-map-fill" : ""}`}
+            style={
+              phoneMapFillsSegment(phoneLayout, phonePane)
+                ? undefined
+                : { ["--hud-bottom-row-height" as any]: `${centerRowHeight}px` }
+            }
           >
             {/* Active agent session only. Tab Cumulative stays on the counters. */}
             <TerrainViewport
@@ -1263,6 +1310,9 @@ export default function AnalyticsHud({
               mapKey={`${sessionName}\0${tabId}\0${transcriptKey.current}`}
             />
 
+            {/* Desktop keeps the token row under the map. Phone map uses the whole segment. */}
+            {!phoneMapFillsSegment(phoneLayout, phonePane) && (
+            <>
             {/* Horizontal Splitter between 3D Area Map and Telemetry Row */}
             <div
               className={`scifi-splitter-h ${isDraggingCenterH ? "dragging" : ""}`}
@@ -1426,6 +1476,8 @@ export default function AnalyticsHud({
                 </div>
               </section>
             </div>
+            </>
+            )}
           </main>
 
           {/* RIGHT COLUMN: Real-Time Event Stream Log */}

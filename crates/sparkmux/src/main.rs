@@ -62,7 +62,7 @@ enum Commands {
         /// Bind address. Default `0.0.0.0` (LAN and Tailscale). Use `127.0.0.1` for loopback only.
         #[arg(short, long, default_value = "0.0.0.0")]
         bind: String,
-        /// Bearer token. Defaults to `SPARKMUX_WEB_TOKEN`, or a new 32-byte token each start.
+        /// Bearer token. Defaults to `SPARKMUX_WEB_TOKEN`, or the saved `web_token` file.
         #[arg(long, env = "SPARKMUX_WEB_TOKEN")]
         token: Option<String>,
     },
@@ -92,6 +92,7 @@ fn main() -> eyre::Result<ExitCode> {
                 bind,
                 port,
                 token,
+                token_dir: None,
             })
             .map_err(|err| eyre::eyre!(err))?;
             Ok(ExitCode::SUCCESS)

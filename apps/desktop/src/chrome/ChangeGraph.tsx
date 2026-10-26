@@ -216,6 +216,16 @@ export default function ChangeGraph({
   const [splitRatio, setSplitRatio] = useState<number>(0.5);
   const [isResizingSplit, setIsResizingSplit] = useState<boolean>(false);
   const [diffViewMode, setDiffViewMode] = useState<"unified" | "split">("unified");
+  const frameRef = useRef<HTMLDivElement>(null);
+  const diffBodyRef = useRef<HTMLDivElement>(null);
+  const [frameWidth, setFrameWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1200,
+  );
+  const narrow = frameWidth > 0 && frameWidth < 640;
+  const [mobileTab, setMobileTab] = useState<"files" | "diff" | "graph" | "chronicle" | "history">(
+    () => (typeof window !== "undefined" && window.innerWidth < 640 ? "diff" : "graph"),
+  );
+  const narrowDefaulted = useRef(false);
   const [diffLoading, setDiffLoading] = useState<boolean>(false);
   const [diffData, setDiffData] = useState<FileDiffResponse | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -269,6 +279,28 @@ export default function ChangeGraph({
     midY: number;
     initialPan: { x: number; y: number };
   } | null>(null);
+
+  useEffect(() => {
+    const el = frameRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      const width = el.clientWidth;
+      if (width > 0) setFrameWidth((prev) => (prev === width ? prev : width));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!narrow) return;
+    setDiffViewMode("unified");
+    if (!narrowDefaulted.current) {
+      narrowDefaulted.current = true;
+      setMobileTab("diff");
+    }
+  }, [narrow]);
 
   // Track viewport real-estate with ResizeObserver
   useEffect(() => {
@@ -555,6 +587,43 @@ export default function ChangeGraph({
   const availableHistoryFiles = useMemo(() => {
     return cards.map((c) => ({ path: c.path, repoId: c.repoId }));
   }, [cards]);
+
+  useEffect(() => {
+    if (!narrow || mobileTab !== "diff" || selectedCardId || cards.length === 0) return;
+    setSelectedCardId(cards[0].id);
+  }, [narrow, mobileTab, selectedCardId, cards]);
+
+  const shownDiff: "unified" | "split" = narrow ? "unified" : diffViewMode;
+
+  function openMobileTab(tab: "files" | "diff" | "graph" | "chronicle" | "history") {
+    setMobileTab(tab);
+    if (tab === "chronicle") setGitsView("chronicle");
+    else if (tab === "history") setGitsView("history");
+    else setGitsView("canvas");
+  }
+
+  function stepChangedFile(direction: number) {
+    const index = cards.findIndex((card) => card.id === selectedCardId);
+    const next = cards[index + direction];
+    if (next) setSelectedCardId(next.id);
+  }
+
+  function jumpHunk(direction: 1 | -1) {
+    const root = diffBodyRef.current;
+    if (!root) return;
+    const hunks = Array.from(root.querySelectorAll<HTMLElement>(".diff-hunk"));
+    if (hunks.length === 0) return;
+    const top = root.scrollTop + 4;
+    let target = hunks[0];
+    if (direction > 0) {
+      target = hunks.find((el) => el.offsetTop > top) ?? hunks[hunks.length - 1];
+    } else {
+      for (const el of hunks) {
+        if (el.offsetTop < top - 4) target = el;
+      }
+    }
+    root.scrollTop = target.offsetTop;
+  }
 
   // Text search across changed files (diff changes or full content)
   useEffect(() => {
@@ -920,7 +989,9 @@ export default function ChangeGraph({
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div
-        className="scifi-hud-frame graph-frame fullscreen"
+        ref={frameRef}
+        className={`scifi-hud-frame graph-frame fullscreen${narrow ? " gits-narrow" : ""}`}
+        data-mobile-tab={narrow ? mobileTab : undefined}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -1327,9 +1398,53 @@ export default function ChangeGraph({
           </div>
         </div>
 
+        {narrow && (
+          <div className="gits-mobile-tabs" role="tablist" aria-label="Gits sections">
+            {(
+              [
+                ["files", "Files"],
+                ["diff", "Diff"],
+                ["graph", "Graph"],
+                ["chronicle", "Chronicle"],
+                ["history", "History"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={mobileTab === id}
+                className={mobileTab === id ? "on" : ""}
+                onClick={() => openMobileTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {narrow && mobileTab === "files" && (
+          <div className="gits-mobile-files" role="list" aria-label="Changed files">
+            {cards.map((card) => (
+              <button
+                key={card.id}
+                type="button"
+                role="listitem"
+                className={selectedCardId === card.id ? "on" : ""}
+                onClick={() => {
+                  setSelectedCardId(card.id);
+                  openMobileTab("diff");
+                }}
+              >
+                {card.filename}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* 2. MAIN WORKSPACE CONTAINER: 2D GRAPH + RESIZABLE GIT DIFF PANE */}
         <div
           ref={mainContainerRef}
+          className="gits-workspace"
           style={{
             flex: 1,
             display: "flex",
@@ -1391,6 +1506,7 @@ export default function ChangeGraph({
           {/* LEFT: 2D GRAPH WORKSPACE */}
           <div
             ref={viewportRef}
+            className="graph-canvas-host"
             onPointerDown={handleViewportPointerDown}
             onPointerMove={handleViewportPointerMove}
             onPointerUp={handleViewportPointerUp}
@@ -2001,9 +2117,10 @@ export default function ChangeGraph({
         {/* RIGHT: GIT CHANGES & DIFF PANEL */}
         {selectedFile && (
           <div
+            className="graph-diff-pane"
             style={{
               flex: 1,
-              minWidth: "280px",
+              minWidth: narrow ? 0 : "280px",
               display: "flex",
               flexDirection: "column",
               background: "#04070c",
@@ -2099,6 +2216,23 @@ export default function ChangeGraph({
                     <div style={{ display: "flex", gap: "6px", fontSize: "10px", fontWeight: "bold" }}>
                       <span style={{ color: "#2dd4bf" }}>+{diffStats.adds}</span>
                       <span style={{ color: "#f87171" }}>-{diffStats.rems}</span>
+                    </div>
+                  )}
+
+                  {narrow && (
+                    <div className="gits-hunk-nav" role="group" aria-label="File and hunk navigation">
+                      <button type="button" onClick={() => stepChangedFile(-1)} aria-label="Previous file">
+                        ‹ File
+                      </button>
+                      <button type="button" onClick={() => jumpHunk(-1)} aria-label="Previous hunk">
+                        ↑ Prev Hunk
+                      </button>
+                      <button type="button" onClick={() => jumpHunk(1)} aria-label="Next hunk">
+                        ↓ Next Hunk
+                      </button>
+                      <button type="button" onClick={() => stepChangedFile(1)} aria-label="Next file">
+                        File ›
+                      </button>
                     </div>
                   )}
 
@@ -2276,13 +2410,16 @@ export default function ChangeGraph({
 
             {/* Diff Viewer Body */}
             <div
+              ref={diffBodyRef}
+              className={`diff-reader${narrow ? " diff-reader-narrow" : ""}`}
               style={{
                 flex: 1,
                 overflow: "auto",
-                padding: "10px 14px",
+                padding: narrow ? "8px 6px" : "10px 14px",
                 background: "#04070c",
                 fontSize: "11px",
                 lineHeight: "1.45",
+                WebkitOverflowScrolling: "touch",
               }}
             >
               {diffLoading && (
@@ -2321,7 +2458,7 @@ export default function ChangeGraph({
                     </div>
                     <span>No unstaged or uncommitted working copy diff detected against HEAD.</span>
                   </div>
-                ) : diffViewMode === "unified" ? (
+                ) : shownDiff === "unified" ? (
                   <div style={{ display: "flex", flexDirection: "column" }}>
                     {diffData.diff.split("\n").map((line, idx) => {
                       const isAdd = line.startsWith("+") && !line.startsWith("+++");
@@ -2355,6 +2492,7 @@ export default function ChangeGraph({
                       return (
                         <div
                           key={idx}
+                          className={isHunk ? "diff-hunk" : undefined}
                           style={{
                             display: "flex",
                             background: bg,
@@ -2364,14 +2502,15 @@ export default function ChangeGraph({
                           }}
                         >
                           <span
+                            className="diff-ln"
                             style={{
-                              width: "36px",
+                              width: narrow ? 28 : 36,
                               flexShrink: 0,
                               color: "rgba(255, 255, 255, 0.2)",
                               userSelect: "none",
-                              fontSize: "9.5px",
+                              fontSize: narrow ? 9 : 9.5,
                               textAlign: "right",
-                              marginRight: "12px",
+                              marginRight: narrow ? 6 : 12,
                               paddingTop: "1px",
                             }}
                           >
@@ -2382,8 +2521,8 @@ export default function ChangeGraph({
                               margin: 0,
                               color,
                               fontFamily: "inherit",
-                              whiteSpace: "pre-wrap",
-                              wordBreak: "break-all",
+                              whiteSpace: narrow ? "pre" : "pre-wrap",
+                              wordBreak: narrow ? "normal" : "break-all",
                             }}
                           >
                             {renderHighlightedText(line || " ", searchQuery)}

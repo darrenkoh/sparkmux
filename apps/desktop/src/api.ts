@@ -126,8 +126,19 @@ export function paneWrite(paneId: string, data: number[]): Promise<void> {
   return wsTransport.sendPaneWriteBinary(paneId, data);
 }
 
-export function windowResize(cols: number, rows: number): Promise<void> {
-  return rpcInvoke("window_resize", { cols, rows });
+/** Tauri ignores `force`. The web RPC includes it so a phone can resize a desktop server. */
+export function windowResizeArgs(
+  cols: number,
+  rows: number,
+  force = false,
+  tauri = false,
+): Record<string, unknown> {
+  if (tauri) return { cols, rows };
+  return { cols, rows, force: Boolean(force) };
+}
+
+export function windowResize(cols: number, rows: number, force = false): Promise<void> {
+  return rpcInvoke("window_resize", windowResizeArgs(cols, rows, force, isTauriRuntime()));
 }
 
 export function paneCursor(paneId: string): Promise<{ y: number; x: number }> {

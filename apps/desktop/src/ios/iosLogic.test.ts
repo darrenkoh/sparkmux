@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -9,17 +10,39 @@ import {
   type PostureStorage,
   type SegmentRect,
 } from "./posture.ts";
+import { extractQuickOptions } from "./quickReplyLogic.ts";
+import { sheetDetentHeight, snapSheetDetent } from "./sheetLogic.ts";
+import {
+  computeOverviewScale,
+  readSizingMode,
+  resizeForSizingMode,
+  shouldFixTerminalSize,
+  writeSizingMode,
+  type SizingStorage,
+} from "./terminalSizing.ts";
 import {
   arrowBytes,
+  consumeModifierPhase,
   encodeCtrlLetter,
   escBytes,
+  nextModifierPhase,
   pinchFontSize,
   shiftTabBytes,
   tabBytes,
   textBytes,
   TMUX_CTRL,
   touchDragDelta,
+  touchTrackpadSteps,
 } from "./touchKeys.ts";
+import { windowResizeArgs } from "../api.ts";
+import {
+  connectionHealthFromPing,
+  loadWsToken,
+  persistWsToken,
+  shouldImmediateReseed,
+  type TokenBag,
+} from "../transport.ts";
+import { phoneMapFillsSegment } from "../chrome/phoneHudLayout.ts";
 import { decideWheel } from "../terminal/promptScroll.ts";
 import {
   isDoubleTap,
@@ -182,4 +205,182 @@ test("map pinch clamps radius, pan moves the target, and a double tap resets", (
   assert.equal(reset.azimuth, 0.38);
   assert.equal(reset.elevation, 0.48);
   assert.equal(reset.radius, 46);
+});
+
+test("iPhone 17 Pro Max portrait, landscape, and iPad Pro stay distinct", () => {
+  const portrait = resolvePosture({ width: 440, height: 956, isTouch: true });
+  assert.equal(portrait.posture, "phone-compact");
+  assert.equal(portrait.isPhone, true);
+  assert.equal(portrait.orientation, "portrait");
+
+  const landscape = resolvePosture({ width: 956, height: 440, isTouch: true });
+  assert.equal(landscape.posture, "phone-landscape");
+  assert.equal(landscape.isPhone, true);
+  assert.equal(landscape.orientation, "landscape");
+  assert.notEqual(landscape.posture, "ipad-pro");
+
+  const ipad = resolvePosture({ width: 1024, height: 768, isTouch: true });
+  assert.equal(ipad.posture, "ipad-pro");
+  assert.equal(ipad.isPhone, false);
+
+  const phone = resolvePosture({ width: 390, height: 844, isTouch: true });
+  assert.equal(phone.posture, "phone-compact");
+  assert.equal(phone.isPhone, true);
+  assert.equal(resolvePosture({ width: 1440, height: 900, isTouch: false }).posture, "desktop");
+});
+
+test("quick replies extract yes/no, numbered choices, and enter approval", () => {
+  const yesNo = extractQuickOptions("Apply the patch? [y/n]");
+  assert.deepEqual(
+    yesNo.map((option) => option.send),
+    ["y", "n"],
+  );
+  const numbered = extractQuickOptions("Pick one:\n1. Keep the branch\n2) Rebase onto main");
+  assert.deepEqual(
+    numbered.map((option) => [option.label, option.send, option.enter]),
+    [
+      ["1: Keep the branch", "1", true],
+      ["2: Rebase onto main", "2", true],
+    ],
+  );
+  const approve = extractQuickOptions("Confirmation required. Press enter to allow this.");
+  assert.equal(approve.at(-1)?.label, "Approve (Enter)");
+  assert.equal(approve.at(-1)?.send, "");
+  assert.equal(approve.at(-1)?.enter, true);
+});
+
+test("trackpad scrub steps reset the residual on an exact multiple", () => {
+  const across = touchTrackpadSteps(28, 0, 0, 0);
+  assert.equal(across.horizontal, 2);
+  assert.equal(across.vertical, 0);
+  assert.equal(across.residualX, 0);
+  assert.equal(across.residualY, 0);
+
+  const down = touchTrackpadSteps(0, 44, 0, 0);
+  assert.equal(down.vertical, 2);
+  assert.equal(down.residualY, 0);
+
+  const leftover = touchTrackpadSteps(15, 10, 0, 0);
+  assert.equal(leftover.horizontal, 1);
+  assert.equal(leftover.residualX, 1);
+  assert.equal(leftover.vertical, 0);
+  assert.equal(leftover.residualY, 10);
+
+  const left = touchTrackpadSteps(-14, -22, 0, 0);
+  assert.equal(left.horizontal, -1);
+  assert.equal(left.vertical, -1);
+  assert.equal(left.residualX, 0);
+  assert.equal(left.residualY, 0);
+});
+
+test("ctrl and opt cycle idle, latched, and locked", () => {
+  assert.equal(nextModifierPhase("idle", false), "latched");
+  assert.equal(nextModifierPhase("latched", true), "locked");
+  assert.equal(nextModifierPhase("latched", false), "idle");
+  assert.equal(nextModifierPhase("locked", false), "idle");
+  assert.equal(consumeModifierPhase("latched"), "idle");
+  assert.equal(consumeModifierPhase("locked"), "locked");
+});
+
+test("sheet release snaps to closed, peek, half, and full", () => {
+  const height = 1000;
+  assert.equal(sheetDetentHeight("peek", height), 64);
+  assert.equal(sheetDetentHeight("half", height), 480);
+  assert.equal(sheetDetentHeight("full", height), 860);
+  assert.equal(snapSheetDetent(0, 0, height), "closed");
+  assert.equal(snapSheetDetent(64, 0, height), "peek");
+  assert.equal(snapSheetDetent(480, 0, height), "half");
+  assert.equal(snapSheetDetent(860, 0, height), "full");
+  assert.equal(snapSheetDetent(480, 0.5, height), "peek");
+  assert.equal(snapSheetDetent(480, -0.5, height), "full");
+});
+
+function sizingBag(): SizingStorage {
+  const bag = new Map<string, string>();
+  return {
+    getItem: (key) => bag.get(key) ?? null,
+    setItem: (key, value) => {
+      bag.set(key, value);
+    },
+  };
+}
+
+test("mirror scales a wide pane and fit-phone requests a forced resize", () => {
+  const storage = sizingBag();
+  assert.equal(readSizingMode(storage, false), "mirror");
+  assert.equal(readSizingMode(storage, true), "fit-phone");
+  writeSizingMode(storage, "fit-phone");
+  assert.equal(readSizingMode(storage, false), "fit-phone");
+  assert.equal(storage.getItem("sparkmux.mobileSizingMode"), "fit-phone");
+
+  const scale = computeOverviewScale(200, 8, 400);
+  assert.ok(scale < 1);
+  assert.equal(scale, 0.45);
+  assert.equal(computeOverviewScale(40, 8, 400), 1);
+  assert.equal(resizeForSizingMode("mirror", 80, 24), null);
+  assert.deepEqual(resizeForSizingMode("fit-phone", 80, 24), { cols: 80, rows: 24, force: true });
+  assert.equal(shouldFixTerminalSize(true, false, "mirror"), false);
+  assert.equal(shouldFixTerminalSize(false, false, "mirror"), true);
+  assert.equal(shouldFixTerminalSize(false, true, "fit-phone"), false);
+});
+
+function tokenBag(): TokenBag & { dump: () => Map<string, string> } {
+  const bag = new Map<string, string>();
+  return {
+    getItem: (key) => bag.get(key) ?? null,
+    setItem: (key, value) => {
+      bag.set(key, value);
+    },
+    dump: () => bag,
+  };
+}
+
+test("the web token prefers localStorage and a visible wake reseeds", () => {
+  const local = tokenBag();
+  const session = tokenBag();
+  persistWsToken("pair-token", local, session);
+  assert.equal(local.getItem("sparkmux.wsToken"), "pair-token");
+  assert.equal(session.getItem("sparkmux.wsToken"), "pair-token");
+  assert.equal(loadWsToken(local, session), "pair-token");
+
+  const onlySession = tokenBag();
+  onlySession.setItem("sparkmux.wsToken", "from-session");
+  assert.equal(loadWsToken(tokenBag(), onlySession), "from-session");
+
+  assert.deepEqual(connectionHealthFromPing(1_000, 1_042), { state: "connected", rttMs: 42 });
+  assert.equal(shouldImmediateReseed({ type: "visibilitychange", visibilityState: "visible" }), true);
+  assert.equal(shouldImmediateReseed({ type: "visibilitychange", visibilityState: "hidden" }), false);
+  assert.equal(shouldImmediateReseed({ type: "pageshow" }), true);
+  assert.equal(shouldImmediateReseed({ type: "online" }), true);
+
+  assert.deepEqual(windowResizeArgs(80, 24, true, false), { cols: 80, rows: 24, force: true });
+  assert.deepEqual(windowResizeArgs(80, 24, true, true), { cols: 80, rows: 24 });
+});
+
+test("the phone map fills its segment and the peek stays 64px above the app inset", () => {
+  assert.equal(phoneMapFillsSegment(true, "map"), true);
+  assert.equal(phoneMapFillsSegment(true, "telemetry"), false);
+  assert.equal(phoneMapFillsSegment(true, "events"), false);
+  assert.equal(phoneMapFillsSegment(false, "map"), false);
+
+  const hud = readFileSync(new URL("../chrome/AnalyticsHud.tsx", import.meta.url), "utf8");
+  const gate = hud.indexOf("!phoneMapFillsSegment(phoneLayout, phonePane)");
+  const splitter = hud.indexOf("scifi-splitter-h", gate);
+  const row = hud.indexOf('className="scifi-row"', gate);
+  const end = hud.indexOf("</main>", gate);
+  assert.ok(gate !== -1 && splitter !== -1 && row !== -1 && end !== -1);
+  assert.ok(gate < splitter && splitter < row && row < end);
+
+  const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+  const sheetStart = css.indexOf(".mobile-bottom-sheet {");
+  const sheetEnd = css.indexOf(".mobile-bottom-sheet.detent-closed");
+  const sheet = css.slice(sheetStart, sheetEnd);
+  assert.equal(sheet.includes("padding-bottom:"), false);
+  assert.match(sheet, /--sheet-peek:\s*64px/);
+  const appStart = css.indexOf(".app.posture-phone-compact,");
+  const appEnd = css.indexOf(".app.posture-phone-landscape .main");
+  const appPad = css.slice(appStart, appEnd);
+  assert.match(appPad, /padding-bottom:\s*env\(safe-area-inset-bottom\)/);
+  assert.match(css, /\.scifi-center\.phone-map-fill > \.scifi-splitter-h/);
+  assert.match(css, /\.scifi-center\.phone-map-fill > \.scifi-row \{\s*display:\s*none;/);
 });

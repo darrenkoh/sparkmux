@@ -7892,8 +7892,489 @@ div.mini-subagents-head {
 
 .app.posture-ipad-pro .term-viewport,
 .app.posture-phone-compact .term-viewport,
+.app.posture-phone-landscape .term-viewport,
 .app.posture-duo-book .term-viewport,
 .app.posture-duo-clamshell .term-viewport {
   touch-action: pan-x pan-y;
+}
+
+/* iPhone 17 Pro Max portrait deck and landscape cinema.
+   OLED black, glass bars, and the Dynamic Island safe area. */
+.app.posture-phone-compact,
+.app.posture-phone-landscape {
+  background: #07080a;
+  color: #e7ecf3;
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
+.app.posture-phone-landscape .main,
+.app.posture-phone-landscape .term-stage,
+.app.posture-phone-landscape .term-column,
+.app.posture-phone-compact .term-stage {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mobile-top-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: rgba(18, 21, 27, 0.88);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.mobile-top-bar.portrait {
+  height: 38px;
+  min-height: 38px;
+}
+
+.mobile-top-bar.landscape {
+  height: 30px;
+  min-height: 30px;
+}
+
+.mobile-top-bar button,
+.mobile-crumb,
+.mobile-size-btn,
+.mobile-rtt,
+.sheet-tabs button,
+.quick-reply-banner button,
+.mobile-drawer-head button {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(13, 15, 18, 0.72);
+  color: #e7ecf3;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.mobile-icon-btn,
+.mobile-zen-pill {
+  position: relative;
+  width: 28px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.mobile-zen-pill {
+  width: 24px;
+  height: 24px;
+  z-index: 40;
+}
+
+.app.zen-fullscreen .mobile-zen-pill {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 6px);
+  right: calc(env(safe-area-inset-right) + 8px);
+}
+
+.attn-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f5c16c;
+}
+
+.mobile-icon-btn.attn-pulse .attn-dot {
+  animation: attn-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes attn-pulse {
+  50% { opacity: 0.35; }
+}
+
+.mobile-switcher {
+  position: relative;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.mobile-crumb {
+  max-width: 28vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  height: 24px;
+  padding: 0 8px;
+}
+
+.mobile-switcher-pop {
+  position: absolute;
+  top: 28px;
+  left: 0;
+  z-index: 30;
+  min-width: 220px;
+  max-height: 50vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: rgba(18, 21, 27, 0.94);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mobile-pane-pills,
+.mobile-companions {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.mobile-size-btn,
+.mobile-rtt {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.mobile-rtt.live {
+  color: #8ee4c2;
+}
+
+.mobile-rtt.reconnecting {
+  color: #f5c16c;
+}
+
+.quick-reply-banner {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 8px 6px;
+  padding: 8px;
+  background: rgba(18, 21, 27, 0.88);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+}
+
+.quick-reply-head,
+.quick-reply-compose,
+.quick-reply-options {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.quick-reply-ask {
+  margin: 0;
+  color: #c9d2df;
+  font-size: 12px;
+}
+
+.quick-reply-compose textarea {
+  flex: 1;
+  min-height: 32px;
+  max-height: 96px;
+  resize: none;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #0d0f12;
+  color: #e7ecf3;
+  font: inherit;
+  padding: 6px 8px;
+}
+
+.touch-keybar-v2 .tk-btn.locked {
+  background: #1d4ed8;
+  border-color: #60a5fa;
+  color: #fff;
+}
+
+.touch-keybar-wrap.landscape-rail .touch-keybar.split-thumb {
+  justify-content: space-between;
+  padding-left: max(8px, env(safe-area-inset-left));
+  padding-right: max(8px, env(safe-area-inset-right));
+}
+
+.touch-keybar.split-thumb .tk-cluster {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.tk-trackpad {
+  flex: 1 1 auto;
+  min-width: 72px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  touch-action: none;
+  color: #9aa6b8;
+  font-size: 11px;
+}
+
+.mobile-bottom-sheet {
+  --sheet-peek: 64px;
+  --sheet-half: 48vh;
+  --sheet-full: 86vh;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: rgba(18, 21, 27, 0.88);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  /* The app posture already insets env(safe-area-inset-bottom). A second pad
+     would shrink this 64px peek and clip the tab row. */
+}
+
+.mobile-bottom-sheet.detent-closed {
+  min-height: 0;
+  padding-bottom: 0;
+  border-top: 0;
+}
+
+.sheet-grabber-zone {
+  flex: 0 0 auto;
+  touch-action: none;
+}
+
+.sheet-grabber {
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: 6px auto 4px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.sheet-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 0 8px 6px;
+  scrollbar-width: none;
+}
+
+.sheet-body,
+.mobile-drawer-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sheet-ticker {
+  margin: 0;
+  padding: 0 10px 6px;
+  color: #f5c16c;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-slide-drawer {
+  position: fixed;
+  top: env(safe-area-inset-top);
+  bottom: env(safe-area-inset-bottom);
+  z-index: 240;
+  display: flex;
+  flex-direction: column;
+  background: rgba(18, 21, 27, 0.88);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 0 32px rgba(0, 0, 0, 0.45);
+}
+
+.mobile-slide-drawer.right {
+  right: env(safe-area-inset-right);
+  width: min(440px, 52vw);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mobile-slide-drawer.left {
+  left: env(safe-area-inset-left);
+  width: min(440px, 52vw);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mobile-drawer-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 8px;
+}
+
+.mobile-bottom-sheet .scifi-hud-overlay,
+.mobile-bottom-sheet .graph-overlay,
+.mobile-slide-drawer .scifi-hud-overlay,
+.mobile-slide-drawer .graph-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.mobile-bottom-sheet .scifi-hud-frame.fullscreen,
+.mobile-slide-drawer .scifi-hud-frame.fullscreen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+
+.mobile-agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  height: 100%;
+}
+
+.mobile-agent-list button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  margin-bottom: 6px;
+  background: #0d0f12;
+  color: #e7ecf3;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.term-overview {
+  overflow: hidden;
+}
+
+.term-overview-scale {
+  min-width: 0;
+  min-height: 0;
+}
+
+.scifi-phone-switch {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(7, 8, 10, 0.92);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.scifi-phone-switch button {
+  flex: 1;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: #c9d2df;
+}
+
+.scifi-phone-switch button.on {
+  background: rgba(45, 212, 191, 0.18);
+  color: #99f6e4;
+}
+
+.scifi-content.phone-segmented {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+}
+
+.scifi-content.phone-segmented > .scifi-col,
+.scifi-content.phone-segmented > .scifi-splitter-v,
+.scifi-content.phone-segmented > .scifi-center {
+  display: none;
+}
+
+.scifi-content.phone-segmented[data-phone-pane="telemetry"] > .scifi-col.left,
+.scifi-content.phone-segmented[data-phone-pane="events"] > .scifi-col.right,
+.scifi-content.phone-segmented[data-phone-pane="map"] > .scifi-center {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.scifi-center.phone-map-fill > .scifi-panel.viewport {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+}
+
+.scifi-center.phone-map-fill > .scifi-splitter-h,
+.scifi-center.phone-map-fill > .scifi-row {
+  display: none;
+}
+
+.graph-frame.gits-narrow[data-mobile-tab="diff"] .graph-canvas-host,
+.graph-frame.gits-narrow[data-mobile-tab="diff"] .graph-diff-splitter,
+.graph-frame.gits-narrow[data-mobile-tab="files"] .gits-workspace,
+.graph-frame.gits-narrow[data-mobile-tab="graph"] .graph-diff-pane,
+.graph-frame.gits-narrow[data-mobile-tab="graph"] .graph-diff-splitter,
+.graph-frame.gits-narrow[data-mobile-tab="chronicle"] .gits-workspace .graph-canvas-host,
+.graph-frame.gits-narrow[data-mobile-tab="history"] .gits-workspace .graph-canvas-host {
+  display: none !important;
+}
+
+.graph-frame.gits-narrow[data-mobile-tab="diff"] .graph-diff-pane,
+.graph-frame.gits-narrow[data-mobile-tab="graph"] .graph-canvas-host {
+  flex: 1 1 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.graph-frame.gits-narrow .diff-reader-narrow {
+  font-size: 11px;
+}
+
+.graph-frame.gits-narrow .diff-ln {
+  width: 28px;
+  font-size: 9px;
+}
+
+.gits-mobile-tabs,
+.gits-hunk-nav {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 6px 8px;
+}
+
+.gits-mobile-files {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  max-height: 40%;
+}
+
+.gits-mobile-files button,
+.gits-mobile-tabs button,
+.gits-hunk-nav button {
+  text-align: left;
+  background: #0d0f12;
+  color: #e7ecf3;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 8px;
 }
 

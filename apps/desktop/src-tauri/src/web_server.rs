@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -176,6 +177,7 @@ fn menu_serve_options() -> ServeOptions {
         bind: "0.0.0.0".into(),
         port: 7420,
         token: None,
+        token_dir: None,
     }
 }
 
@@ -235,6 +237,8 @@ pub struct ServeOptions {
     pub bind: String,
     pub port: u16,
     pub token: Option<String>,
+    /// Isolated store for tests. Production passes `None` and uses the Sparkmux config directory.
+    pub token_dir: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Default)]
@@ -297,18 +301,100 @@ const LOGIN_HTML: &str = r#"<!doctype html>
 </body>
 </html>"#;
 
+/// Name of the persisted pairing secret inside the Sparkmux config directory.
+pub const WEB_TOKEN_FILE: &str = "web_token";
+
 /// Pairing secret for this server process.
 ///
-/// An explicit token or `SPARKMUX_WEB_TOKEN` is used as given. Otherwise each
-/// start mints a new 32-byte token. A previous run's URL and cookie stop working.
+/// An explicit token or `SPARKMUX_WEB_TOKEN` wins. Otherwise the 32-byte secret
+/// in the config directory `web_token` file is reused, and created (mode `0600`
+/// on Unix) when that file is missing.
 pub fn resolve_token(explicit: Option<String>) -> String {
+    resolve_stored_token(
+        explicit,
+        std::env::var("SPARKMUX_WEB_TOKEN").ok(),
+        sparkmux_config_dir(),
+    )
+}
+
+/// Same order as [`resolve_token`], with the env value and directory passed in
+/// so tests can use an isolated folder and a cleared env token.
+pub fn resolve_stored_token(
+    explicit: Option<String>,
+    env_token: Option<String>,
+    config_dir: Option<PathBuf>,
+) -> String {
     if let Some(token) = trimmed_token(explicit) {
         return token;
     }
-    if let Some(token) = trimmed_token(std::env::var("SPARKMUX_WEB_TOKEN").ok()) {
+    if let Some(token) = trimmed_token(env_token) {
         return token;
     }
-    generate_token()
+    let Some(dir) = config_dir else {
+        return generate_token();
+    };
+    if let Some(token) = read_token_file(&dir) {
+        return token;
+    }
+    let token = generate_token();
+    let _ = write_token_file(&dir, &token);
+    token
+}
+
+fn sparkmux_config_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "sparkmux").map(|dirs| dirs.config_dir().to_path_buf())
+}
+
+fn token_path(dir: &Path) -> PathBuf {
+    dir.join(WEB_TOKEN_FILE)
+}
+
+fn read_token_file(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(token_path(dir)).ok()?;
+    trimmed_token(Some(raw))
+}
+
+fn write_token_file(dir: &Path, token: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|err| err.to_string())?;
+    let path = token_path(dir);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|err| err.to_string())?;
+    file.write_all(token.as_bytes())
+        .map_err(|err| err.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+/// Resize when the process is headless or the client sets `force`.
+pub fn should_apply_window_resize(is_headless: bool, force: bool) -> bool {
+    is_headless || force
+}
+
+/// Inject the pairing token into an authenticated manifest. An absent token
+/// leaves the file bytes unchanged, so the secret is not added.
+pub fn manifest_with_token(raw: &str, token: Option<&str>) -> String {
+    let Some(token) = token.filter(|value| !value.is_empty()) else {
+        return raw.to_string();
+    };
+    let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+    let replacement = format!("\"start_url\": \"/?token={escaped}\"");
+    for needle in ["\"start_url\": \"/\"", "\"start_url\":\"/\""] {
+        if raw.contains(needle) {
+            return raw.replacen(needle, &replacement, 1);
+        }
+    }
+    raw.to_string()
 }
 
 fn trimmed_token(value: Option<String>) -> Option<String> {
@@ -352,7 +438,11 @@ async fn open_web(
     opts: ServeOptions,
     is_headless: bool,
 ) -> Result<RunningWeb, String> {
-    let token = resolve_token(opts.token.clone());
+    let token = if let Some(dir) = opts.token_dir.clone() {
+        resolve_stored_token(opts.token.clone(), None, Some(dir))
+    } else {
+        resolve_token(opts.token.clone())
+    };
     let addr: SocketAddr = format!("{}:{}", opts.bind, opts.port)
         .parse()
         .map_err(|err| format!("invalid bind address: {err}"))?;
@@ -555,9 +645,8 @@ async fn static_handler(
     let cookie = headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok());
-    if !is_public_asset(path)
-        && !request_is_authenticated(cookie, query.token.as_deref(), &ctx.auth_token)
-    {
+    let authenticated = request_is_authenticated(cookie, query.token.as_deref(), &ctx.auth_token);
+    if !is_public_asset(path) && !authenticated {
         return Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -600,8 +689,19 @@ async fn static_handler(
     if query.token.is_some() {
         builder = builder.header(header::SET_COOKIE, session_set_cookie(&ctx.auth_token));
     }
+    let body = if served == "manifest.webmanifest" {
+        let text = String::from_utf8_lossy(&content.data);
+        let token = if authenticated {
+            Some(ctx.auth_token.as_str())
+        } else {
+            None
+        };
+        Body::from(manifest_with_token(&text, token))
+    } else {
+        Body::from(content.data.into_owned())
+    };
     builder
-        .body(Body::from(content.data.into_owned()))
+        .body(body)
         .unwrap_or_else(|_| Response::new(Body::from("")))
 }
 
@@ -884,7 +984,8 @@ async fn dispatch_rpc_inner(
             Ok(Value::Null)
         }
         "window_resize" => {
-            if state.is_headless {
+            let force = bool_arg(&args, "force");
+            if should_apply_window_resize(state.is_headless, force) {
                 crate::commands::window_resize_core(
                     state,
                     u16_arg(&args, "cols", 80),
@@ -894,6 +995,7 @@ async fn dispatch_rpc_inner(
             }
             Ok(Value::Null)
         }
+        "ping" => Ok(json!({ "pong": true })),
         "pane_cursor" => {
             json_ok(crate::commands::pane_cursor_core(state, str_arg(&args, "paneId")).await?)
         }
@@ -1139,7 +1241,13 @@ mod tests {
             .unwrap_or_default()
             .contains("unsupported RPC command"));
 
-        // When connected to the desktop app (!is_headless), window_resize is ignored.
+        // A desktop client does not resize unless force is set. The RPC still
+        // returns null when no control client is attached, so the gate itself
+        // is what decides whether window_resize_core runs.
+        assert!(!should_apply_window_resize(false, false));
+        assert!(should_apply_window_resize(false, true));
+        assert!(should_apply_window_resize(true, false));
+        assert!(should_apply_window_resize(true, true));
         let resize_ignored = dispatch_rpc(
             &state,
             &tx,
@@ -1152,7 +1260,42 @@ mod tests {
         )
         .await;
         assert!(resize_ignored.ok);
-        assert_eq!(resize_ignored.data, Some(Value::Null));
+        assert!(!should_apply_window_resize(state.is_headless, false));
+        let resize_forced = dispatch_rpc(
+            &state,
+            &tx,
+            &mut subs,
+            RpcRequest {
+                id: 11,
+                cmd: "window_resize".into(),
+                args: json!({ "cols": 54, "rows": 36, "force": true }),
+            },
+        )
+        .await;
+        assert!(resize_forced.ok);
+        assert!(should_apply_window_resize(state.is_headless, true));
+        let headless = Arc::new(AppState::new_headless());
+        assert!(should_apply_window_resize(headless.is_headless, false));
+        let ping = dispatch_rpc(
+            &state,
+            &tx,
+            &mut subs,
+            RpcRequest {
+                id: 12,
+                cmd: "ping".into(),
+                args: json!({ "t": 1 }),
+            },
+        )
+        .await;
+        assert!(ping.ok, "{:?}", ping.error);
+        assert_eq!(ping.data, Some(json!({ "pong": true })));
+        let src = include_str!("web_server.rs");
+        let start = src.find("\"window_resize\" =>").expect("resize arm");
+        let rest = &src[start..];
+        let end = rest.find("\"pane_cursor\"").expect("next arm");
+        let arm = &rest[..end];
+        assert!(arm.contains("should_apply_window_resize"));
+        assert!(arm.contains("bool_arg(&args, \"force\")"));
     }
 
     #[test]
@@ -1189,30 +1332,86 @@ mod tests {
     }
 
     #[test]
-    fn each_start_mints_a_different_pairing_token() {
+    fn a_stored_pairing_token_is_reused_and_explicit_values_win() {
         let first = generate_token();
         let second = generate_token();
         assert_ne!(first, second);
         assert!(is_fresh_token(&first), "{first}");
         assert!(is_fresh_token(&second), "{second}");
-        assert_eq!(resolve_token(Some("  pinned  ".into())), "pinned");
-        let blank = resolve_token(Some("   ".into()));
-        let pinned = std::env::var("SPARKMUX_WEB_TOKEN")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        if let Some(pinned) = pinned {
-            assert_eq!(blank, pinned);
-        } else {
-            assert!(is_fresh_token(&blank), "{blank}");
+        assert_eq!(
+            resolve_stored_token(Some("  pinned  ".into()), None, None),
+            "pinned"
+        );
+
+        let dir = isolated_token_dir("resolve");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("token dir");
+        let env_cleared = None;
+        let created = resolve_stored_token(None, env_cleared.clone(), Some(dir.clone()));
+        let again = resolve_stored_token(None, env_cleared, Some(dir.clone()));
+        assert_eq!(created, again);
+        assert!(is_fresh_token(&created), "{created}");
+        let path = dir.join(WEB_TOKEN_FILE);
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("web_token")
+        );
+        let stored = std::fs::read_to_string(&path).expect("web_token");
+        assert_eq!(stored.trim(), created);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
         }
+        assert_eq!(
+            resolve_stored_token(
+                Some("explicit-token".into()),
+                Some("env-token".into()),
+                Some(dir.clone())
+            ),
+            "explicit-token"
+        );
+        assert_eq!(
+            resolve_stored_token(None, Some("env-token".into()), Some(dir.clone())),
+            "env-token"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .expect("file unchanged")
+                .trim(),
+            created,
+            "an override must not replace the saved secret"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
         let src = include_str!("web_server.rs");
-        let start = src.find("pub fn resolve_token").expect("resolve_token");
+        let start = src
+            .find("pub const WEB_TOKEN_FILE")
+            .expect("web_token file");
         let rest = &src[start..];
         let end = rest.find("\nfn generate_token").expect("generate_token");
         let body = &rest[..end];
-        assert!(!body.contains("web_token"));
+        assert!(body.contains("web_token"));
+        assert!(body.contains("pub fn resolve_token"));
+        assert!(body.contains("resolve_stored_token"));
+        assert!(body.contains("SPARKMUX_WEB_TOKEN"));
         assert!(body.contains("generate_token()"));
+        assert!(body.contains("0o600"));
+    }
+
+    fn isolated_token_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "sparkmux-web-token-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0)
+        ))
     }
 
     fn is_fresh_token(token: &str) -> bool {
@@ -1248,6 +1447,7 @@ mod tests {
                     bind: "127.0.0.1".into(),
                     port: 0,
                     token: Some("menu-test-token".into()),
+                    token_dir: None,
                 },
             )
             .await;
@@ -1276,38 +1476,101 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restarting_the_remote_server_mints_a_new_token() {
+    async fn restarting_the_remote_server_reuses_the_stored_token() {
+        let dir = isolated_token_dir("restart");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("token dir");
         let slot = WebServeSlot::default();
         let state = AppState::new();
         let opts = || ServeOptions {
             bind: "127.0.0.1".into(),
             port: 0,
             token: None,
+            token_dir: Some(dir.clone()),
         };
         let first = slot.start(state.clone(), opts()).await.expect("start");
         let first_token = token_from_pairing_url(&first.links[0].url);
+        let origin = origin_from_pairing_url(&first.links[0].url);
+        let authed = http_get_path(
+            &origin,
+            &format!("/manifest.webmanifest?token={first_token}"),
+        )
+        .await
+        .expect("authenticated manifest");
+        let anon = http_get_path(&origin, "/manifest.webmanifest")
+            .await
+            .expect("anonymous manifest");
         slot.stop().await.expect("stop");
         let second = slot.start(state, opts()).await.expect("start again");
         let second_token = token_from_pairing_url(&second.links[0].url);
         slot.stop().await.expect("stop");
-        let pinned = std::env::var("SPARKMUX_WEB_TOKEN")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        if let Some(pinned) = pinned {
-            assert_eq!(first_token, pinned);
-            assert_eq!(second_token, pinned);
-        } else {
-            assert_ne!(first_token, second_token);
-            assert!(is_fresh_token(&first_token), "{first_token}");
-            assert!(is_fresh_token(&second_token), "{second_token}");
+        assert_eq!(first_token, second_token);
+        assert!(is_fresh_token(&first_token), "{first_token}");
+        let path = dir.join("web_token");
+        assert!(path.is_file(), "web_token missing in {}", dir.display());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read").trim(),
+            first_token
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "mode {mode:o}");
         }
+        let needle = format!("\"start_url\": \"/?token={first_token}\"");
+        assert!(
+            authed.contains(&needle),
+            "authenticated manifest missing {needle}: {authed}"
+        );
+        assert!(
+            !anon.contains(&first_token),
+            "anonymous manifest leaked the token: {anon}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manifest_start_url_keeps_the_token_out_of_anonymous_bytes() {
+        let raw = "{\n  \"start_url\": \"/\",\n  \"name\": \"Sparkmux\"\n}\n";
+        let token = "abc123token";
+        let authed = manifest_with_token(raw, Some(token));
+        assert!(authed.contains("\"start_url\": \"/?token=abc123token\""));
+        let anon = manifest_with_token(raw, None);
+        assert!(!anon.contains(token));
+        assert!(anon.contains("\"start_url\": \"/\""));
     }
 
     fn token_from_pairing_url(url: &str) -> String {
         url.split_once("token=")
             .map(|(_, token)| token.to_string())
             .unwrap_or_default()
+    }
+
+    fn origin_from_pairing_url(url: &str) -> String {
+        let rest = url.trim_start_matches("http://");
+        rest.split('/').next().unwrap_or(rest).to_string()
+    }
+
+    async fn http_get_path(origin: &str, path: &str) -> Result<String, String> {
+        let mut stream = tokio::net::TcpStream::connect(origin)
+            .await
+            .map_err(|err| err.to_string())?;
+        let req = format!("GET {path} HTTP/1.1\r\nHost: {origin}\r\nConnection: close\r\n\r\n");
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        stream
+            .write_all(req.as_bytes())
+            .await
+            .map_err(|err| err.to_string())?;
+        let mut buf = Vec::new();
+        stream
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|err| err.to_string())?;
+        String::from_utf8(buf).map_err(|err| err.to_string())
     }
 
     async fn http_get(url: &str) -> Result<String, String> {

@@ -5,7 +5,10 @@ export type FormFactorPosture =
   | "ipad-pro"
   | "duo-book"
   | "duo-clamshell"
-  | "phone-compact";
+  | "phone-compact"
+  | "phone-landscape";
+
+export type PhoneOrientation = "portrait" | "landscape";
 
 export interface SegmentRect {
   left: number;
@@ -26,6 +29,9 @@ export interface HingeRect {
 export interface ViewportGeometry {
   posture: FormFactorPosture;
   isTouch: boolean;
+  /** True for portrait and landscape phones, including an overridden phone posture. */
+  isPhone: boolean;
+  orientation: PhoneOrientation;
   hingeRect: HingeRect | null;
   leftSegmentWidth: number | null;
   topSegmentHeight: number | null;
@@ -53,6 +59,7 @@ const POSTURES: readonly FormFactorPosture[] = [
   "duo-book",
   "duo-clamshell",
   "phone-compact",
+  "phone-landscape",
 ];
 
 export interface PostureStorage {
@@ -132,6 +139,10 @@ export function resolvePosture(input: PostureInput): ViewportGeometry {
       topSegmentHeight = Math.floor(h * 0.45);
     } else if (w < 680) {
       detected = "phone-compact";
+    } else if (h < 500 && w > h && Math.max(w, h) <= 1024) {
+      // iPhone 17 Pro Max landscape is 956×440. A short wide touch canvas is
+      // still a phone, not an iPad.
+      detected = "phone-landscape";
     } else if (w >= 680 && w <= 960 && aspect >= 0.82 && aspect <= 1.28) {
       detected = "duo-book";
       leftSegmentWidth = Math.floor(w / 2);
@@ -151,6 +162,8 @@ export function resolvePosture(input: PostureInput): ViewportGeometry {
   return {
     posture,
     isTouch,
+    isPhone: posture === "phone-compact" || posture === "phone-landscape",
+    orientation: orientationFor(posture, w, h),
     hingeRect,
     leftSegmentWidth,
     topSegmentHeight,
@@ -158,6 +171,12 @@ export function resolvePosture(input: PostureInput): ViewportGeometry {
     visualOffsetTop,
     keyboardInsetBottom,
   };
+}
+
+function orientationFor(posture: FormFactorPosture, width: number, height: number): PhoneOrientation {
+  if (posture === "phone-landscape") return "landscape";
+  if (posture === "phone-compact") return "portrait";
+  return width >= height ? "landscape" : "portrait";
 }
 
 /** Visible app height while the software keyboard is open. */

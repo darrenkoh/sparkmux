@@ -89,6 +89,16 @@ export default function XtermView({
   const findPrevFromRef = useRef(0);
   const [findOpen, setFindOpen] = useState(false);
   findOpenRef.current = findOpen;
+
+  useEffect(() => {
+    const onFind = (event: Event) => {
+      const detail = (event as CustomEvent<{ paneId?: string }>).detail;
+      if (detail?.paneId && detail.paneId !== paneId) return;
+      setFindOpen(true);
+    };
+    window.addEventListener("sparkmux-find", onFind);
+    return () => window.removeEventListener("sparkmux-find", onFind);
+  }, [paneId]);
   onFocusRef.current = onFocus;
   onCellSizeRef.current = onCellSize;
   fontSizeRef.current = fontSize;

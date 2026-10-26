@@ -76,7 +76,12 @@ pub fn serve_options_from_env(args: &[String]) -> Option<ServeOptions> {
         }
         index += 1;
     }
-    Some(ServeOptions { bind, port, token })
+    Some(ServeOptions {
+        bind,
+        port,
+        token,
+        token_dir: None,
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -165,6 +170,7 @@ pub fn run() {
                     bind: "0.0.0.0".into(),
                     port: 7420,
                     token: None,
+                    token_dir: None,
                 });
                 let app = app.handle().clone();
                 tauri::async_runtime::spawn(async move {

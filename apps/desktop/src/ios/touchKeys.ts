@@ -69,3 +69,79 @@ function clampFont(n: number): number {
 export function touchDragDelta(previousY: number, currentY: number): number {
   return previousY - currentY;
 }
+
+/** Horizontal finger travel that emits one left or right arrow. */
+export const TRACKPAD_X_PX = 14;
+/** Vertical finger travel that emits one up or down arrow. */
+export const TRACKPAD_Y_PX = 22;
+
+export type ModifierPhase = "idle" | "latched" | "locked";
+
+export interface TrackpadStepResult {
+  /** Positive is right, negative is left. */
+  horizontal: number;
+  /** Positive is down, negative is up. */
+  vertical: number;
+  residualX: number;
+  residualY: number;
+}
+
+/**
+ * Turn finger travel into arrow steps. An exact multiple of the step size
+ * leaves a zero residual. Leftover travel stays in the residual for the next move.
+ */
+export function touchTrackpadSteps(
+  deltaX: number,
+  deltaY: number,
+  residualX = 0,
+  residualY = 0,
+): TrackpadStepResult {
+  const x = residualX + deltaX;
+  const y = residualY + deltaY;
+  const horizontal = Math.trunc(x / TRACKPAD_X_PX);
+  const vertical = Math.trunc(y / TRACKPAD_Y_PX);
+  return {
+    horizontal,
+    vertical,
+    residualX: x - horizontal * TRACKPAD_X_PX,
+    residualY: y - vertical * TRACKPAD_Y_PX,
+  };
+}
+
+/** Idle → latched on a tap, latched → locked on a double-tap, locked → idle. */
+export function nextModifierPhase(current: ModifierPhase, doubleTap: boolean): ModifierPhase {
+  if (current === "locked") return "idle";
+  if (current === "latched" && doubleTap) return "locked";
+  if (current === "latched") return "idle";
+  return "latched";
+}
+
+/** A latched modifier clears after one key. A lock stays until it is tapped off. */
+export function consumeModifierPhase(phase: ModifierPhase): ModifierPhase {
+  return phase === "locked" ? "locked" : "idle";
+}
+
+export function trackpadMotionBytes(
+  horizontal: number,
+  vertical: number,
+  applicationCursor: boolean,
+  opt: boolean,
+): number[] {
+  const bytes: number[] = [];
+  const across = Math.abs(horizontal);
+  if (opt && horizontal !== 0) {
+    const word = horizontal > 0 ? "\x1bf" : "\x1bb";
+    const encoded = Array.from(new TextEncoder().encode(word));
+    for (let i = 0; i < across; i++) bytes.push(...encoded);
+  } else if (horizontal !== 0) {
+    const dir: ArrowDir = horizontal > 0 ? "C" : "D";
+    const one = arrowBytes(dir, applicationCursor);
+    for (let i = 0; i < across; i++) bytes.push(...one);
+  }
+  if (vertical !== 0) {
+    const dir: ArrowDir = vertical > 0 ? "B" : "A";
+    const one = arrowBytes(dir, applicationCursor);
+    for (let i = 0; i < Math.abs(vertical); i++) bytes.push(...one);
+  }
+  return bytes;
+}

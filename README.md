@@ -314,7 +314,7 @@ On startup the terminal prints a pairing URL for this computer, then the same pa
 sparkmux-desktop --serve --bind 100.64.1.2 --port 7420
 ```
 
-The first successful visit stores a sign-in cookie named `sparkmux_session` and removes `?token=` from the address bar. In Safari, use **Share → Add to Home Screen** for a full-screen icon. The cookie lasts 30 days while this server process keeps the same token. Stopping the server and starting it again issues a new token, so the old link and cookie no longer sign in.
+The first successful visit stores a sign-in cookie named `sparkmux_session` and removes `?token=` from the address bar. In Safari, use **Share → Add to Home Screen** for a full-screen icon. The cookie lasts 30 days. With no `--token` and no `SPARKMUX_WEB_TOKEN`, the pairing secret is saved as `web_token` in the Sparkmux config directory and reused on the next start, so a Home Screen icon keeps working.
 
 A page opened without the token shows a pairing form. Type the token from the printed URL.
 
@@ -322,9 +322,9 @@ A page opened without the token shows a pairing form. Type the token from the pr
 |---|---|---|
 | `--port`, `-p` | `7420` | Listen port |
 | `--bind`, `-b` | `0.0.0.0` | Listen address. The default accepts a phone on the LAN or an address already on the host, such as Tailscale. `--bind 127.0.0.1` keeps the page on this machine. |
-| `--token` | a new token each start | Bearer token. `SPARKMUX_WEB_TOKEN` pins one for this process. |
+| `--token` | saved `web_token` | Bearer token. `SPARKMUX_WEB_TOKEN` pins one for this process. |
 
-With no `--token` and no `SPARKMUX_WEB_TOKEN`, each start generates a new 64-character hex token (32 random bytes). A token from an earlier start stops working. `--token` and `SPARKMUX_WEB_TOKEN` pin the token for this process only. Treat the printed URL as a secret: anyone who can open it can type into your panes.
+With no `--token` and no `SPARKMUX_WEB_TOKEN`, the server reuses the 64-character hex token (32 random bytes) in the config directory file `web_token` (mode `0600` on Unix). The file is created the first time it is missing. `--token` and `SPARKMUX_WEB_TOKEN` override that file for this process only and do not replace it. Treat the printed URL as a secret: anyone who can open it can type into your panes.
 
 Stopping the serve process closes the page. The tmux server stays up. Start serve again and the same sessions are there.
 

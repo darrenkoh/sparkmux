@@ -3245,7 +3245,17 @@ mod tests {
         assert!(lib.contains("change_graph::change_graph"));
         assert!(bar.contains("status-graph"));
         assert!(bar.contains("aria-label=\"Changed files graph\""));
-        assert!(panel.contains("aria-label=\"Open changed files graph\""));
+        let stats_at = bar.find("status-stats").expect("stats button");
+        let graph_at = bar.find("status-graph").expect("graph button");
+        assert!(
+            stats_at < graph_at,
+            "Gits sits beside Stats on the status bar"
+        );
+        assert!(panel.contains("aria-label=\"Logs\""));
+        assert!(
+            !panel.contains("aria-label=\"Open changed files graph\""),
+            "the logs panel keeps a close button; Gits stays on the status bar"
+        );
         assert!(app.contains("ChangeGraph"));
         assert!(app.contains("graphOpen"));
     }

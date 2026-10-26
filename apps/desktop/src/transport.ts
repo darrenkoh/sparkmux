@@ -15,6 +15,83 @@ export function isIOSDevice(): boolean {
   );
 }
 
+export const WS_TOKEN_KEY = "sparkmux.wsToken";
+
+export type ConnectionState = "connected" | "connecting" | "reconnecting" | "unauthorized";
+
+export interface ConnectionHealth {
+  state: ConnectionState;
+  rttMs: number | null;
+}
+
+export interface TokenBag {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+/** Prefer `localStorage`, then `sessionStorage`. */
+export function loadWsToken(local: TokenBag | null, session: TokenBag | null): string {
+  try {
+    const saved = local?.getItem(WS_TOKEN_KEY);
+    if (saved) return saved;
+  } catch {
+    /* private mode */
+  }
+  try {
+    return session?.getItem(WS_TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function persistWsToken(token: string, local: TokenBag | null, session: TokenBag | null): void {
+  try {
+    local?.setItem(WS_TOKEN_KEY, token);
+  } catch {
+    /* private mode */
+  }
+  try {
+    session?.setItem(WS_TOKEN_KEY, token);
+  } catch {
+    /* private mode */
+  }
+}
+
+/** A ping round-trip. The socket publishes this sample while it is connected. */
+export function connectionHealthFromPing(sentAt: number, receivedAt: number): ConnectionHealth {
+  const rttMs = Math.max(0, Math.round(receivedAt - sentAt));
+  return { state: "connected", rttMs };
+}
+
+/**
+ * Visible `visibilitychange`, `pageshow`, and `online` re-seed immediately.
+ * A hidden visibility change does not.
+ */
+export function shouldImmediateReseed(event: { type: string; visibilityState?: string }): boolean {
+  if (event.type === "visibilitychange") return event.visibilityState === "visible";
+  return event.type === "pageshow" || event.type === "online";
+}
+
+let currentHealth: ConnectionHealth = { state: "connecting", rttMs: null };
+const healthListeners = new Set<(health: ConnectionHealth) => void>();
+
+export function getConnectionHealth(): ConnectionHealth {
+  return currentHealth;
+}
+
+export function publishConnectionHealth(next: ConnectionHealth): void {
+  currentHealth = next;
+  for (const fn of healthListeners) fn(next);
+}
+
+export function subscribeConnectionHealth(listener: (health: ConnectionHealth) => void): () => void {
+  healthListeners.add(listener);
+  listener(currentHealth);
+  return () => {
+    healthListeners.delete(listener);
+  };
+}
+
 type PendingRpc = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
@@ -30,6 +107,7 @@ class WebSocketTransport {
   private paneSubscribers = new Map<string, PaneCallback>();
   private connectPromise: Promise<WebSocket> | null = null;
   private reconnectTimer: number | undefined;
+  private pingTimer: number | undefined;
   private lastSession: { session: string; cols: number; rows: number } | null = null;
   private broadcastChannel: BroadcastChannel | null = null;
 
@@ -38,7 +116,7 @@ class WebSocketTransport {
       const url = new URL(window.location.href);
       if (url.searchParams.has("token")) {
         const token = url.searchParams.get("token") ?? "";
-        sessionStorage.setItem("sparkmux.wsToken", token);
+        persistWsToken(token, window.localStorage, window.sessionStorage);
         url.searchParams.delete("token");
         window.history.replaceState({}, "", url.toString());
       }
@@ -48,20 +126,45 @@ class WebSocketTransport {
           if (ev.data?.event) this.dispatchEvent(ev.data.event, ev.data.payload);
         };
       }
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") void this.ensureConnected(true);
-      });
-      window.addEventListener("pageshow", () => {
+      const onWake = (event: Event) => {
+        if (!shouldImmediateReseed({ type: event.type, visibilityState: document.visibilityState })) {
+          return;
+        }
+        if (this.reconnectTimer) {
+          window.clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = undefined;
+        }
         void this.ensureConnected(true);
-      });
+      };
+      document.addEventListener("visibilitychange", onWake);
+      window.addEventListener("pageshow", onWake);
+      window.addEventListener("online", onWake);
     }
   }
 
   private getWsUrl(): string {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = sessionStorage.getItem("sparkmux.wsToken");
+    const token = loadWsToken(window.localStorage, window.sessionStorage);
     const qs = token ? `?token=${encodeURIComponent(token)}` : "";
     return `${proto}//${window.location.host}/ws${qs}`;
+  }
+
+  private noteHealth(next: ConnectionHealth) {
+    publishConnectionHealth(next);
+  }
+
+  private startPing() {
+    if (this.pingTimer !== undefined || typeof window === "undefined") return;
+    this.pingTimer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      const sentAt = performance.now();
+      void this.invoke<{ pong?: boolean }>("ping", { t: sentAt })
+        .then(() => {
+          this.noteHealth(connectionHealthFromPing(sentAt, performance.now()));
+        })
+        .catch(() => {});
+    }, 10_000);
   }
 
   public ensureConnected(forceReseed = false): Promise<WebSocket> {
@@ -71,12 +174,19 @@ class WebSocketTransport {
     }
     if (this.connectPromise) return this.connectPromise;
 
+    const prior = getConnectionHealth().state;
+    this.noteHealth({
+      state: prior === "connected" || prior === "reconnecting" ? "reconnecting" : "connecting",
+      rttMs: getConnectionHealth().rttMs,
+    });
     this.connectPromise = new Promise((resolve, reject) => {
       const ws = new WebSocket(this.getWsUrl());
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         this.ws = ws;
         this.connectPromise = null;
+        this.noteHealth({ state: "connected", rttMs: getConnectionHealth().rttMs });
+        this.startPing();
         void this.reseedAfterResume();
         resolve(ws);
       };
@@ -113,6 +223,7 @@ class WebSocketTransport {
       ws.onclose = () => {
         this.ws = null;
         this.connectPromise = null;
+        this.noteHealth({ state: "reconnecting", rttMs: getConnectionHealth().rttMs });
         for (const [, req] of this.pending) req.reject(new Error("WebSocket disconnected"));
         this.pending.clear();
         if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
