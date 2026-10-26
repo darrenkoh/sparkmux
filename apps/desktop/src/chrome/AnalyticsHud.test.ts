@@ -465,4 +465,55 @@ test("a quota percent is not a dollar cost", () => {
   assert.notEqual(cost.usd, 0.4);
 });
 
+test("Antigravity planner rows stay empty until the status-line total_usd", () => {
+  const categories = {
+    input: { tokens: 4842 },
+    cacheRead: { tokens: 38177 },
+    output: { tokens: 182 },
+  };
+  const tokensOnly = sessionCostFromStats(
+    {
+      cost_ledger: JSON.stringify({
+        provider: "antigravity",
+        inputIncludesCache: false,
+        categories,
+      }),
+      total_input_tokens: 4842,
+      total_output_tokens: 182,
+      total_cache_read_tokens: 38177,
+      total_reasoning_tokens: 40,
+      active_model: "gemini-4-argon",
+    },
+    "antigravity",
+  );
+  const sonnet = estimateCost("claude-sonnet-4-5", 4842, 182 + 40, 38177, 0);
+  const flash = estimateCost("gemini-4-argon", 4842, 182 + 40, 38177, 0);
+  assert.equal(tokensOnly.usd, null);
+  assert.equal(tokensOnly.stamped, false);
+  assert.equal(formatSessionUsd(tokensOnly.usd), "—");
+  assert.notEqual(tokensOnly.usd, sonnet);
+  assert.notEqual(tokensOnly.usd, flash);
+
+  const stamped = sessionCostFromStats(
+    {
+      cost_ledger: JSON.stringify({
+        provider: "antigravity",
+        inputIncludesCache: false,
+        estimatedCostUsd: 0.5,
+        categories,
+      }),
+      total_input_tokens: 4842,
+      total_output_tokens: 182,
+      total_cache_read_tokens: 38177,
+      total_reasoning_tokens: 40,
+      active_model: "gemini-4-argon",
+    },
+    "antigravity",
+  );
+  assert.equal(stamped.usd, 0.5);
+  assert.equal(stamped.stamped, true);
+  assert.notEqual(stamped.usd, 0.75);
+  assert.equal(formatSessionUsd(stamped.usd), "$0.5000");
+});
+
 

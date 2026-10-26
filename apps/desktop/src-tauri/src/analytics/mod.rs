@@ -49,6 +49,10 @@ fn live_lock() -> MutexGuard<'static, Option<LiveAnalytics>> {
 #[cfg(test)]
 static ROOTS_OVERRIDE: Mutex<Option<crate::artifacts::TranscriptRoots>> = Mutex::new(None);
 
+/// `tab_analytics` tests share the roots override. Hold this across the call.
+#[cfg(test)]
+static ROOTS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 fn analytics_roots() -> crate::artifacts::TranscriptRoots {
     #[cfg(test)]
     {
@@ -429,6 +433,9 @@ mod tests {
                 storage::set_analytics_root_override(None);
             }
         }
+        let _lock = ROOTS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let _reset = Reset;
 
         let root = std::env::temp_dir().join(format!(
@@ -518,6 +525,166 @@ mod tests {
             Some(22_000_000_000),
             "usage.json ticks must replace the cached stamp: {}",
             second.stats.cost_ledger
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A real `brain/<id>/.system_generated/logs/transcript.jsonl` planner row
+    /// has token counters, thinking, and tool calls, and no `cost_summary`.
+    /// The session dollar is the status-line `cost.total_usd`, which already
+    /// includes subagent spend. `tab_analytics` must surface that stamp.
+    #[test]
+    fn agy_status_line_cost_reaches_tab_analytics() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                *ROOTS_OVERRIDE
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = None;
+                storage::set_analytics_root_override(None);
+            }
+        }
+        let _lock = ROOTS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let _reset = Reset;
+
+        let root = std::env::temp_dir().join(format!(
+            "sparkmux-tab-agy-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("work");
+        let agy = root.join("agy");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(root.join("claude")).unwrap();
+        std::fs::create_dir_all(root.join("grok-sessions")).unwrap();
+        let id = "7bf2186c-d869-47d9-b2e9-55c01f8018ff";
+        let logs = agy
+            .join("brain")
+            .join(id)
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::create_dir_all(agy.join("cache")).unwrap();
+        let cwd = project.to_string_lossy().to_string();
+        let mut index = serde_json::Map::new();
+        index.insert(cwd.clone(), serde_json::Value::String(id.to_string()));
+        std::fs::write(
+            agy.join("cache").join("last_conversations.json"),
+            serde_json::Value::Object(index).to_string(),
+        )
+        .unwrap();
+        let transcript = logs.join("transcript.jsonl");
+        // Key set taken from a live PLANNER_RESPONSE. No cost_summary.
+        std::fs::write(
+            &transcript,
+            concat!(
+                "{\"step_index\":1,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-26T04:11:00Z\",\"thinking\":\"look at the layout\",\"content\":\"checking\",\"input_tokens\":2623,\"cache_read_tokens\":18040,\"output_tokens\":95,\"tool_calls\":[{\"name\":\"view_file\",\"args\":{\"path\":\"src/main.rs\"}}]}\n",
+                "{\"step_index\":2,\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"created_at\":\"2026-10-26T04:11:04Z\",\"thinking\":\"narrow the match\",\"content\":\"done\",\"input_tokens\":2219,\"cache_read_tokens\":20137,\"output_tokens\":87,\"tool_calls\":[{\"name\":\"grep_search\",\"args\":{\"query\":\"cost\"}}]}\n",
+            ),
+        )
+        .unwrap();
+
+        *ROOTS_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) =
+            Some(crate::artifacts::TranscriptRoots {
+                grok_sessions: root.join("grok-sessions"),
+                claude_projects: root.join("claude"),
+                grok_active_sessions: root.join("active_sessions.json"),
+                agy_root: agy,
+            });
+        storage::set_analytics_root_override(Some(root.join("analytics")));
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let first = rt
+            .block_on(tab_analytics(
+                "agy-cost".into(),
+                "tab".into(),
+                "agy".into(),
+                cwd.clone(),
+                String::new(),
+                0,
+            ))
+            .unwrap();
+        assert_eq!(first.cli.as_deref(), Some("antigravity"));
+        assert!(
+            first
+                .transcript_path
+                .as_deref()
+                .is_some_and(|path| { path.contains(id) && path.ends_with("transcript.jsonl") }),
+            "{:?}",
+            first.transcript_path
+        );
+        let open: serde_json::Value = serde_json::from_str(&first.stats.cost_ledger).unwrap();
+        assert!(
+            open.get("estimatedCostUsd").is_none(),
+            "planner tokens are not a dollar stamp: {}",
+            first.stats.cost_ledger
+        );
+        assert!(open.get("pricing").is_none(), "{}", first.stats.cost_ledger);
+        assert_eq!(open["categories"]["input"]["tokens"].as_u64(), Some(4842));
+        assert_eq!(
+            open["categories"]["cacheRead"]["tokens"].as_u64(),
+            Some(38177)
+        );
+        assert_eq!(open["categories"]["output"]["tokens"].as_u64(), Some(182));
+        assert!(open["categories"].get("thinking").is_none());
+        assert!(open["categories"].get("tools").is_none());
+
+        // The status-line payload the CLI reports for this transcript.
+        // total_usd already includes subagent_usd. Quota is not the dollar.
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            br#"{"cost":{"total_usd":0.5,"subagent_usd":0.25,"estimated":false},"quota":{"gemini-weekly":{"remaining_fraction":0.5}}}"#,
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut file, b"\n").unwrap();
+        drop(file);
+
+        let second = rt
+            .block_on(tab_analytics(
+                "agy-cost".into(),
+                "tab".into(),
+                "agy".into(),
+                cwd,
+                String::new(),
+                0,
+            ))
+            .unwrap();
+        assert!(
+            !second.stats.cost_ledger.contains("quota"),
+            "{}",
+            second.stats.cost_ledger
+        );
+        assert!(
+            !second.stats.cost_ledger.contains("subagent"),
+            "{}",
+            second.stats.cost_ledger
+        );
+        let stamped: serde_json::Value = serde_json::from_str(&second.stats.cost_ledger).unwrap();
+        let usd = stamped["estimatedCostUsd"].as_f64().unwrap();
+        assert!(
+            (usd - 0.5).abs() < 1e-9,
+            "session cost {usd} != status-line total_usd"
+        );
+        assert_eq!(
+            stamped["categories"]["input"]["tokens"].as_u64(),
+            Some(4842)
+        );
+        assert_eq!(
+            stamped["categories"]["cacheRead"]["tokens"].as_u64(),
+            Some(38177)
+        );
+        assert_eq!(
+            stamped["categories"]["output"]["tokens"].as_u64(),
+            Some(182)
         );
         let _ = std::fs::remove_dir_all(&root);
     }
