@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.63
+
+### Features & Improvements
+
+- **iPhone portrait and landscape remote client**:
+  - Portrait uses a top bar, quick reply, touch key bar, and a bottom sheet for Output, the 3D Map, Gits, Stats, and Agents.
+  - Landscape keeps a full-width terminal, with slide-over drawers for the sidebar and companions.
+  - Fit resizes the server to the phone. Mirror scales a wide pane down and leaves the desktop size alone.
+  - The pairing token is saved and reused across restarts. An explicit token or `SPARKMUX_WEB_TOKEN` overrides one process and does not replace the saved file. An authenticated Home Screen manifest includes the token in its start URL.
+  - A desktop server changes the tmux window size only when it is headless or the client sends force.
+- **Logs panel**: The docked transcript panel is Logs, with a close button. Stats and Gits stay on the status bar. Gits keeps a teal border, and the status bar no longer clips that row.
+- **Terminal after a remote resize**: A phone client connecting to a desktop server no longer collapses the terminal viewport. The pane re-seeds after the tmux grid size changes.
+
 ## 0.1.62
 
 ### Improvements & Bug Fixes
