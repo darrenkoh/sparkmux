@@ -9,8 +9,9 @@ export interface SizingStorage {
   setItem(key: string, value: string): void;
 }
 
-export function defaultSizingMode(isHeadless: boolean): MobileSizingMode {
-  return isHeadless ? "fit-phone" : "mirror";
+/** Phones and iPads open fitted to the viewport. A stored "mirror" choice still wins in readSizingMode. */
+export function defaultSizingMode(_isHeadless: boolean): MobileSizingMode {
+  return "fit-phone";
 }
 
 export function readSizingMode(storage: SizingStorage, isHeadless: boolean): MobileSizingMode {

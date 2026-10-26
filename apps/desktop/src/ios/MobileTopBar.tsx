@@ -1,208 +1,229 @@
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 
 import {
-  getConnectionHealth,
-  subscribeConnectionHealth,
-  wsTransport,
-  isTauriRuntime,
-  type ConnectionHealth,
-} from "../transport";
+  headerClickOpens,
+  idleHeaderPointer,
+  reduceHeaderPointer,
+  type HeaderPointerState,
+} from "./posture";
 import type { MobileSizingMode } from "./terminalSizing";
-
-export interface MobileWindowChoice {
-  id: string;
-  name: string;
-}
-
-export interface MobileSessionChoice {
-  name: string;
-  windows: MobileWindowChoice[];
-}
 
 export interface MobilePaneChoice {
   id: string;
   command: string;
 }
 
-export type MobileCompanion = "output" | "map" | "gits" | "stats";
+export type MobileCompanion = "output" | "gits" | "stats" | "map";
 
 export interface MobileTopBarProps {
-  posture: "phone-compact" | "phone-landscape";
-  zen: boolean;
-  onToggleZen: () => void;
+  landscape: boolean;
   sessionName: string;
   windowName: string;
-  sessions: MobileSessionChoice[];
-  onSelectWindow: (sessionName: string, windowId: string) => void;
+  agentCount: number;
+  waitingCount: number;
+  currentIndex: number;
+  targetCount: number;
+  onCycle: (nextIndex: number) => void;
+  onOpenHub: () => void;
   panes: MobilePaneChoice[];
   activePaneId: string | null;
   tiled: boolean;
   onSelectPane: (paneId: string) => void;
   onToggleTile: () => void;
+  onSplit: () => void;
+  onOpenView: (which: MobileCompanion) => void;
+  onOpenRecipes: () => void;
   sizingMode: MobileSizingMode;
   cols: number;
   rows: number;
   onToggleSizing: () => void;
-  attention: boolean;
-  onOpenSessions: () => void;
-  onOpenCompanion: (which: MobileCompanion) => void;
 }
 
-function useConnectionHealth(): ConnectionHealth {
-  const [health, setHealth] = useState<ConnectionHealth>(() => getConnectionHealth());
-  useEffect(() => subscribeConnectionHealth(setHealth), []);
-  return health;
-}
+const VIEWS: { id: MobileCompanion; label: string }[] = [
+  { id: "output", label: "Logs" },
+  { id: "gits", label: "Gits" },
+  { id: "stats", label: "Stats" },
+  { id: "map", label: "3D Map" },
+];
 
 export default function MobileTopBar({
-  posture,
-  zen,
-  onToggleZen,
+  landscape,
   sessionName,
   windowName,
-  sessions,
-  onSelectWindow,
+  agentCount,
+  waitingCount,
+  currentIndex,
+  targetCount,
+  onCycle,
+  onOpenHub,
   panes,
   activePaneId,
   tiled,
   onSelectPane,
   onToggleTile,
+  onSplit,
+  onOpenView,
+  onOpenRecipes,
   sizingMode,
   cols,
   rows,
   onToggleSizing,
-  attention,
-  onOpenSessions,
-  onOpenCompanion,
 }: MobileTopBarProps) {
-  const health = useConnectionHealth();
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-  const landscape = posture === "phone-landscape";
-  const reconnecting = health.state === "reconnecting" || health.state === "connecting";
-  const rtt =
-    health.rttMs == null ? "● …" : `● ${health.rttMs}ms`;
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const pointer = useRef<HeaderPointerState>(idleHeaderPointer());
+  const urgent = waitingCount > 0;
+  const sessionLabel = `${sessionName || "Session"} › ${windowName || "Window"} ▾`;
 
-  if (zen && landscape) {
-    return (
-      <button
-        type="button"
-        className="mobile-zen-pill"
-        aria-label="Leave fullscreen"
-        onClick={onToggleZen}
-      >
-        ⤢
-      </button>
+  function applyPointer(event: React.PointerEvent<HTMLElement>, type: "down" | "move" | "up" | "cancel") {
+    const result = reduceHeaderPointer(
+      pointer.current,
+      { type, x: event.clientX, y: event.clientY },
+      currentIndex,
+      targetCount,
     );
+    pointer.current = result.state;
+    if (result.captureNow) event.currentTarget.setPointerCapture(event.pointerId);
+    if (result.nextIndex != null) onCycle(result.nextIndex);
+  }
+
+  function onPointerDown(event: React.PointerEvent<HTMLElement>) {
+    applyPointer(event, "down");
+  }
+
+  function onPointerMove(event: React.PointerEvent<HTMLElement>) {
+    applyPointer(event, "move");
+  }
+
+  function onPointerUp(event: React.PointerEvent<HTMLElement>) {
+    applyPointer(event, "up");
+  }
+
+  function onPointerCancel(event: React.PointerEvent<HTMLElement>) {
+    applyPointer(event, "cancel");
+  }
+
+  function onPointerLeave(event: React.PointerEvent<HTMLElement>) {
+    if (!pointer.current.tracking) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    applyPointer(event, "up");
+  }
+
+  function openIfTap(open: () => void) {
+    const decision = headerClickOpens(pointer.current);
+    pointer.current = decision.state;
+    if (!decision.opens) return;
+    open();
+  }
+
+  function openHub() {
+    openIfTap(() => {
+      setViewsOpen(false);
+      onOpenHub();
+    });
   }
 
   return (
-    <header className={`mobile-top-bar ${landscape ? "landscape" : "portrait"}`}>
-      <button
-        type="button"
-        className={`mobile-icon-btn ${attention ? "attn-pulse" : ""}`}
-        aria-label="Sessions and agents"
-        onClick={onOpenSessions}
+    <div className="mobile-chrome">
+      <header
+        className={`mobile-top-bar ${landscape ? "landscape" : "portrait"}`}
+        style={{ touchAction: "none" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onPointerLeave={onPointerLeave}
       >
-        ≡
-        {attention && <span className="attn-dot" aria-hidden="true" />}
-      </button>
+        <button
+          type="button"
+          className={`agents-pill${urgent ? " attn-pulse" : ""}`}
+          aria-label={urgent ? `${waitingCount} waiting` : `${agentCount} agents`}
+          onClick={openHub}
+        >
+          {urgent ? `⚡ ${waitingCount} Waiting` : `⚡ Agents (${agentCount})`}
+        </button>
 
-      <div className="mobile-switcher">
         <button
           type="button"
           className="mobile-crumb"
-          aria-expanded={switcherOpen}
-          aria-label="Session and window switcher"
-          onClick={() => setSwitcherOpen((open) => !open)}
+          aria-label="Session and window"
+          onClick={openHub}
         >
-          {sessionName || "Session"} › {windowName || "Window"} ▾
+          {sessionLabel}
         </button>
-        {switcherOpen && (
-          <div className="mobile-switcher-pop" role="menu">
-            {sessions.map((session) =>
-              session.windows.map((win) => (
-                <button
-                  key={`${session.name}:${win.id}`}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setSwitcherOpen(false);
-                    onSelectWindow(session.name, win.id);
-                  }}
-                >
-                  {session.name} › {win.name}
-                </button>
-              )),
-            )}
+
+        <button
+          type="button"
+          className="views-pill"
+          aria-expanded={viewsOpen}
+          aria-label="Views"
+          onClick={() => {
+            openIfTap(() => setViewsOpen((open) => !open));
+          }}
+        >
+          ⋯ Views
+        </button>
+
+        {viewsOpen && (
+          <div className="mobile-views-pop" role="menu" aria-label="Views">
+            {VIEWS.map((view) => (
+              <button
+                key={view.id}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setViewsOpen(false);
+                  onOpenView(view.id);
+                }}
+              >
+                {view.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setViewsOpen(false);
+                onOpenRecipes();
+              }}
+            >
+              Recipes (?)
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setViewsOpen(false);
+                onToggleSizing();
+              }}
+            >
+              {sizingMode === "fit-phone" ? "Fit Device" : "Mirror Desktop"} ({cols}×{rows})
+            </button>
           </div>
         )}
-      </div>
+      </header>
 
-      <div className="mobile-pane-pills" role="tablist" aria-label="Panes">
-        {panes.map((pane) => (
-          <button
-            key={pane.id}
-            type="button"
-            role="tab"
-            className={activePaneId === pane.id ? "active" : ""}
-            aria-selected={activePaneId === pane.id}
-            onClick={() => onSelectPane(pane.id)}
-          >
-            {pane.id} {pane.command}
-          </button>
-        ))}
-        {panes.length > 1 && (
+      {panes.length > 1 && (
+        <div className="mobile-pane-strip" role="tablist" aria-label="Panes">
+          {panes.map((pane) => (
+            <button
+              key={pane.id}
+              type="button"
+              role="tab"
+              className={activePaneId === pane.id ? "active" : ""}
+              aria-selected={activePaneId === pane.id}
+              onClick={() => onSelectPane(pane.id)}
+            >
+              {pane.id} {pane.command}
+            </button>
+          ))}
           <button type="button" onClick={onToggleTile}>
             {tiled ? "⤢ Zoom" : "⊞ Tile"}
           </button>
-        )}
-      </div>
-
-      <button
-        type="button"
-        className="mobile-size-btn"
-        aria-label={sizingMode === "fit-phone" ? "Fit phone" : "Mirror desktop"}
-        onClick={onToggleSizing}
-      >
-        {sizingMode === "fit-phone" ? "⊡ Fit" : "⇄ Mirror"} {cols}×{rows}
-      </button>
-
-      <div className="mobile-companions" role="group" aria-label="Companion views">
-        <button type="button" onClick={() => onOpenCompanion("output")}>
-          Output
-        </button>
-        <button type="button" onClick={() => onOpenCompanion("map")}>
-          3D Map
-        </button>
-        <button type="button" onClick={() => onOpenCompanion("gits")}>
-          Gits
-        </button>
-        <button type="button" onClick={() => onOpenCompanion("stats")}>
-          Stats
-        </button>
-      </div>
-
-      {landscape && (
-        <button
-          type="button"
-          className="mobile-icon-btn"
-          aria-label="Zen fullscreen"
-          onClick={onToggleZen}
-        >
-          ⤢
-        </button>
+          <button type="button" onClick={onSplit}>
+            + Split
+          </button>
+        </div>
       )}
-
-      <button
-        type="button"
-        className={`mobile-rtt ${reconnecting ? "reconnecting" : "live"}`}
-        aria-label={reconnecting ? "Reconnecting" : `Latency ${health.rttMs ?? "unknown"} milliseconds`}
-        onClick={() => {
-          if (!isTauriRuntime()) void wsTransport.ensureConnected(true);
-        }}
-      >
-        {reconnecting ? "⟳ Reconnecting" : rtt}
-      </button>
-    </header>
+    </div>
   );
 }

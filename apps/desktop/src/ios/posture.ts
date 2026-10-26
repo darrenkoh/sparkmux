@@ -179,6 +179,145 @@ function orientationFor(posture: FormFactorPosture, width: number, height: numbe
   return width >= height ? "landscape" : "portrait";
 }
 
+/** iPhone portrait, iPhone landscape, and iPad share the minimalist mobile shell. */
+export function isMobilePosture(posture: FormFactorPosture): boolean {
+  return posture === "phone-compact" || posture === "phone-landscape" || posture === "ipad-pro";
+}
+
+/**
+ * Header swipe. A move of 48px or less keeps the index.
+ * A larger positive delta steps forward and wraps. A larger negative delta steps back and wraps.
+ */
+export function cycleTargetIndex(currentIndex: number, total: number, deltaX: number): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  const count = Math.floor(total);
+  const raw = Number.isFinite(currentIndex) ? Math.trunc(currentIndex) : 0;
+  const index = ((raw % count) + count) % count;
+  if (!Number.isFinite(deltaX) || Math.abs(deltaX) <= 48) return index;
+  const step = deltaX > 0 ? 1 : -1;
+  return (index + step + count) % count;
+}
+
+/** Horizontal travel before the header captures the pointer. */
+export const HEADER_SWIPE_CAPTURE_PX = 10;
+
+export interface HeaderPointerState {
+  tracking: boolean;
+  originX: number;
+  originY: number;
+  capture: boolean;
+  /** The click after a real swipe must not open the hub or Views. */
+  suppressClick: boolean;
+}
+
+export function idleHeaderPointer(): HeaderPointerState {
+  return { tracking: false, originX: 0, originY: 0, capture: false, suppressClick: false };
+}
+
+export interface HeaderPointerEvent {
+  type: "down" | "move" | "up" | "cancel";
+  x: number;
+  y: number;
+}
+
+/**
+ * Header swipe state. `down` always clears `suppressClick`, so a swipe whose click
+ * never arrives (the finger ended on a different control) does not swallow the next tap.
+ * `move` asks for pointer capture once the gesture is clearly horizontal, so `up` still
+ * arrives after the finger leaves the 36–44px bar.
+ */
+export function reduceHeaderPointer(
+  state: HeaderPointerState,
+  event: HeaderPointerEvent,
+  currentIndex: number,
+  total: number,
+): { state: HeaderPointerState; nextIndex: number | null; captureNow: boolean } {
+  if (event.type === "down") {
+    return {
+      state: {
+        tracking: true,
+        originX: event.x,
+        originY: event.y,
+        capture: false,
+        suppressClick: false,
+      },
+      nextIndex: null,
+      captureNow: false,
+    };
+  }
+  if (!state.tracking) return { state, nextIndex: null, captureNow: false };
+  if (event.type === "cancel") {
+    return {
+      state: { ...state, tracking: false, capture: false, suppressClick: false },
+      nextIndex: null,
+      captureNow: false,
+    };
+  }
+  if (event.type === "move") {
+    const dx = event.x - state.originX;
+    const dy = event.y - state.originY;
+    const captureNow =
+      !state.capture &&
+      Math.abs(dx) >= HEADER_SWIPE_CAPTURE_PX &&
+      Math.abs(dx) > Math.abs(dy);
+    return {
+      state: captureNow ? { ...state, capture: true } : state,
+      nextIndex: null,
+      captureNow,
+    };
+  }
+  const nextIndex = cycleTargetIndex(currentIndex, total, event.x - state.originX);
+  const changed = nextIndex !== currentIndex;
+  return {
+    state: {
+      tracking: false,
+      originX: state.originX,
+      originY: state.originY,
+      capture: false,
+      suppressClick: changed,
+    },
+    nextIndex: changed ? nextIndex : null,
+    captureNow: false,
+  };
+}
+
+/** Consume a swipe so the following click does not also open a menu. */
+export function headerClickOpens(state: HeaderPointerState): { opens: boolean; state: HeaderPointerState } {
+  if (!state.suppressClick) return { opens: true, state };
+  return { opens: false, state: { ...state, suppressClick: false } };
+}
+
+export interface PaneZoomState {
+  phoneTiled: boolean;
+  zoomedPaneId: string | null;
+}
+
+/** True while every pane is visible, so the strip offers Zoom. A zoomed pane offers Tile. */
+export function paneStripTiled(state: PaneZoomState): boolean {
+  return state.zoomedPaneId == null;
+}
+
+/**
+ * Zoom fills one pane. Tile clears that zoom and sets `phoneTiled` so phone-compact
+ * does not immediately zoom again. Landscape and iPad start tiled (`phoneTiled` false
+ * and no zoom), so zoom must not turn `phoneTiled` on.
+ */
+export function togglePaneZoom(state: PaneZoomState, focusId: string | null): PaneZoomState {
+  if (state.zoomedPaneId != null) return { phoneTiled: true, zoomedPaneId: null };
+  return { phoneTiled: false, zoomedPaneId: focusId };
+}
+
+/** 0 waiting, 1 failed, 2 running, 3 finished. Unknown states stay with running. */
+export function agentAttentionRank(state: string): number {
+  const normalized = state.trim().toLowerCase();
+  if (normalized.includes("wait") || normalized === "needs_user") return 0;
+  if (normalized.includes("fail")) return 1;
+  if (normalized.includes("finish") || normalized === "succeeded" || normalized.includes("done")) {
+    return 3;
+  }
+  return 2;
+}
+
 /** Visible app height while the software keyboard is open. */
 export function appShellHeight(geo: ViewportGeometry): string {
   if (geo.keyboardInsetBottom > 0) return `${geo.visualHeight}px`;

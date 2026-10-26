@@ -3,10 +3,19 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  agentAttentionRank,
   appShellHeight,
+  cycleTargetIndex,
+  headerClickOpens,
+  idleHeaderPointer,
+  isMobilePosture,
+  paneStripTiled,
   readPostureOverride,
+  reduceHeaderPointer,
   resolvePosture,
+  togglePaneZoom,
   writePostureOverride,
+  type HeaderPointerState,
   type PostureStorage,
   type SegmentRect,
 } from "./posture.ts";
@@ -14,6 +23,7 @@ import { extractQuickOptions } from "./quickReplyLogic.ts";
 import { sheetDetentHeight, snapSheetDetent } from "./sheetLogic.ts";
 import {
   computeOverviewScale,
+  defaultSizingMode,
   readSizingMode,
   resizeForSizingMode,
   shouldFixTerminalSize,
@@ -305,13 +315,16 @@ function sizingBag(): SizingStorage {
   };
 }
 
-test("mirror scales a wide pane and fit-phone requests a forced resize", () => {
+test("fit-phone is the default and a stored mirror choice stays", () => {
+  assert.equal(defaultSizingMode(false), "fit-phone");
+  assert.equal(defaultSizingMode(true), "fit-phone");
   const storage = sizingBag();
-  assert.equal(readSizingMode(storage, false), "mirror");
-  assert.equal(readSizingMode(storage, true), "fit-phone");
-  writeSizingMode(storage, "fit-phone");
   assert.equal(readSizingMode(storage, false), "fit-phone");
-  assert.equal(storage.getItem("sparkmux.mobileSizingMode"), "fit-phone");
+  assert.equal(readSizingMode(storage, true), "fit-phone");
+  writeSizingMode(storage, "mirror");
+  assert.equal(readSizingMode(storage, false), "mirror");
+  assert.equal(readSizingMode(storage, true), "mirror");
+  assert.equal(storage.getItem("sparkmux.mobileSizingMode"), "mirror");
 
   const scale = computeOverviewScale(200, 8, 400);
   assert.ok(scale < 1);
@@ -322,6 +335,105 @@ test("mirror scales a wide pane and fit-phone requests a forced resize", () => {
   assert.equal(shouldFixTerminalSize(true, false, "mirror"), false);
   assert.equal(shouldFixTerminalSize(false, false, "mirror"), true);
   assert.equal(shouldFixTerminalSize(false, true, "fit-phone"), false);
+});
+
+test("isMobilePosture is phone and ipad only", () => {
+  assert.equal(isMobilePosture("phone-compact"), true);
+  assert.equal(isMobilePosture("phone-landscape"), true);
+  assert.equal(isMobilePosture("ipad-pro"), true);
+  assert.equal(isMobilePosture("desktop"), false);
+  assert.equal(isMobilePosture("duo-book"), false);
+  assert.equal(isMobilePosture("duo-clamshell"), false);
+});
+
+test("header swipe steps one target and wraps past 48px", () => {
+  assert.equal(cycleTargetIndex(0, 3, 0), 0);
+  assert.equal(cycleTargetIndex(0, 3, 48), 0);
+  assert.equal(cycleTargetIndex(1, 3, -48), 1);
+  assert.equal(cycleTargetIndex(0, 3, 49), 1);
+  assert.equal(cycleTargetIndex(1, 4, 80), 2);
+  assert.equal(cycleTargetIndex(2, 3, 49), 0);
+  assert.equal(cycleTargetIndex(0, 3, -49), 2);
+  assert.equal(cycleTargetIndex(2, 3, -49), 1);
+  assert.equal(cycleTargetIndex(5, 3, 49), 0);
+  assert.equal(cycleTargetIndex(0, 0, 80), 0);
+});
+
+test("a header swipe captures before the finger leaves the bar and the next tap still opens", () => {
+  const step = (
+    state: HeaderPointerState,
+    type: "down" | "move" | "up" | "cancel",
+    x: number,
+    y: number,
+  ) => reduceHeaderPointer(state, { type, x, y }, 0, 3);
+
+  let state = idleHeaderPointer();
+  let moved = step(state, "down", 0, 0);
+  state = moved.state;
+  moved = step(state, "move", 9, 0);
+  assert.equal(moved.captureNow, false);
+  moved = step(state, "move", 4, 20);
+  assert.equal(moved.captureNow, false);
+  moved = step(state, "move", 10, 2);
+  assert.equal(moved.captureNow, true);
+  state = moved.state;
+  // The finger keeps going and ends outside the 36–44px bar. Capture already happened.
+  moved = step(state, "up", 80, 90);
+  assert.equal(moved.nextIndex, 1);
+  assert.equal(moved.state.suppressClick, true);
+  state = moved.state;
+
+  const swallowed = headerClickOpens(state);
+  assert.equal(swallowed.opens, false);
+  assert.equal(swallowed.state.suppressClick, false);
+
+  // The click never arrived because the swipe ended on a different control.
+  state = moved.state;
+  const nextPress = step(state, "down", 12, 4);
+  assert.equal(nextPress.state.suppressClick, false);
+  const nextUp = step(nextPress.state, "up", 14, 5);
+  assert.equal(nextUp.nextIndex, null);
+  assert.equal(nextUp.state.suppressClick, false);
+  const opened = headerClickOpens(nextUp.state);
+  assert.equal(opened.opens, true);
+
+  const bar = readFileSync(new URL("./MobileTopBar.tsx", import.meta.url), "utf8");
+  assert.match(bar, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(bar, /reduceHeaderPointer/);
+  assert.match(bar, /headerClickOpens/);
+  assert.match(bar, /touchAction:\s*"none"/);
+  const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+  const barAt = css.indexOf(".mobile-top-bar {");
+  const barBlock = css.slice(barAt, css.indexOf("}", barAt));
+  assert.match(barBlock, /touch-action:\s*none/);
+});
+
+test("landscape and ipad zoom shows Tile and the next tap tiles", () => {
+  const start = { phoneTiled: false, zoomedPaneId: null as string | null };
+  assert.equal(paneStripTiled(start), true);
+  const zoomed = togglePaneZoom(start, "%0");
+  assert.deepEqual(zoomed, { phoneTiled: false, zoomedPaneId: "%0" });
+  assert.equal(paneStripTiled(zoomed), false);
+  const tiledAgain = togglePaneZoom(zoomed, "%0");
+  assert.deepEqual(tiledAgain, { phoneTiled: true, zoomedPaneId: null });
+  assert.equal(paneStripTiled(tiledAgain), true);
+  assert.equal(paneStripTiled({ phoneTiled: true, zoomedPaneId: "%0" }), false);
+
+  const app = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+  const shellStart = app.indexOf("/* mobile-posture-shell */");
+  const shellEnd = app.indexOf("/* end-mobile-posture-shell */");
+  const mobile = app.slice(shellStart, shellEnd);
+  assert.match(mobile, /paneStripTiled\(\{ phoneTiled, zoomedPaneId \}\)/);
+  assert.match(mobile, /togglePaneZoom\(/);
+});
+
+test("agent attention ranks waiting, then failed, then running, then finished", () => {
+  assert.equal(agentAttentionRank("Waiting on you"), 0);
+  assert.equal(agentAttentionRank("needs_user"), 0);
+  assert.equal(agentAttentionRank("Failed"), 1);
+  assert.equal(agentAttentionRank("Running"), 2);
+  assert.equal(agentAttentionRank("Finished"), 3);
+  assert.equal(agentAttentionRank("succeeded"), 3);
 });
 
 function tokenBag(): TokenBag & { dump: () => Map<string, string> } {
@@ -389,4 +501,56 @@ test("the phone map fills its segment and the peek stays 64px above the app inse
   const scaleRule = css.slice(scaleStart, scaleEnd);
   assert.match(scaleRule, /width:\s*100%/);
   assert.match(scaleRule, /height:\s*100%/);
+
+  const app = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+  const shellStart = app.indexOf("/* mobile-posture-shell */");
+  const shellEnd = app.indexOf("/* end-mobile-posture-shell */");
+  assert.ok(shellStart !== -1 && shellEnd > shellStart);
+  const mobile = app.slice(shellStart, shellEnd);
+  for (const name of [
+    "MobileTopBar",
+    "MobileInputDock",
+    "MobileAgentHub",
+    "MobileFullscreenView",
+    "TiledWindow",
+  ]) {
+    assert.ok(mobile.includes(`<${name}`), name);
+  }
+  for (const name of [
+    "MobileBottomSheet",
+    "MobileSlideDrawer",
+    "StatusBar",
+    "QuickReplyBanner",
+    "TouchKeyBar",
+  ]) {
+    assert.equal(mobile.includes(name), false, name);
+  }
+  assert.equal(mobile.includes("overviewScale"), false);
+  assert.equal(mobile.includes("scale("), false);
+  assert.equal(app.includes("scale(${overviewScale})"), false);
+  assert.equal(app.includes("transform: `scale"), false);
+
+  for (const cls of [
+    ".mobile-top-bar",
+    ".mobile-agent-hub",
+    ".mobile-input-dock",
+    ".mobile-fullscreen-view",
+  ]) {
+    const at = css.indexOf(`${cls} {`);
+    assert.ok(at !== -1, cls);
+    const block = css.slice(at, css.indexOf("}", at));
+    assert.match(block, /44px/);
+    assert.match(block, /16px/);
+    assert.match(block, /env\(safe-area-inset-/);
+  }
+  const hubAt = css.indexOf(".mobile-agent-hub {");
+  const hubBlock = css.slice(hubAt, css.indexOf("}", hubAt));
+  assert.match(hubBlock, /z-index:\s*520/);
+  assert.match(hubBlock, /position:\s*fixed/);
+  assert.match(hubBlock, /inset:\s*0/);
+  const fullAt = css.indexOf(".mobile-fullscreen-view {");
+  const fullBlock = css.slice(fullAt, css.indexOf("}", fullAt));
+  assert.match(fullBlock, /z-index:\s*500/);
+  assert.match(fullBlock, /position:\s*fixed/);
+  assert.match(fullBlock, /inset:\s*0/);
 });

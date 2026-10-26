@@ -3,18 +3,20 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { isTauriRuntime } from "./transport";
-import { appShellHeight } from "./ios/posture";
+import {
+  agentAttentionRank,
+  appShellHeight,
+  isMobilePosture,
+  paneStripTiled,
+  togglePaneZoom,
+} from "./ios/posture";
 import { pinchFontSize } from "./ios/touchKeys";
 import { useDevicePosture } from "./ios/useDevicePosture";
 import MobileTopBar, { type MobileCompanion } from "./ios/MobileTopBar";
-import MobileBottomSheet, { type SheetTab } from "./ios/MobileBottomSheet";
-import MobileSlideDrawer from "./ios/MobileSlideDrawer";
-import QuickReplyBanner from "./ios/QuickReplyBanner";
-import TouchKeyBar from "./ios/TouchKeyBar";
-import { quickReplyVisible } from "./ios/quickReplyLogic";
-import type { SheetDetent } from "./ios/sheetLogic";
+import MobileAgentHub, { type HubAgent } from "./ios/MobileAgentHub";
+import MobileFullscreenView from "./ios/MobileFullscreenView";
+import MobileInputDock from "./ios/MobileInputDock";
 import {
-  computeOverviewScale,
   readSizingMode,
   resizeForSizingMode,
   shouldFixTerminalSize,
@@ -37,7 +39,6 @@ import {
   ensureReady,
   focusPane,
   killSession,
-  killPane,
   killWindow,
   listenControlExit,
   listenLayoutChange,
@@ -234,11 +235,8 @@ export default function App() {
   const [sizingMode, setSizingMode] = useState<MobileSizingMode>(() =>
     readSizingMode(window.localStorage, false),
   );
-  const [sheetDetent, setSheetDetent] = useState<SheetDetent>("peek");
-  const [sheetTab, setSheetTab] = useState<SheetTab>("output");
-  const [composerOpen, setComposerOpen] = useState(false);
-  const [zen, setZen] = useState(false);
-  const [landscapePanel, setLandscapePanel] = useState<MobileCompanion | null>(null);
+  const [agentHubOpen, setAgentHubOpen] = useState(false);
+  const [mobileView, setMobileView] = useState<MobileCompanion | null>(null);
   const [zoomedPaneId, setZoomedPaneId] = useState<string | null>(null);
   const [phoneTiled, setPhoneTiled] = useState(false);
   const [sidebarDrawer, setSidebarDrawer] = useState(false);
@@ -954,13 +952,13 @@ export default function App() {
     return null;
   }
 
-  function requestCloseTab(windowId?: string) {
+  function requestCloseTab(windowId?: string, sessionName?: string) {
     const id = windowId ?? visibleRef.current;
     if (!id) {
       showToast("no tab to close");
       return;
     }
-    const session = attachedRef.current ?? "";
+    const session = sessionName ?? attachedRef.current ?? "";
     const sess = snapRef.current.sessions.find((s) => s.name === session);
     const win = sess?.windows.find((w) => w.id === id);
     setDialog({
@@ -1268,41 +1266,37 @@ export default function App() {
   }, [snap, attachedSession, visibleWindowId]);
   const showTiles = !error && !empty && layout && attachedSession;
   const posture = postureInfo.posture;
-  const phonePortrait = posture === "phone-compact";
-  const phoneLandscape = posture === "phone-landscape";
-  const phone = phonePortrait || phoneLandscape;
-  const drawerNav = posture === "phone-compact" || posture === "duo-book";
+  const mobile = isMobilePosture(posture);
+  const drawerNav = posture === "duo-book";
   const deck = posture === "duo-book" || posture === "duo-clamshell";
   const visiblePanes = visibleWin?.panes ?? [];
   const livePane =
     visiblePanes.find((pane) => pane.id === (focusedPane || zoomedPaneId)) ?? visiblePanes[0];
   const liveCols = livePane?.width ?? 0;
   const liveRows = livePane?.height ?? 0;
-  const overviewScale =
-    phone && sizingMode === "mirror"
-      ? computeOverviewScale(
-          liveCols,
-          cellRef.current.w || 8,
-          hostRef.current?.clientWidth || window.innerWidth,
-        )
-      : 1;
-  const attentionPulse = snap.sessions.some((session) =>
-    session.windows.some(
-      (win) =>
-        win.attention_label === "needs_user" ||
-        win.attention_label === "failed" ||
-        win.pending_ask.trim().length > 0,
+  const windowUrgent = snap.sessions.reduce(
+    (count, session) =>
+      count +
+      session.windows.filter(
+        (win) =>
+          win.attention_label === "needs_user" ||
+          win.attention_label === "failed" ||
+          win.pending_ask.trim().length > 0,
+      ).length,
+    0,
+  );
+  const rowUrgent = agentRows.filter((row) => agentAttentionRank(row.state) <= 1).length;
+  const waitingCount = Math.max(rowUrgent, windowUrgent);
+  const focusedAgent = agentRows.find((row) => row.pane_id === (focusedPane ?? livePane?.id ?? ""));
+  const cycleTargets = snap.sessions.flatMap((session) =>
+    session.windows.map((win) => ({ session: session.name, windowId: win.id })),
+  );
+  const cycleIndex = Math.max(
+    0,
+    cycleTargets.findIndex(
+      (target) => target.session === attachedSession && target.windowId === visibleWindowId,
     ),
   );
-  const focusedAgent = agentRows.find((row) => row.pane_id === (focusedPane ?? livePane?.id ?? ""));
-  const showQuickReply =
-    phone &&
-    quickReplyVisible({
-      composerOpen,
-      attention: visibleWin?.attention_label,
-      pendingAsk: visibleWin?.pending_ask,
-      agentState: focusedAgent?.state,
-    });
   useEffect(() => {
     if (posture !== "phone-compact" || phoneTiled || visiblePanes.length < 2) return;
     if (zoomedPaneId) return;
@@ -1311,7 +1305,7 @@ export default function App() {
       : visiblePanes[0]?.id;
     if (id) setZoomedPaneId(id);
   }, [posture, phoneTiled, visiblePanes, zoomedPaneId, focusedPane]);
-  const isDockOpen = Boolean(showTiles) && !phone && (outputOpen || statsDocked);
+  const isDockOpen = Boolean(showTiles) && !mobile && (outputOpen || statsDocked);
 
   useEffect(() => {
     if (!attachedSession || !visibleWindowId) return;
@@ -1430,21 +1424,6 @@ export default function App() {
     if (next === "fit-phone") lastPushedSizeRef.current = null;
   }
 
-  function openSessions() {
-    setSidebarDrawer((open) => !open);
-    if (phoneLandscape) setLandscapePanel(null);
-  }
-
-  function openCompanion(which: MobileCompanion) {
-    if (phoneLandscape) {
-      setLandscapePanel((current) => (current === which ? null : which));
-      setSidebarDrawer(false);
-      return;
-    }
-    setSheetTab(which);
-    setSheetDetent((current) => (current === "closed" || current === "peek" ? "half" : current));
-  }
-
   async function jumpToTarget(sessionName: string, windowId: string, paneId: string | null) {
     chromeFocus.current = "sidebar";
     const sess = snap.sessions.find((s) => s.name === sessionName);
@@ -1469,7 +1448,7 @@ export default function App() {
       void focusPane(paneId);
       getTerm(paneId)?.focus();
     }
-    if (phone) setSidebarDrawer(false);
+    if (mobile) setAgentHubOpen(false);
   }
 
   function renderSidebar() {
@@ -1518,85 +1497,217 @@ export default function App() {
     );
   }
 
-  function renderPhoneCompanion(which: SheetTab | MobileCompanion) {
-    if (which === "agents") {
-      return (
-        <ul className="mobile-agent-list">
-          {agentRows.map((row) => (
-            <li key={`${row.session}:${row.pane_id}`}>
-              <button
-                type="button"
-                onClick={() => void jumpToTarget(row.session, row.window_id, row.pane_id)}
-              >
-                <strong>{row.window_name || row.session}</strong>
-                <span>{row.state}</span>
-              </button>
-            </li>
-          ))}
-          {agentRows.length === 0 && <li className="mobile-agent-empty">No agents</li>}
-        </ul>
-      );
-    }
-    if (which === "output") {
-      return (
-        <ArtifactPanel
-          key={outputPane?.id ?? "none"}
-          command={outputPane?.command ?? ""}
-          cwd={outputPane?.path ?? ""}
-          title={outputPane?.title ?? ""}
-          pid={outputPane?.pid ?? 0}
-          onCollapse={() => {
-            setOutputOpen(false);
-            if (phoneLandscape) setLandscapePanel(null);
-            else setSheetDetent("peek");
-          }}
-          isDocked
-        />
-      );
-    }
-    if (which === "gits") {
-      return (
-        <ChangeGraph
-          sessionName={attachedSession ?? "sparkmux"}
-          tabId={visibleWindowId ?? "main"}
-          tabName={winName ?? "shell"}
-          command={outputPane?.command ?? ""}
-          cwd={outputPane?.path ?? ""}
-          title={outputPane?.title ?? ""}
-          pid={outputPane?.pid ?? 0}
-          onClose={() => {
-            setGraphOpen(false);
-            if (phoneLandscape) setLandscapePanel(null);
-            else setSheetDetent("peek");
-          }}
-          onPopOut={popOutGits}
-        />
-      );
-    }
+  /* mobile-posture-shell */
+  function renderMobileShell() {
+    const activePaneId = focusedPane ?? livePane?.id ?? null;
+    const hubAgents: HubAgent[] = agentRows.map((row) => {
+      const sess = snap.sessions.find((session) => session.name === row.session);
+      const win = sess?.windows.find((item) => item.id === row.window_id);
+      const pendingAsk = win?.pending_ask ?? "";
+      return {
+        session: row.session,
+        windowId: row.window_id,
+        windowName: row.window_name,
+        paneId: row.pane_id,
+        state: row.state,
+        model: row.model,
+        detail: row.detail,
+        pendingAsk,
+        waiting:
+          agentAttentionRank(row.state) === 0 ||
+          win?.attention_label === "needs_user" ||
+          pendingAsk.trim().length > 0,
+      };
+    });
+    const hubSessions = snap.sessions.map((session) => ({
+      name: session.name,
+      windows: session.windows.map((win) => ({
+        id: win.id,
+        name: win.name,
+        paneCount: win.panes.length,
+        attention:
+          win.attention_label === "needs_user" ||
+          win.attention_label === "failed" ||
+          win.pending_ask.trim().length > 0,
+      })),
+    }));
+    const writePane = (paneId: string, bytes: number[]) => {
+      void paneWrite(paneId, bytes).catch((err) => showToast(String(err)));
+    };
     return (
-      <AnalyticsHud
-        sessionName={attachedSession ?? "sparkmux"}
-        tabId={visibleWindowId ?? "main"}
-        tabName={winName ?? "shell"}
-        command={outputPane?.command ?? ""}
-        cwd={outputPane?.path ?? ""}
-        title={outputPane?.title ?? ""}
-        pid={outputPane?.pid ?? 0}
-        phoneLayout
-        initialPhonePane={which === "stats" ? "telemetry" : "map"}
-        onClose={() => {
-          setAnalyticsOpen(false);
-          if (phoneLandscape) setLandscapePanel(null);
-          else setSheetDetent("peek");
-        }}
-        onDock={() => {
-          setAnalyticsOpen(false);
-          setStatsDocked(true);
-        }}
-        onPopOut={popOutStats}
-      />
+      <div className="body mobile-shell">
+        <main className="main">
+          <MobileTopBar
+            landscape={posture === "phone-landscape" || postureInfo.orientation === "landscape"}
+            sessionName={attachedSession ?? ""}
+            windowName={winName ?? ""}
+            agentCount={agentRows.length}
+            waitingCount={waitingCount}
+            currentIndex={cycleIndex}
+            targetCount={cycleTargets.length}
+            onCycle={(index) => {
+              const target = cycleTargets[index];
+              if (target) void jumpToTarget(target.session, target.windowId, null);
+            }}
+            onOpenHub={() => setAgentHubOpen(true)}
+            panes={visiblePanes.map((pane) => ({ id: pane.id, command: pane.command }))}
+            activePaneId={zoomedPaneId ?? focusedPane}
+            tiled={paneStripTiled({ phoneTiled, zoomedPaneId })}
+            onSelectPane={(paneId) => {
+              setPhoneTiled(false);
+              setZoomedPaneId(paneId);
+              focusTerminalPane(paneId);
+              void focusPane(paneId);
+            }}
+            onToggleTile={() => {
+              const next = togglePaneZoom(
+                { phoneTiled, zoomedPaneId },
+                focusedPane ?? visiblePanes[0]?.id ?? null,
+              );
+              setPhoneTiled(next.phoneTiled);
+              setZoomedPaneId(next.zoomedPaneId);
+            }}
+            onSplit={() => {
+              const paneId = zoomedPaneId ?? focusedPane ?? visiblePanes[0]?.id;
+              if (paneId) void splitPane(paneId, false).catch((err) => showToast(String(err)));
+            }}
+            onOpenView={(which) => {
+              setAgentHubOpen(false);
+              setMobileView(which);
+            }}
+            onOpenRecipes={() => setDialog({ kind: "recipes" })}
+            sizingMode={sizingMode}
+            cols={liveCols}
+            rows={liveRows}
+            onToggleSizing={toggleSizing}
+          />
+          {error || empty ? (
+            <ErrorPanel
+              error={error ?? null}
+              status={status}
+              onRetry={() => void boot()}
+              onStart={() => void onStart()}
+              onNewSession={() => {
+                setInput("");
+                setDialog({ kind: "new-session" });
+              }}
+            />
+          ) : showTiles ? (
+            <div className="term-stage">
+              <div className="term-column">
+                <div className="term-viewport" ref={hostRef}>
+                  <TiledWindow
+                    node={layout}
+                    focusedPane={focusedPane}
+                    zoomedPaneId={zoomedPaneId}
+                    onToggleZoomPane={(paneId) => {
+                      setPhoneTiled(false);
+                      setZoomedPaneId((current) => (current === paneId ? null : paneId));
+                    }}
+                    dropTarget={dropPane}
+                    fontSize={fontSize}
+                    paneModes={paneInputModes(snap)}
+                    onFocus={focusTerminalPane}
+                    fixedSize={shouldFixTerminalSize(
+                      isTauriRuntime(),
+                      Boolean(status?.is_headless),
+                      sizingMode,
+                    )}
+                    onCellSize={(paneId, w, h, cols, rows) => {
+                      if (w > 0 && h > 0) {
+                        cellRef.current = { w, h };
+                        if (cols >= 2 && rows >= 1) {
+                          paneFitRef.current.set(paneId, { cols, rows });
+                        }
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : failMsg ? (
+            <div className="panel">
+              <h1>Could not open the session</h1>
+              <p>{failMsg}</p>
+              <button onClick={() => void boot()}>Retry</button>
+            </div>
+          ) : (
+            <div className="panel">
+              <p>Connecting…</p>
+            </div>
+          )}
+          {showTiles ? (
+            <MobileInputDock
+              paneId={activePaneId}
+              paneCommand={livePane?.command ?? ""}
+              pendingAsk={visibleWin?.pending_ask ?? ""}
+              detail={focusedAgent?.detail ?? ""}
+              attention={visibleWin?.attention_label}
+              agentState={focusedAgent?.state}
+              sendBytes={writePane}
+              onFind={(paneId) => {
+                window.dispatchEvent(new CustomEvent("sparkmux-find", { detail: { paneId } }));
+              }}
+            />
+          ) : null}
+        </main>
+        {agentHubOpen ? (
+          <MobileAgentHub
+            agents={hubAgents}
+            sessions={hubSessions}
+            onClose={() => setAgentHubOpen(false)}
+            onOpenAgent={(sessionName, windowId, paneId) => {
+              void jumpToTarget(sessionName, windowId, paneId);
+            }}
+            onSend={writePane}
+            onSelectWindow={(sessionName, windowId) => {
+              void jumpToTarget(sessionName, windowId, null);
+            }}
+            onNewSession={() => {
+              setAgentHubOpen(false);
+              setInput("");
+              setDialog({ kind: "new-session" });
+            }}
+            onNewTab={(sessionName) => {
+              setAgentHubOpen(false);
+              void (async () => {
+                if (attachedRef.current !== sessionName) {
+                  await connectTo(sessionName);
+                  attachedRef.current = sessionName;
+                }
+                await createNewTab();
+              })().catch((err) => showToast(String(err)));
+            }}
+            onCloseTab={(sessionName, windowId) => {
+              setAgentHubOpen(false);
+              requestCloseTab(windowId, sessionName);
+            }}
+            onCloseSession={(sessionName) => {
+              setAgentHubOpen(false);
+              requestCloseSession(sessionName);
+            }}
+          />
+        ) : null}
+        {mobileView ? (
+          <MobileFullscreenView
+            kind={mobileView}
+            sessionName={attachedSession ?? ""}
+            tabId={visibleWindowId ?? "main"}
+            windowName={winName ?? ""}
+            command={outputPane?.command ?? ""}
+            cwd={outputPane?.path ?? ""}
+            title={outputPane?.title ?? ""}
+            pid={outputPane?.pid ?? 0}
+            onBack={() => setMobileView(null)}
+            onChange={setMobileView}
+            onPopOutStats={popOutStats}
+            onPopOutGits={popOutGits}
+          />
+        ) : null}
+      </div>
     );
   }
+  /* end-mobile-posture-shell */
 
   const renderTabs = () => (
     <WindowTabs
@@ -1626,7 +1737,7 @@ export default function App() {
 
   return (
     <div
-      className={`app posture-${posture}${sidebarDrawer ? " sidebar-drawer-open" : ""}${postureInfo.keyboardInsetBottom > 0 ? " keyboard-open" : ""}${zen && phoneLandscape ? " zen-fullscreen" : ""}`}
+      className={`app posture-${posture}${sidebarDrawer ? " sidebar-drawer-open" : ""}${postureInfo.keyboardInsetBottom > 0 ? " keyboard-open" : ""}`}
       style={{
         height: appShellHeight(postureInfo),
         ["--duo-left" as string]: postureInfo.leftSegmentWidth
@@ -1637,17 +1748,11 @@ export default function App() {
           : undefined,
       }}
     >
+      {mobile ? (
+        renderMobileShell()
+      ) : (
+      <>
       <div className="body">
-        {phoneLandscape ? (
-          <MobileSlideDrawer
-            side="left"
-            open={sidebarDrawer}
-            title="Sessions & Agent Board"
-            onClose={() => setSidebarDrawer(false)}
-          >
-            {renderSidebar()}
-          </MobileSlideDrawer>
-        ) : (
           <div
             className={`sidebar-slot ${drawerNav ? (sidebarDrawer ? "drawer-open" : "drawer-shut") : sidebarCollapsed ? "collapsed" : ""}`}
             style={drawerNav ? undefined : { width: sidebarDisplay, flexBasis: sidebarDisplay }}
@@ -1657,59 +1762,18 @@ export default function App() {
           >
             {renderSidebar()}
           </div>
-        )}
-        {!phoneLandscape && (
           <Splitter
             width={sidebarWidth}
             collapsed={sidebarCollapsed}
             onWidth={setSidebarWidth}
             onCollapsed={setSidebarCollapsed}
           />
-        )}
         <main
           className="main"
           onMouseDown={() => {
             chromeFocus.current = "terminal";
           }}
         >
-          {phone && (
-            <MobileTopBar
-              posture={phoneLandscape ? "phone-landscape" : "phone-compact"}
-              zen={zen}
-              onToggleZen={() => setZen((open) => !open)}
-              sessionName={attachedSession ?? ""}
-              windowName={winName ?? ""}
-              sessions={snap.sessions.map((session) => ({
-                name: session.name,
-                windows: session.windows.map((win) => ({ id: win.id, name: win.name })),
-              }))}
-              onSelectWindow={(sessionName, windowId) => {
-                void jumpToTarget(sessionName, windowId, null);
-              }}
-              panes={visiblePanes.map((pane) => ({ id: pane.id, command: pane.command }))}
-              activePaneId={zoomedPaneId ?? focusedPane}
-              tiled={phoneTiled || !zoomedPaneId}
-              onSelectPane={(paneId) => {
-                setPhoneTiled(false);
-                setZoomedPaneId(paneId);
-                focusTerminalPane(paneId);
-                void focusPane(paneId);
-              }}
-              onToggleTile={() => {
-                setPhoneTiled((tiled) => !tiled);
-                setZoomedPaneId((current) =>
-                  current ? null : focusedPane ?? visiblePanes[0]?.id ?? null,
-                );
-              }}
-              sizingMode={sizingMode}
-              cols={liveCols}
-              rows={liveRows}
-              onToggleSizing={toggleSizing}
-              attention={attentionPulse}
-              onOpenSessions={openSessions}
-              onOpenCompanion={openCompanion}
-            />
-          )}
           {error || empty ? (
             <ErrorPanel
               error={error ?? null}
@@ -1723,11 +1787,11 @@ export default function App() {
             />
           ) : showTiles ? (
             <>
-              {!deck && !phone && renderTabs()}
+              {!deck && renderTabs()}
               <div className="term-stage">
                 <div className="term-column">
                   {deck && renderTabs()}
-                  {drawerNav && !phone && (
+                  {drawerNav && (
                     <button
                       type="button"
                       className="sidebar-drawer-btn"
@@ -1736,24 +1800,7 @@ export default function App() {
                       Sessions
                     </button>
                   )}
-                <div
-                  className={`term-viewport${overviewScale < 1 ? " term-overview" : ""}`}
-                  ref={hostRef}
-                  data-overview-scale={overviewScale < 1 ? overviewScale.toFixed(3) : undefined}
-                >
-                  <div
-                    className="term-overview-scale"
-                    style={
-                      overviewScale < 1
-                        ? {
-                            transform: `scale(${overviewScale})`,
-                            transformOrigin: "top left",
-                            width: `${100 / overviewScale}%`,
-                            height: `${100 / overviewScale}%`,
-                          }
-                        : undefined
-                    }
-                  >
+                <div className="term-viewport" ref={hostRef}>
                   <TiledWindow
                     node={layout}
                     focusedPane={focusedPane}
@@ -1780,58 +1827,7 @@ export default function App() {
                       }
                     }}
                   />
-                  </div>
                 </div>
-                {showQuickReply && (
-                  <QuickReplyBanner
-                    paneId={focusedPane ?? livePane?.id ?? null}
-                    title={
-                      visibleWin?.attention_label === "needs_user" || focusedAgent?.state === "waiting"
-                        ? "WAITING FOR INPUT"
-                        : visibleWin?.name ?? "Reply"
-                    }
-                    pendingAsk={visibleWin?.pending_ask ?? ""}
-                    onDismiss={() => setComposerOpen(false)}
-                  />
-                )}
-                {phone && (
-                  <TouchKeyBar
-                    paneId={focusedPane ?? livePane?.id ?? null}
-                    zoomedPaneId={zoomedPaneId}
-                    onToggleZoomPane={(paneId) => {
-                      setPhoneTiled(false);
-                      setZoomedPaneId((current) => (current === paneId ? null : paneId));
-                    }}
-                    posture={posture}
-                    onChangePostureOverride={postureInfo.setPostureOverride}
-                    postureOverride={postureInfo.postureOverride}
-                    sendBytes={(paneId, bytes) => {
-                      void paneWrite(paneId, bytes);
-                    }}
-                    onToggleComposer={() => setComposerOpen((open) => !open)}
-                    onFind={(paneId) => {
-                      window.dispatchEvent(
-                        new CustomEvent("sparkmux-find", { detail: { paneId } }),
-                      );
-                    }}
-                    onRecipes={() => setDialog({ kind: "recipes" })}
-                    onClosePane={(paneId) => {
-                      void killPane(paneId).catch((err) => showToast(String(err)));
-                    }}
-                  />
-                )}
-                {phonePortrait && (
-                  <MobileBottomSheet
-                    detent={sheetDetent}
-                    onDetent={setSheetDetent}
-                    tab={sheetTab}
-                    onTab={setSheetTab}
-                    keyboardInsetBottom={postureInfo.keyboardInsetBottom}
-                    ticker={(visibleWin?.pending_ask || focusedAgent?.detail || "").trim()}
-                  >
-                    {renderPhoneCompanion(sheetTab)}
-                  </MobileBottomSheet>
-                )}
                 </div>
                 {posture === "duo-book" && (
                   <div
@@ -1986,7 +1982,7 @@ export default function App() {
                   </>
                 )}
 
-                {analyticsOpen && !phone && (
+                {analyticsOpen && (
                   <AnalyticsHud
                     sessionName={attachedSession ?? "sparkmux"}
                     tabId={visibleWindowId ?? "main"}
@@ -2003,7 +1999,7 @@ export default function App() {
                     onPopOut={popOutStats}
                   />
                 )}
-                {graphOpen && !phone && (
+                {graphOpen && (
                   <ChangeGraph
                     sessionName={attachedSession ?? "sparkmux"}
                     tabId={visibleWindowId ?? "main"}
@@ -2017,24 +2013,6 @@ export default function App() {
                   />
                 )}
                 </div>
-                {phoneLandscape && (
-                  <MobileSlideDrawer
-                    side="right"
-                    open={landscapePanel !== null}
-                    title={
-                      landscapePanel === "map"
-                        ? "3D Map"
-                        : landscapePanel === "gits"
-                          ? "Gits"
-                          : landscapePanel === "stats"
-                            ? "Stats"
-                            : "Output"
-                    }
-                    onClose={() => setLandscapePanel(null)}
-                  >
-                    {landscapePanel ? renderPhoneCompanion(landscapePanel) : null}
-                  </MobileSlideDrawer>
-                )}
               </div>
             </>
           ) : failMsg ? (
@@ -2050,7 +2028,6 @@ export default function App() {
           )}
         </main>
       </div>
-      {phoneLandscape ? null : (
       <StatusBar
         status={status}
         session={attachedSession}
@@ -2060,26 +2037,14 @@ export default function App() {
         outputOpen={outputOpen && Boolean(showTiles)}
         analyticsOpen={analyticsOpen || statsDocked}
         onOutput={() => {
-          if (phonePortrait) {
-            openCompanion("output");
-            return;
-          }
           setOutputOpen((open) => !open);
         }}
         graphOpen={graphOpen}
         onAnalytics={() => {
-          if (phonePortrait) {
-            openCompanion("map");
-            return;
-          }
           setGraphOpen(false);
           setAnalyticsOpen((open) => !open);
         }}
         onGraph={() => {
-          if (phonePortrait) {
-            openCompanion("gits");
-            return;
-          }
           setAnalyticsOpen(false);
           setGraphOpen((open) => !open);
         }}
@@ -2094,6 +2059,7 @@ export default function App() {
           }
         }}
       />
+      </>
       )}
       <UpdateNotice
         phase={updateNotice.phase}
