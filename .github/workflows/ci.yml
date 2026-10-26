@@ -34,5 +34,13 @@ jobs:
             pkg-config \
             libxdo-dev \
             build-essential
+      # rust-embed compiles apps/desktop/dist into the binary. That folder is
+      # gitignored and produced by Vite; cargo test only needs the manifest
+      # and index.html that the web server tests request.
+      - name: Stage web dist for rust-embed
+        run: |
+          mkdir -p apps/desktop/dist
+          cp apps/desktop/public/manifest.webmanifest apps/desktop/dist/manifest.webmanifest
+          printf '%s\n' '<!doctype html><html><head><title>Sparkmux</title></head><body></body></html>' > apps/desktop/dist/index.html
       - run: cargo test --workspace
       - run: cargo clippy --workspace -- -D warnings
