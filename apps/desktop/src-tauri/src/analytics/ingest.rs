@@ -2918,7 +2918,7 @@ mod tests {
         let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(
             file,
-            r#"{{"cost":{{"total_usd":0.5,"subagent_usd":0.25,"estimated":false}},"quota":{{"used_percent":12}}}}"#
+            r#"{{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-26T04:11:08Z","thinking":"priced","content":"ok","input_tokens":100,"cache_read_tokens":50,"output_tokens":10,"tool_calls":[{{"name":"view_file","args":{{"path":"b.rs"}}}}],"cost":{{"total_usd":0.5,"subagent_usd":0.25,"estimated":false}},"quota":{{"used_percent":12}}}}"#
         )
         .unwrap();
         drop(file);
@@ -2927,19 +2927,22 @@ mod tests {
         assert!(!cur.cost_ledger.contains("subagent"), "{}", cur.cost_ledger);
         let stamped: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
         assert!((stamped["estimatedCostUsd"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+        // The priced planner adds its own token counters. Thinking text and
+        // tool_calls stay out of the ledger; subagent_usd is already in total_usd.
         assert_eq!(
             stamped["categories"]["input"]["tokens"].as_u64(),
-            Some(4842)
+            Some(4942)
         );
         assert_eq!(
             stamped["categories"]["cacheRead"]["tokens"].as_u64(),
-            Some(38177)
+            Some(38227)
         );
         assert_eq!(
             stamped["categories"]["output"]["tokens"].as_u64(),
-            Some(182)
+            Some(192)
         );
         assert!(stamped["categories"].get("thinking").is_none());
+        assert!(stamped["categories"].get("tools").is_none());
         assert!(stamped.get("pricing").is_none());
         let _ = fs::remove_dir_all(&scratch_dir);
     }

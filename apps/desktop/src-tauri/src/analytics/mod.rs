@@ -634,15 +634,15 @@ mod tests {
         assert!(open["categories"].get("thinking").is_none());
         assert!(open["categories"].get("tools").is_none());
 
-        // The status-line payload the CLI reports for this transcript.
-        // total_usd already includes subagent_usd. Quota is not the dollar.
+        // A later planner row carries the status-line cost object. total_usd
+        // already includes subagent_usd. Quota is not the dollar.
         let mut file = std::fs::OpenOptions::new()
             .append(true)
             .open(&transcript)
             .unwrap();
         std::io::Write::write_all(
             &mut file,
-            br#"{"cost":{"total_usd":0.5,"subagent_usd":0.25,"estimated":false},"quota":{"gemini-weekly":{"remaining_fraction":0.5}}}"#,
+            br#"{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-26T04:11:08Z","thinking":"priced","content":"ok","input_tokens":100,"cache_read_tokens":50,"output_tokens":10,"tool_calls":[{"name":"view_file","args":{"path":"b.rs"}}],"cost":{"total_usd":0.5,"subagent_usd":0.25,"estimated":false},"quota":{"gemini-weekly":{"remaining_fraction":0.5}}}"#,
         )
         .unwrap();
         std::io::Write::write_all(&mut file, b"\n").unwrap();
@@ -676,16 +676,18 @@ mod tests {
         );
         assert_eq!(
             stamped["categories"]["input"]["tokens"].as_u64(),
-            Some(4842)
+            Some(4942)
         );
         assert_eq!(
             stamped["categories"]["cacheRead"]["tokens"].as_u64(),
-            Some(38177)
+            Some(38227)
         );
         assert_eq!(
             stamped["categories"]["output"]["tokens"].as_u64(),
-            Some(182)
+            Some(192)
         );
+        assert!(stamped["categories"].get("thinking").is_none());
+        assert!(stamped["categories"].get("tools").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
