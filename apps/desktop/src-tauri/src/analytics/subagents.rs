@@ -1413,4 +1413,109 @@ mod tests {
             .any(|row| row.id == grand_id && row.label == "Palette Checker"));
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn worktree_kind_is_ingested_as_the_selected_session() {
+        let dir = scratch("worktree-kind");
+        let root = dir.join("grok");
+        let wt_id = "worktree-session-0001";
+        let child_id = "child-session-0000001";
+        let peer_id = "peer-session-00000001";
+        let linked_id = "linked-worktree-00001";
+        let project = root.join("encoded-worktree");
+        let wt = project.join(wt_id);
+        write(
+            &wt.join("summary.json"),
+            &format!(
+                r#"{{"id":"{wt_id}","session_kind":"worktree","source_workspace_dir":"/repo/app","worktree_label":"feat","last_active_at":"2026-10-26T17:04:06Z"}}"#
+            ),
+        );
+        write(
+            &wt.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"worktree reply\"}\n",
+        );
+        write(
+            &wt.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-10T08:56:02.853932+00:00","inputTokens":900,"outputTokens":30,"cachedReadTokens":500,"reasoningTokens":20,"primaryModelId":"grok-4.7-build","modelCalls":1}]}"#,
+        );
+        let child = project.join(child_id);
+        write(
+            &child.join("summary.json"),
+            &format!(
+                r#"{{"id":"{child_id}","parent_session_id":"{wt_id}","session_kind":"subagent","generated_title":"Check the worktree"}}"#
+            ),
+        );
+        write(
+            &child.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"child reply\"}\n",
+        );
+        write(
+            &child.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-10T09:00:00Z","inputTokens":0,"outputTokens":7,"primaryModelId":"grok-4.7"}]}"#,
+        );
+        let peer = project.join(peer_id);
+        write(
+            &peer.join("summary.json"),
+            &format!(r#"{{"id":"{peer_id}","session_kind":"worktree","worktree_label":"other"}}"#),
+        );
+        write(
+            &peer.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"peer reply\"}\n",
+        );
+        write(
+            &peer.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-10T09:30:00Z","inputTokens":0,"outputTokens":77,"primaryModelId":"grok-4.7"}]}"#,
+        );
+        let linked = project.join(linked_id);
+        write(
+            &linked.join("summary.json"),
+            &format!(
+                r#"{{"id":"{linked_id}","parent_session_id":"{wt_id}","session_kind":"worktree","generated_title":"not a child"}}"#
+            ),
+        );
+        write(
+            &linked.join("chat_history.jsonl"),
+            "{\"type\":\"assistant\",\"content\":\"linked reply\"}\n",
+        );
+        write(
+            &linked.join("usage.json"),
+            r#"{"turns":[{"endedAt":"2026-10-10T09:40:00Z","inputTokens":0,"outputTokens":88,"primaryModelId":"grok-4.7"}]}"#,
+        );
+
+        let index = grok_index(&root);
+        let listed: Vec<&str> = index
+            .values()
+            .flat_map(|kids| kids.iter().map(|kid| kid.id.as_str()))
+            .collect();
+        assert!(!listed.contains(&wt_id), "{listed:?}");
+        assert!(!listed.contains(&peer_id), "{listed:?}");
+        assert!(
+            !listed.contains(&linked_id),
+            "session_kind worktree is not a child: {listed:?}"
+        );
+        let children = index.get(wt_id).expect("subagent of the worktree session");
+        assert!(children.iter().any(|kid| kid.id == child_id));
+
+        let mut cur = Cursor::default();
+        let events = ingest_session(
+            CliKind::Grok,
+            &wt.join("chat_history.jsonl"),
+            &mut cur,
+            1_700_000_000_000,
+            &roots(&dir),
+        );
+        let usage: Vec<_> = events.iter().filter(|event| event.k == "usage").collect();
+        assert!(
+            usage
+                .iter()
+                .any(|event| (event.ti, event.to, event.tc, event.tr) == (400, 30, 500, 20)),
+            "{usage:?}"
+        );
+        assert!(usage.iter().any(|event| event.to == 7), "{usage:?}");
+        assert!(
+            usage.iter().all(|event| event.to != 77 && event.to != 88),
+            "{usage:?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

@@ -97,7 +97,8 @@ impl ArtifactFeed {
 pub struct TranscriptRoots {
     pub grok_sessions: PathBuf,
     pub claude_projects: PathBuf,
-    /// `~/.grok/active_sessions.json`. One record per live Grok process.
+    /// `~/.grok/active_sessions.json`. One Grok process can list several
+    /// sessions, including worktree agents whose cwd is not the pane cwd.
     pub grok_active_sessions: PathBuf,
     /// `~/.gemini/antigravity-cli`. Transcripts live under `brain/<id>/`.
     pub agy_root: PathBuf,
@@ -917,7 +918,7 @@ fn grok_active_transcript(
     if let Some(path) = match_title(kind, &paths, title) {
         return Some(path);
     }
-    let best = best_active(&sessions, family, pane_cwd)?;
+    let best = select_active_session(&sessions, family, pane_cwd, roots)?;
     grok_session_transcript(best, roots)
 }
 
@@ -932,6 +933,141 @@ fn grok_session_transcript(session: &ActiveSession, roots: &TranscriptRoots) -> 
         .join(&session.session_id)
         .join("chat_history.jsonl");
     under_jail(&roots.grok_sessions, &path)
+}
+
+/// Worktree agents share the Grok pid with source-repo rows. The process cwd
+/// stays the source repo, so pane-cwd equality would hide the worktree
+/// transcript. When the shallowest pid has a worktree row, that row wins.
+/// Several worktree rows rank by `summary.json` `last_active_at`, then later
+/// `opened_at`, then greater `session_id`. `last_active_at` is activity time,
+/// not a TUI focus mark. No worktree row keeps [`best_active`].
+fn select_active_session<'a>(
+    sessions: &'a [ActiveSession],
+    family: &[(u32, u8)],
+    pane_cwd: &str,
+    roots: &TranscriptRoots,
+) -> Option<&'a ActiveSession> {
+    let depth = winning_depth(sessions, family)?;
+    if let Some(session) = best_worktree(sessions, family, depth, roots) {
+        return Some(session);
+    }
+    best_active(sessions, family, pane_cwd)
+}
+
+fn winning_depth(sessions: &[ActiveSession], family: &[(u32, u8)]) -> Option<u8> {
+    let mut best: Option<u8> = None;
+    for session in sessions {
+        let Some((_, depth)) = family.iter().find(|(pid, _)| *pid == session.pid) else {
+            continue;
+        };
+        best = Some(best.map_or(*depth, |prev| prev.min(*depth)));
+    }
+    best
+}
+
+fn best_worktree<'a>(
+    sessions: &'a [ActiveSession],
+    family: &[(u32, u8)],
+    depth: u8,
+    roots: &TranscriptRoots,
+) -> Option<&'a ActiveSession> {
+    let mut best: Option<(bool, String, &str, &str, &ActiveSession)> = None;
+    for session in sessions {
+        let Some((_, row_depth)) = family.iter().find(|(pid, _)| *pid == session.pid) else {
+            continue;
+        };
+        if *row_depth != depth || !safe_component(&session.session_id) {
+            continue;
+        }
+        let Some(cwd) = normalize_cwd(&session.cwd) else {
+            continue;
+        };
+        if !is_human_worktree_cwd(&cwd) {
+            continue;
+        }
+        let Some(last_active) = worktree_last_active(roots, &cwd, &session.session_id) else {
+            continue;
+        };
+        let has_active = !last_active.is_empty();
+        let replace = match &best {
+            None => true,
+            Some((prev_has, prev_active, prev_opened, prev_id, _)) => {
+                (
+                    has_active,
+                    last_active.as_str(),
+                    session.opened_at.as_str(),
+                    session.session_id.as_str(),
+                ) > (*prev_has, prev_active.as_str(), *prev_opened, *prev_id)
+            }
+        };
+        if replace {
+            best = Some((
+                has_active,
+                last_active,
+                session.opened_at.as_str(),
+                session.session_id.as_str(),
+                session,
+            ));
+        }
+    }
+    best.map(|(_, _, _, _, session)| session)
+}
+
+/// `…/.grok/worktrees/<repo>/<name>`, where `<name>` is not a subagent checkout.
+fn is_human_worktree_cwd(cwd: &Path) -> bool {
+    let mut parts = Vec::new();
+    for comp in cwd.components() {
+        match comp {
+            Component::Normal(part) => parts.push(part.to_string_lossy()),
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir | Component::Prefix(_) => return false,
+        }
+    }
+    let n = parts.len();
+    if n < 4 {
+        return false;
+    }
+    let name = parts[n - 1].as_ref();
+    let repo = parts[n - 2].as_ref();
+    parts[n - 4].as_ref() == ".grok"
+        && parts[n - 3].as_ref() == "worktrees"
+        && !repo.is_empty()
+        && !name.is_empty()
+        && !name.starts_with("subagent-")
+}
+
+/// `Some` when this row is a worktree agent. The string is `last_active_at`,
+/// or empty when the summary has not recorded one. `None` means the row stays
+/// on the ordinary comparator: a subagent summary, another kind, or a summary
+/// that leaves the session jail.
+fn worktree_last_active(roots: &TranscriptRoots, cwd: &Path, session_id: &str) -> Option<String> {
+    let path = roots
+        .grok_sessions
+        .join(encode_grok_path(cwd))
+        .join(session_id)
+        .join("summary.json");
+    let Some(jailed) = under_jail(&roots.grok_sessions, &path) else {
+        return path.symlink_metadata().is_err().then(String::new);
+    };
+    let file = File::open(jailed).ok()?;
+    let value: Value = serde_json::from_reader(file.take(1024 * 1024)).ok()?;
+    let kind = value
+        .get("session_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    // A summary that is present must name this session `worktree`. Subagent
+    // checkouts and ordinary kinds stay on the pane-cwd comparator.
+    if kind != "worktree" {
+        return None;
+    }
+    let last_active = value
+        .get("last_active_at")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    Some(last_active)
 }
 
 fn best_active<'a>(
@@ -2573,6 +2709,321 @@ mod tests {
         let unbound = load_artifacts("grok", &cwd, "", 0, &roots);
         assert!(unbound.transcript_path.is_none(), "{unbound:?}");
         assert!(unbound.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn case_dir(dir: &Path, name: &str) -> PathBuf {
+        let case = dir.join(name);
+        fs::create_dir_all(case.join("sessions")).unwrap();
+        case
+    }
+
+    fn place_grok(dir: &Path, cwd: &str, session: &str, body: &str, summary: Option<&str>) {
+        let encoded = dir.join("sessions").join(encode_grok_path(Path::new(cwd)));
+        write_grok(&encoded, session, body);
+        if let Some(summary) = summary {
+            fs::write(encoded.join(session).join("summary.json"), summary).unwrap();
+        }
+    }
+
+    fn write_active(dir: &Path, rows: &[(&str, u32, &str, &str)]) {
+        let items: Vec<Value> = rows
+            .iter()
+            .map(|(id, pid, cwd, opened)| {
+                serde_json::json!({
+                    "session_id": id,
+                    "pid": pid,
+                    "cwd": cwd,
+                    "opened_at": opened,
+                })
+            })
+            .collect();
+        fs::write(
+            dir.join("active_sessions.json"),
+            serde_json::to_vec(&items).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn worktree_summary(source: &str, label: &str, last_active: Option<&str>) -> String {
+        let mut value = serde_json::json!({
+            "session_kind": "worktree",
+            "source_workspace_dir": source,
+            "worktree_label": label,
+        });
+        if let Some(last_active) = last_active {
+            value["last_active_at"] = serde_json::json!(last_active);
+        }
+        value.to_string()
+    }
+
+    fn grok_feed(dir: &Path, pane_cwd: &str) -> ArtifactFeed {
+        let roots = roots(dir, dir.join("sessions"), dir.join("no-claude"));
+        load_for_family("grok-1.0.70", pane_cwd, "grok", &[(7, 0), (42, 1)], &roots)
+    }
+
+    fn assert_session(feed: &ArtifactFeed, cwd: &str, session: &str, body: &str) {
+        let path = feed.transcript_path.as_deref().expect("transcript");
+        let encoded = encode_grok_path(Path::new(cwd));
+        assert!(
+            Path::new(path).ends_with(format!("{encoded}/{session}/chat_history.jsonl")),
+            "{path}"
+        );
+        assert!(
+            feed.entries.iter().any(|entry| entry.body == body),
+            "{feed:?}"
+        );
+    }
+
+    #[test]
+    fn worktree_row_beats_same_pid_source_row() {
+        let dir = scratch("grok-worktree");
+        let case = case_dir(&dir, "beat");
+        let source = "/repo/app";
+        let worktree = "/home/u/.grok/worktrees/app/feat";
+        place_grok(&case, source, "src-early", "early source reply", None);
+        place_grok(&case, source, "src", "source reply", None);
+        place_grok(
+            &case,
+            worktree,
+            "wt",
+            "worktree reply",
+            Some(&worktree_summary(
+                source,
+                "feat",
+                Some("2026-10-26T17:04:06Z"),
+            )),
+        );
+        place_grok(&case, source, "other", "other console reply", None);
+        write_active(
+            &case,
+            &[
+                ("src-early", 42, source, "2026-10-26T16:00:00Z"),
+                ("src", 42, source, "2026-10-26T16:42:22Z"),
+                ("wt", 42, worktree, "2026-10-26T16:40:00Z"),
+                ("other", 99, source, "2026-10-26T18:00:00Z"),
+            ],
+        );
+        let feed = grok_feed(&case, source);
+        assert_session(&feed, worktree, "wt", "worktree reply");
+        let source_encoded = encode_grok_path(Path::new(source));
+        let path = feed.transcript_path.as_deref().unwrap();
+        assert!(
+            !Path::new(path)
+                .components()
+                .any(|component| component.as_os_str() == source_encoded.as_str()),
+            "{path}"
+        );
+        assert!(feed.entries.iter().all(|entry| {
+            entry.body != "source reply"
+                && entry.body != "early source reply"
+                && entry.body != "other console reply"
+        }));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ordinary_session_binding_unchanged() {
+        let dir = scratch("grok-ordinary");
+        let source = "/repo/app";
+
+        let only = case_dir(&dir, "only");
+        place_grok(&only, source, "src", "only reply", None);
+        write_active(&only, &[("src", 42, source, "2026-10-26T16:00:00Z")]);
+        assert_session(&grok_feed(&only, source), source, "src", "only reply");
+
+        let pair = case_dir(&dir, "pair");
+        place_grok(&pair, source, "early", "early reply", None);
+        place_grok(&pair, source, "late", "late reply", None);
+        write_active(
+            &pair,
+            &[
+                ("early", 42, source, "2026-01-01T00:00:00Z"),
+                ("late", 42, source, "2026-06-01T00:00:00Z"),
+            ],
+        );
+        let pair_feed = grok_feed(&pair, source);
+        assert_session(&pair_feed, source, "late", "late reply");
+        assert!(pair_feed
+            .entries
+            .iter()
+            .all(|entry| entry.body != "early reply"));
+
+        let nested = case_dir(&dir, "nested");
+        place_grok(&nested, source, "src", "parent reply", None);
+        write_active(&nested, &[("src", 42, source, "2026-10-26T16:00:00Z")]);
+        assert_session(
+            &grok_feed(&nested, "/repo/app/sub"),
+            source,
+            "src",
+            "parent reply",
+        );
+
+        let lone = case_dir(&dir, "lone-worktree");
+        let worktree = "/home/u/.grok/worktrees/app/feat";
+        place_grok(
+            &lone,
+            worktree,
+            "wt",
+            "lone worktree reply",
+            Some(&worktree_summary(
+                source,
+                "feat",
+                Some("2026-10-26T17:04:06Z"),
+            )),
+        );
+        write_active(&lone, &[("wt", 42, worktree, "2026-10-26T16:40:00Z")]);
+        assert_session(
+            &grok_feed(&lone, source),
+            worktree,
+            "wt",
+            "lone worktree reply",
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn later_worktree_activity_wins_over_newer_opened_at() {
+        let dir = scratch("grok-worktree-rank");
+        let source = "/repo/app";
+        let busy = "/home/u/.grok/worktrees/app/old-busy";
+        let idle = "/home/u/.grok/worktrees/app/new-idle";
+        let subagent = "/home/u/.grok/worktrees/app/subagent-01a10000-0000-7000-8000-000000000099";
+
+        let rank = case_dir(&dir, "rank");
+        place_grok(&rank, source, "src", "source reply", None);
+        place_grok(
+            &rank,
+            busy,
+            "old-busy",
+            "busy reply",
+            Some(&worktree_summary(
+                source,
+                "old-busy",
+                Some("2026-10-26T17:04:06Z"),
+            )),
+        );
+        place_grok(
+            &rank,
+            idle,
+            "new-idle",
+            "idle reply",
+            Some(&worktree_summary(
+                source,
+                "new-idle",
+                Some("2026-10-26T16:42:00Z"),
+            )),
+        );
+        place_grok(
+            &rank,
+            subagent,
+            "sub-agent",
+            "subagent reply",
+            Some(r#"{"session_kind":"subagent","last_active_at":"2026-10-26T19:00:00Z"}"#),
+        );
+        write_active(
+            &rank,
+            &[
+                ("src", 42, source, "2026-10-26T18:00:00Z"),
+                ("old-busy", 42, busy, "2026-10-26T16:40:00Z"),
+                ("new-idle", 42, idle, "2026-10-26T16:57:22Z"),
+                ("sub-agent", 42, subagent, "2026-10-26T19:30:00Z"),
+            ],
+        );
+        let ranked = grok_feed(&rank, source);
+        assert_session(&ranked, busy, "old-busy", "busy reply");
+        assert!(ranked.entries.iter().all(|entry| {
+            entry.body != "source reply"
+                && entry.body != "idle reply"
+                && entry.body != "subagent reply"
+        }));
+
+        let opened = case_dir(&dir, "opened");
+        let older = "/home/u/.grok/worktrees/app/older";
+        let newer = "/home/u/.grok/worktrees/app/newer";
+        let stamp = Some("2026-10-26T17:00:00Z");
+        place_grok(
+            &opened,
+            older,
+            "older",
+            "older reply",
+            Some(&worktree_summary(source, "older", stamp)),
+        );
+        place_grok(
+            &opened,
+            newer,
+            "newer",
+            "newer reply",
+            Some(&worktree_summary(source, "newer", stamp)),
+        );
+        write_active(
+            &opened,
+            &[
+                ("older", 42, older, "2026-10-26T16:00:00Z"),
+                ("newer", 42, newer, "2026-10-26T16:57:22Z"),
+            ],
+        );
+        assert_session(&grok_feed(&opened, source), newer, "newer", "newer reply");
+
+        let missing = case_dir(&dir, "missing");
+        place_grok(
+            &missing,
+            older,
+            "older",
+            "older missing reply",
+            Some(&worktree_summary(source, "older", None)),
+        );
+        place_grok(
+            &missing,
+            newer,
+            "newer",
+            "newer missing reply",
+            Some(&worktree_summary(source, "newer", None)),
+        );
+        write_active(
+            &missing,
+            &[
+                ("older", 42, older, "2026-10-26T16:00:00Z"),
+                ("newer", 42, newer, "2026-10-26T16:57:22Z"),
+            ],
+        );
+        assert_session(
+            &grok_feed(&missing, source),
+            newer,
+            "newer",
+            "newer missing reply",
+        );
+
+        let tied = case_dir(&dir, "tied");
+        let tie_a = "/home/u/.grok/worktrees/app/tie-a";
+        let tie_b = "/home/u/.grok/worktrees/app/tie-b";
+        place_grok(
+            &tied,
+            tie_a,
+            "session-a",
+            "session a reply",
+            Some(&worktree_summary(source, "a", stamp)),
+        );
+        place_grok(
+            &tied,
+            tie_b,
+            "session-b",
+            "session b reply",
+            Some(&worktree_summary(source, "b", stamp)),
+        );
+        write_active(
+            &tied,
+            &[
+                ("session-a", 42, tie_a, "2026-10-26T16:00:00Z"),
+                ("session-b", 42, tie_b, "2026-10-26T16:00:00Z"),
+            ],
+        );
+        assert_session(
+            &grok_feed(&tied, source),
+            tie_b,
+            "session-b",
+            "session b reply",
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
