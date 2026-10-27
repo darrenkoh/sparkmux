@@ -168,44 +168,89 @@ Activity on the focused agent session becomes a WebGL2 terrain. Channels are **U
 ## 🏗️ Architecture
 
 ```mermaid
-flowchart TD
-    subgraph UI ["Sparkmux Desktop (Tauri 2 + React)"]
-        Sidebar["Sessions, tabs, Agents board"]
-        Terminals["Tiled xterm.js panes"]
-        Logs["Logs"]
-        Mini["Mini Stat and Area Map"]
-        Stats["Stats HUD"]
-        Gits["Gits: Canvas, Chronicle, History"]
+flowchart TB
+    subgraph UI ["🖥️ Presentation Layer (Desktop & Mobile)"]
+        direction TB
+        subgraph DesktopApp ["Sparkmux Desktop App (Tauri 2 + React 19)"]
+            direction LR
+            Terminals["🪟 Tiled Native Terminals\nxterm.js Canvas · 1:1 tmux layout"]
+            Sidebar["📑 Sidebar & Agent Board\nSessions · Unread alerts · Pending asks"]
+            Logs["📋 Logs & Follower\nPrompts · Reasoning · Tool trees"]
+            Stats["🌐 3D Area Map & Stats HUD\nWebGL2 terrain · Neural synaptogenesis"]
+            Gits["⬡ Gits & Chronicle\nCanvas card layouts · Visual diff studio"]
+        end
+        MobileClient["📱 iPhone & iPad PWA\nTouch KeyBar · Posture adaptive splits · /ws"]
     end
 
-    subgraph Desktop ["apps/desktop (Rust)"]
-        Follower["Read-only transcript follower"]
-        Usage["Allowance, cost, and process telemetry"]
+    subgraph Backend ["🦀 Desktop Backend & Analytics (Rust / src-tauri)"]
+        direction TB
+        IPC["⚡ Tauri IPC & Axum Web Server\nCommands · Event stream · WebSocket hub"]
+        Ingest["🔍 Read-Only AI Follower\nIncremental parser · SSH jailed cache"]
+        Attention["🔔 Attention & Quota Monitor\nneeds_user states · Quota countdowns"]
+        GitEngine["🌿 Git Change Graph Engine\nMulti-repo diffs · Chronicle transit map"]
     end
 
-    subgraph Core ["sparkmux-core"]
-        Client["tmux -C control client"]
-        LayoutParser["window_layout parser"]
+    subgraph CoreEngine ["⚙️ Core Multiplexer Engine (sparkmux-core)"]
+        direction LR
+        ControlClient["🎛️ Control Client (tmux -C)\nStdio protocol · %output demux"]
+        LayoutParser["📐 Layout Parser\nwindow_layout to tile tree"]
+        ScreenClient["🚀 Bootstrap & ScreenClient\nargv runner · Scrollback seed · Doctor"]
     end
 
-    subgraph TmuxServer ["Private server (-L sparkmux)"]
-        TmuxD["tmux server"]
-        Panes["Shells and agent CLIs"]
+    subgraph TmuxServer ["🔒 Private tmux Server (-L sparkmux)"]
+        direction LR
+        TmuxD[("🔒 tmux Daemon\nSocket: -L sparkmux")]
+        Panes["💻 Native PTY Panes\nzsh · bash · fish"]
+        Agents["🤖 Autonomous AI Agents\nGrok Build · Claude Code · Antigravity"]
     end
 
-    subgraph Agents ["Agent stores on this machine"]
-        Grok["~/.grok"]
-        Claude["~/.claude"]
-        AGY["~/.gemini/antigravity-cli"]
+    subgraph AgentStores ["📂 Host Agent Stores (Strictly Read-Only)"]
+        direction LR
+        GrokStore[("~/.grok\nGrok Build")]
+        ClaudeStore[("~/.claude\nClaude Code")]
+        AgyStore[("~/.gemini\nAntigravity CLI")]
     end
 
-    UI <-->|"Tauri commands"| Desktop
-    Desktop <--> Core
-    Core <-->|"%output / send-keys -H"| TmuxServer
-    Agents -.->|"Read-only"| Follower
+    MobileClient <==>|"WebSocket /ws\nJSON-RPC & binary"| IPC
+    DesktopApp <==>|"Tauri IPC\nCommands & events"| IPC
+
+    IPC <--> ControlClient
+    IPC <--> LayoutParser
+    IPC <--> ScreenClient
+
+    ControlClient <==>|"%output / send-keys -H\nControl pipes"| TmuxD
+    ScreenClient -.->|"argv bootstrap & seed"| TmuxD
+
+    TmuxD --- Panes
+    TmuxD --- Agents
+
+    Agents -.->|"Session logs"| AgentStores
+    AgentStores ==>|"Read-only incremental follow"| Ingest
+
+    Ingest --> Attention
+    Attention --> IPC
+    Ingest --> GitEngine
+    GitEngine --> IPC
+
+    classDef client fill:#1e293b,stroke:#38bdf8,stroke-width:1.5px,color:#f8fafc;
+    classDef backend fill:#1e293b,stroke:#c084fc,stroke-width:1.5px,color:#f8fafc;
+    classDef core fill:#1e293b,stroke:#fbbf24,stroke-width:1.5px,color:#f8fafc;
+    classDef tmux fill:#1e293b,stroke:#34d399,stroke-width:1.5px,color:#f8fafc;
+    classDef store fill:#0f172a,stroke:#f472b6,stroke-width:1.5px,stroke-dasharray: 4 4,color:#f8fafc;
+
+    class Terminals,Sidebar,Logs,Stats,Gits,MobileClient client;
+    class IPC,Ingest,Attention,GitEngine backend;
+    class ControlClient,LayoutParser,ScreenClient core;
+    class TmuxD,Panes,Agents tmux;
+    class GrokStore,ClaudeStore,AgyStore store;
 ```
 
-All tmux I/O goes through `sparkmux-core`. The desktop app does not spawn `tmux` on its own. The [iPhone and iPad](#-iphone-and-ipad) page is this UI served over HTTP, still on `-L sparkmux`.
+### Core Architecture Invariants
+
+- **Isolated Server (`-L sparkmux`)**: The app exclusively manages its private tmux socket. Your default tmux server (`$0`) remains untouched.
+- **Pure Control-Mode I/O**: All terminal data is streamed through `sparkmux-core` using tmux control mode (`%output` demuxing and `send-keys -H`). No screen polling (`capture-pane`) or pseudo-PTY wrapping.
+- **Read-Only AI Follower**: The ingest follower strictly observes external agent transcript files (`~/.grok`, `~/.claude`, `~/.gemini/antigravity-cli`). Sparkmux never mutates agent workspaces or configuration files.
+- **Unified Mobile & Desktop Runtime**: The embedded Axum server (`--serve`) serves the exact same React 19 UI to mobile devices (iPhone, iPad) over a multiplexed WebSocket (`/ws`) with touch keybars and posture-aware split layouts.
 
 ---
 
