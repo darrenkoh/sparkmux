@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Checkout only. Cache access stays on the workflow's cache-mode, not this token.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: cargo test (${{ matrix.os }})

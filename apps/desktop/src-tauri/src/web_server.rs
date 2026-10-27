@@ -511,26 +511,51 @@ fn print_qr(url: &str) {
     }
 }
 
+/// Frees a `getifaddrs` list, including a null list.
+struct IfaddrsList(*mut libc::ifaddrs);
+
+impl Drop for IfaddrsList {
+    fn drop(&mut self) {
+        unsafe { libc::freeifaddrs(self.0) };
+    }
+}
+
 fn host_ipv4() -> Vec<String> {
     let mut found = Vec::new();
-    unsafe {
-        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
-        if libc::getifaddrs(&mut head) != 0 {
-            return found;
+    // `getifaddrs` writes the list pointer. Seeding it with `null_mut` leaves
+    // an invalid pointer in scope until that write, which is what the walk
+    // used to dereference.
+    let mut raw = std::mem::MaybeUninit::<*mut libc::ifaddrs>::uninit();
+    if unsafe { libc::getifaddrs(raw.as_mut_ptr()) } != 0 {
+        return found;
+    }
+    // SAFETY: `getifaddrs` returned 0, so `raw` is initialized. A null list
+    // means the host has no interfaces; `freeifaddrs(null)` is defined.
+    let head = unsafe { raw.assume_init() };
+    let _list = IfaddrsList(head);
+    let mut cursor = head;
+    loop {
+        if cursor.is_null() {
+            break;
         }
-        let mut cursor = head;
-        while !cursor.is_null() {
-            let ifa = &*cursor;
-            if !ifa.ifa_addr.is_null() && (*ifa.ifa_addr).sa_family as i32 == libc::AF_INET {
-                let sa = &*(ifa.ifa_addr.cast::<libc::sockaddr_in>());
+        // SAFETY: `cursor` was just checked non-null and still points into
+        // the list owned by `_list`.
+        let ifa = unsafe { &*cursor };
+        let next = ifa.ifa_next;
+        let addr = ifa.ifa_addr;
+        if !addr.is_null() {
+            // SAFETY: `addr` was just checked non-null. Only AF_INET entries
+            // are read as `sockaddr_in`, which is how `getifaddrs` stores them.
+            let family = unsafe { (*addr).sa_family } as i32;
+            if family == libc::AF_INET {
+                let sa = unsafe { &*addr.cast::<libc::sockaddr_in>() };
                 let ip = std::net::Ipv4Addr::from(u32::from_be(sa.sin_addr.s_addr));
                 if !ip.is_loopback() && !ip.is_unspecified() {
                     found.push(ip.to_string());
                 }
             }
-            cursor = ifa.ifa_next;
         }
-        libc::freeifaddrs(head);
+        cursor = next;
     }
     found.sort();
     found.dedup();
@@ -1329,6 +1354,15 @@ mod tests {
         assert!(src.contains("WEB_SERVE_MENU_START"));
         assert!(src.contains("Start Remote Server"));
         assert!(src.contains("Stop Remote Server"));
+    }
+
+    #[test]
+    fn lan_addresses_skip_loopback_and_unspecified() {
+        for ip in host_ipv4() {
+            let parsed: std::net::Ipv4Addr = ip.parse().expect("ipv4");
+            assert!(!parsed.is_loopback(), "{ip}");
+            assert!(!parsed.is_unspecified(), "{ip}");
+        }
     }
 
     #[test]

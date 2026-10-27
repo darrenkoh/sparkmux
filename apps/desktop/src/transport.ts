@@ -262,7 +262,8 @@ class WebSocketTransport {
   /** Same function the socket calls for every binary server frame. */
   ingestBinaryFrame(buf: Uint8Array): void {
     dispatchBinaryFrame(buf, (paneId, frame) => {
-      this.paneSubscribers.get(paneId)?.(frame);
+      const deliver = this.paneSubscribers.get(paneId);
+      if (typeof deliver === "function") deliver(frame);
     });
   }
 
