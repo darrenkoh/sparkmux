@@ -302,10 +302,7 @@ const LOGIN_HTML: &str = r#"<!doctype html>
 </html>"#;
 
 fn login_html() -> String {
-    LOGIN_HTML.replace(
-        "__WINDOW_TITLE__",
-        &crate::app_window_title(),
-    )
+    LOGIN_HTML.replace("__WINDOW_TITLE__", &crate::app_window_title())
 }
 
 /// Name of the persisted pairing secret inside the Sparkmux config directory.
