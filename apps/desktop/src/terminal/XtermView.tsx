@@ -11,6 +11,7 @@ import {
   openHttpUrl,
   pasteIntoPane,
   focusPane,
+  paneArtifacts,
   paneCursor,
   bindPaneOutput,
   paneUnsubscribe,
@@ -20,7 +21,23 @@ import { cursorCup } from "./cursorCup";
 import { findNext, findPrevious, matchLineColumn } from "./scrollbackSearch";
 import { isEmulatorReport } from "./emulatorReports";
 
-import { applyPaneSeed } from "./paneSeed";
+import { applyPaneSeed, withExtraHistory } from "./paneSeed";
+import {
+  commandHasTranscript,
+  filterLocalScrollback,
+  independentHistoryLines,
+} from "./localScrollback";
+import {
+  SCROLL_COAST_MIN,
+  clampScrollTop,
+  fingerScrollTop,
+  inertialScrollStep,
+  phoneScrollFollowsBottom,
+  quietTerminalHelper,
+  terminalTouchPolicy,
+  touchScrollVelocity,
+} from "../ios/touchKeyboard";
+import type { PaneHistorySource } from "./TiledWindow";
 import { touchDragDelta } from "../ios/touchKeys";
 import {
   altScreenArrows,
@@ -60,6 +77,8 @@ export default function XtermView({
   paneRows,
   tmuxCols,
   tmuxRows,
+  scrollWithoutKeyboard = false,
+  historySource,
 }: {
   paneId: string;
   focused: boolean;
@@ -71,8 +90,15 @@ export default function XtermView({
   paneRows?: number;
   tmuxCols?: number;
   tmuxRows?: number;
+  /** Phone and iPad: a finger scrolls. The composer owns the keyboard. */
+  scrollWithoutKeyboard?: boolean;
+  /** Pane identity for the phone's own transcript copy. Omitted on the desktop. */
+  historySource?: PaneHistorySource;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const phoneLiveRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const onFocusRef = useRef(onFocus);
@@ -93,6 +119,10 @@ export default function XtermView({
   const findRef = useRef<HTMLInputElement>(null);
   const findNextFromRef = useRef(0);
   const findPrevFromRef = useRef(0);
+  const scrollWithoutKeyboardRef = useRef(scrollWithoutKeyboard);
+  scrollWithoutKeyboardRef.current = scrollWithoutKeyboard;
+  const historySourceRef = useRef(historySource);
+  historySourceRef.current = historySource;
   const [findOpen, setFindOpen] = useState(false);
   findOpenRef.current = findOpen;
 
@@ -132,6 +162,8 @@ export default function XtermView({
       // Mouse reports and alt-screen arrow keys are user input. Following
       // them scrolls a selection back onto the prompt.
       scrollOnUserInput: false,
+      // Phone and iPad type through the composer. The helper must not take keys.
+      disableStdin: scrollWithoutKeyboardRef.current,
       // The default handler confirms, then calls window.open. The webview
       // blocks that, so the click does nothing. http(s) only; other schemes
       // are dropped here and rejected again in open_http_url.
@@ -188,14 +220,33 @@ export default function XtermView({
     term.open(host);
     termRef.current = term;
     terms.set(paneId, term);
+    if (term.textarea) quietTerminalHelper(term.textarea, scrollWithoutKeyboardRef.current);
+
+    const dismissSoftwareKeyboard = () => {
+      const helper = term.textarea;
+      if (helper) quietTerminalHelper(helper, true);
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" || active.tagName === "TEXTAREA")
+      ) {
+        active.blur();
+      }
+      helper?.blur();
+    };
 
     let unmounted = false;
     let applyingSeed = false;
+    let userPanned = false;
+    let filterRest: Uint8Array<ArrayBufferLike> = new Uint8Array();
 
     const showCaret = (target: Terminal, forceBottom: boolean) => {
       const buf = target.buffer.active;
-      if (!target.hasSelection() && (forceBottom || viewportAtBottom(buf.viewportY, buf.baseY))) {
+      const pinned = userPanned && scrollWithoutKeyboardRef.current;
+      if (!target.hasSelection() && !pinned && (forceBottom || viewportAtBottom(buf.viewportY, buf.baseY))) {
         target.scrollToBottom();
+        const screen = target.element?.querySelector(".xterm-screen");
+        if (screen instanceof HTMLElement) screen.style.transform = "";
       }
       target.refresh(0, Math.max(0, target.rows - 1));
     };
@@ -264,8 +315,17 @@ export default function XtermView({
       }
     });
 
+    let syncPhoneHistory = () => {};
+    // True until the finger leaves the live screen. Output must not jump a reader.
+    let phoneStick = true;
+    let phoneAdjusting = false;
+
     const renderDisp = term.onRender(() => {
       if (applyingSeed) return;
+      if (scrollWithoutKeyboardRef.current) {
+        syncPhoneHistory();
+        return;
+      }
       const buf = term.buffer.active;
       if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
         scrollCursorIntoView(buf.cursorY, buf.cursorX);
@@ -289,21 +349,63 @@ export default function XtermView({
     };
     restoreMouseRef.current = restoreMouse;
 
-    const paintSeed = (bytes: Uint8Array) => {
-      seedState.seeded = true;
+    const writeLive = (bytes: Uint8Array<ArrayBufferLike>) => {
+      let payload: Uint8Array<ArrayBufferLike> = bytes;
+      if (scrollWithoutKeyboardRef.current) {
+        const merged = new Uint8Array(filterRest.length + bytes.length);
+        merged.set(filterRest, 0);
+        merged.set(bytes, filterRest.length);
+        const filtered = filterLocalScrollback(merged);
+        filterRest = filtered.rest;
+        payload = filtered.out;
+      }
+      const after = () => {
+        if (unmounted || applyingSeed) return;
+        // The phone page scrolls its own transcript. xterm stays on the live
+        // screen, so its viewport being at the bottom must not yank that page.
+        if (scrollWithoutKeyboardRef.current) {
+          syncPhoneHistory();
+          return;
+        }
+        const buf = term.buffer.active;
+        if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
+          userPanned = false;
+          scrollCursorIntoView(buf.cursorY, buf.cursorX);
+        }
+      };
+      if (payload.length === 0) {
+        after();
+        return;
+      }
+      term.write(payload, after);
+    };
+
+    let paintGen = 0;
+    let cachedHistory: string[] | null = null;
+    let historyPending = false;
+    let latestSeed: Uint8Array | null = null;
+    const paintNow = (payload: Uint8Array) => {
+      const gen = ++paintGen;
       applyPaneSeed(
         term,
-        bytes,
+        payload,
         () => {
+          if (gen !== paintGen) return;
           applyingSeed = false;
           host.style.visibility = "";
           seedApplied = true;
           if (unmounted) return;
           doFitRef.current();
-          term.scrollToBottom();
-          syncTmuxCursor(true);
+          if (!(userPanned && scrollWithoutKeyboardRef.current)) {
+            term.scrollToBottom();
+            const screen = term.element?.querySelector(".xterm-screen");
+            if (screen instanceof HTMLElement) screen.style.transform = "";
+            syncTmuxCursor(true);
+          }
           restoreMouse();
-          if (focusedRef.current) {
+          historyRef.current?.replaceChildren();
+          syncPhoneHistory();
+          if (focusedRef.current && terminalTouchPolicy(scrollWithoutKeyboardRef.current).focusHelper) {
             term.focus();
           }
           requestAnimationFrame(() => {
@@ -318,6 +420,31 @@ export default function XtermView({
           host.style.visibility = "hidden";
         },
       );
+    };
+    const paintSeed = (bytes: Uint8Array) => {
+      seedState.seeded = true;
+      latestSeed = bytes;
+      const source = historySourceRef.current;
+      const wantTranscript =
+        scrollWithoutKeyboardRef.current &&
+        source !== undefined &&
+        commandHasTranscript(source.command);
+      const extra = cachedHistory && cachedHistory.length > 0 ? cachedHistory : [];
+      paintNow(extra.length > 0 ? withExtraHistory(bytes, extra) : bytes);
+      if (!wantTranscript || !source || cachedHistory || historyPending) return;
+      historyPending = true;
+      void paneArtifacts(source.command, source.cwd, source.title, source.pid)
+        .then((feed) => {
+          historyPending = false;
+          const lines = independentHistoryLines(feed.entries);
+          cachedHistory = lines;
+          if (lines.length === 0 || userPanned || unmounted || !latestSeed) return;
+          paintNow(withExtraHistory(latestSeed, lines));
+        })
+        .catch(() => {
+          historyPending = false;
+          cachedHistory = [];
+        });
     };
     const dataDisp = term.onData((raw) => {
       // tmux already answered the query that produced this. A second reply
@@ -360,7 +487,77 @@ export default function XtermView({
     let touchScrollY = 0;
     let touchAccumPx = 0;
     let touchMulti = false;
+    syncPhoneHistory = () => {
+      if (applyingSeed || unmounted || !scrollWithoutKeyboardRef.current) return;
+      const scroller = scrollRef.current;
+      const list = historyRef.current;
+      const live = phoneLiveRef.current;
+      if (!scroller || !list || !live) return;
+      const buf = term.buffer.active;
+      const count = buf.baseY;
+      const rowH = Math.max(1, cellHeight(term));
+      // Readable size. Lines stay one row wide and the page scrolls sideways.
+      const fontPx = Math.max(16, fontSizeRef.current);
+      scroller.style.setProperty("--phone-font-size", `${fontPx}px`);
+      const before = list.childElementCount;
+      const heightBefore = scroller.scrollHeight;
+      if (count < before) list.replaceChildren();
+      for (let i = list.childElementCount; i < count; i += 1) {
+        const row = document.createElement("div");
+        row.className = "phone-history-line";
+        row.textContent = buf.getLine(i)?.translateToString(true) ?? "";
+        list.appendChild(row);
+      }
+      const lineAt = (index: number) => buf.getLine(index)?.translateToString(true) ?? "";
+      const visible = Math.max(0, Math.min(term.rows, buf.length - count));
+      let last = visible - 1;
+      while (last > 0 && lineAt(count + last) === "") last -= 1;
+      const shown = last + 1;
+      if (live.childElementCount !== shown) {
+        live.replaceChildren();
+        for (let r = 0; r < shown; r += 1) {
+          const row = document.createElement("div");
+          row.className = "phone-history-line";
+          live.appendChild(row);
+        }
+      }
+      for (let r = 0; r < shown; r += 1) {
+        const text = lineAt(count + r);
+        const node = live.children[r];
+        if (node && node.textContent !== text) node.textContent = text;
+      }
+      const grew = list.childElementCount !== before || scroller.scrollHeight > heightBefore + 1;
+      if (!phoneStick) {
+        userPanned = scroller.scrollHeight > scroller.clientHeight + rowH;
+        return;
+      }
+      userPanned = false;
+      // Pin only when the transcript grows or the page has never left the top.
+      // Writing scrollTop on every frame fights the finger.
+      if (!grew && scroller.scrollTop !== 0) return;
+      phoneAdjusting = true;
+      scroller.scrollTop = scroller.scrollHeight;
+      phoneAdjusting = false;
+    };
+    const onPhoneScroll = () => {
+      if (phoneAdjusting || !scrollWithoutKeyboardRef.current) return;
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      const follows = phoneScrollFollowsBottom(
+        scroller.scrollTop,
+        scroller.clientHeight,
+        scroller.scrollHeight,
+      );
+      phoneStick = follows;
+      const rowH = Math.max(1, cellHeight(term));
+      userPanned = !follows && scroller.scrollHeight > scroller.clientHeight + rowH;
+    };
+    scrollRef.current?.addEventListener("scroll", onPhoneScroll, { passive: true });
     const onTouchStart = (ev: TouchEvent) => {
+      // Phone drags are handled on the transcript scroller. This host listener
+      // must not take the touch: xterm would snap it to a row.
+      const policy = terminalTouchPolicy(scrollWithoutKeyboardRef.current);
+      if (policy.dismissKeyboard) return;
       if (ev.touches.length !== 1) {
         touchMulti = true;
         return;
@@ -371,13 +568,21 @@ export default function XtermView({
       touchAccumPx = 0;
       onFocusRef.current(paneId);
       void focusPane(paneId);
-      term.focus();
-      requestAnimationFrame(() => {
-        if (!unmounted && termRef.current) {
-          const buf = termRef.current.buffer.active;
-          scrollCursorIntoView(buf.cursorY, buf.cursorX);
-        }
-      });
+      if (policy.focusHelper) {
+        term.focus();
+      }
+      if (policy.revealCursor) {
+        requestAnimationFrame(() => {
+          if (!unmounted && termRef.current) {
+            const buf = termRef.current.buffer.active;
+            scrollCursorIntoView(buf.cursorY, buf.cursorX);
+          }
+        });
+      }
+    };
+    const onTouchEnd = () => {
+      if (!terminalTouchPolicy(scrollWithoutKeyboardRef.current).dismissKeyboard) return;
+      dismissSoftwareKeyboard();
     };
     const onTouchMove = (ev: TouchEvent) => {
       if (touchMulti || ev.touches.length !== 1) return;
@@ -385,8 +590,11 @@ export default function XtermView({
       const curY = ev.touches[0].clientY;
       const deltaX = curX - touchScrollX;
       const deltaY = curY - touchScrollY;
+      const previousY = touchScrollY;
       touchScrollX = curX;
       touchScrollY = curY;
+
+      if (terminalTouchPolicy(scrollWithoutKeyboardRef.current).dismissKeyboard) return;
 
       const host = hostRef.current;
       const canScrollHostY = host && host.scrollHeight > host.clientHeight;
@@ -411,7 +619,7 @@ export default function XtermView({
       }
 
       const rowH = Math.max(12, cellHeight(term));
-      touchAccumPx += touchDragDelta(touchScrollY, curY);
+      touchAccumPx += touchDragDelta(previousY, curY);
       if (Math.abs(touchAccumPx) < rowH * 0.75) return;
       const fakeWheel = {
         deltaY: touchAccumPx,
@@ -447,8 +655,126 @@ export default function XtermView({
         ev.preventDefault();
       }
     };
-    host.addEventListener("touchstart", onTouchStart, { passive: true });
-    host.addEventListener("touchmove", onTouchMove, { passive: false });
+    const onHelperFocus = (ev: FocusEvent) => {
+      if (!terminalTouchPolicy(scrollWithoutKeyboardRef.current).dismissKeyboard) return;
+      const node = ev.target;
+      if (!(node instanceof HTMLTextAreaElement) || !node.classList.contains("xterm-helper-textarea")) {
+        return;
+      }
+      // xterm focuses this on mousedown, which iOS turns into the software keyboard.
+      quietTerminalHelper(node, true);
+      node.blur();
+    };
+    const onMouseDownCapture = (ev: MouseEvent) => {
+      if (!terminalTouchPolicy(scrollWithoutKeyboardRef.current).dismissKeyboard) return;
+      // xterm focuses its helper from the bubble mousedown. Stop that here,
+      // or iOS opens the keyboard on a scroll.
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    // One pixel of finger travel moves one pixel of the transcript. The live
+    // screen is in that same scroller, so the page follows the finger.
+    let phoneDrag: {
+      startX: number;
+      startY: number;
+      startLeft: number;
+      startTop: number;
+      samples: { x: number; y: number; t: number }[];
+    } | null = null;
+    let coastRaf = 0;
+    const stopCoast = () => {
+      if (coastRaf) cancelAnimationFrame(coastRaf);
+      coastRaf = 0;
+    };
+    const onPhoneTouchStart = (ev: TouchEvent) => {
+      if (!terminalTouchPolicy(scrollWithoutKeyboardRef.current).dismissKeyboard) return;
+      if (ev.touches.length !== 1) {
+        phoneDrag = null;
+        return;
+      }
+      stopCoast();
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      const now = performance.now();
+      phoneDrag = {
+        startX: ev.touches[0].clientX,
+        startY: ev.touches[0].clientY,
+        startLeft: scroller.scrollLeft,
+        startTop: scroller.scrollTop,
+        samples: [{ x: ev.touches[0].clientX, y: ev.touches[0].clientY, t: now }],
+      };
+    };
+    const onPhoneTouchMove = (ev: TouchEvent) => {
+      if (!terminalTouchPolicy(scrollWithoutKeyboardRef.current).dismissKeyboard) return;
+      if (!phoneDrag || ev.touches.length !== 1) return;
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      const x = ev.touches[0].clientX;
+      const y = ev.touches[0].clientY;
+      phoneDrag.samples.push({ x, y, t: performance.now() });
+      if (phoneDrag.samples.length > 8) phoneDrag.samples.shift();
+      const maxY = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      const maxX = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+      scroller.scrollTop = fingerScrollTop(phoneDrag.startTop, phoneDrag.startY, y, maxY);
+      scroller.scrollLeft = fingerScrollTop(phoneDrag.startLeft, phoneDrag.startX, x, maxX);
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    const onPhoneTouchEnd = () => {
+      if (!terminalTouchPolicy(scrollWithoutKeyboardRef.current).dismissKeyboard) return;
+      const drag = phoneDrag;
+      phoneDrag = null;
+      if (!drag) return;
+      let velocityY = touchScrollVelocity(drag.samples);
+      let velocityX = touchScrollVelocity(drag.samples.map((sample) => ({ y: sample.x, t: sample.t })));
+      if (Math.abs(velocityY) < SCROLL_COAST_MIN) velocityY = 0;
+      if (Math.abs(velocityX) < SCROLL_COAST_MIN) velocityX = 0;
+      if (velocityY === 0 && velocityX === 0) return;
+      let last = performance.now();
+      const step = (now: number) => {
+        coastRaf = 0;
+        if (phoneDrag || unmounted) return;
+        const scroller = scrollRef.current;
+        if (!scroller) return;
+        const dt = now - last;
+        last = now;
+        const nextY = inertialScrollStep(velocityY, dt);
+        const nextX = inertialScrollStep(velocityX, dt);
+        velocityY = nextY.velocity;
+        velocityX = nextX.velocity;
+        let moved = false;
+        if (nextY.deltaPx !== 0 && velocityY !== 0) {
+          const maxY = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+          const top = clampScrollTop(scroller.scrollTop + nextY.deltaPx, maxY);
+          if (top !== scroller.scrollTop) {
+            scroller.scrollTop = top;
+            moved = true;
+          }
+        }
+        if (nextX.deltaPx !== 0 && velocityX !== 0) {
+          const maxX = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+          const left = clampScrollTop(scroller.scrollLeft + nextX.deltaPx, maxX);
+          if (left !== scroller.scrollLeft) {
+            scroller.scrollLeft = left;
+            moved = true;
+          }
+        }
+        if (!moved) return;
+        coastRaf = requestAnimationFrame(step);
+      };
+      coastRaf = requestAnimationFrame(step);
+    };
+    const scrollerEl = scrollRef.current;
+    scrollerEl?.addEventListener("touchstart", onPhoneTouchStart, { capture: true, passive: false });
+    scrollerEl?.addEventListener("touchmove", onPhoneTouchMove, { capture: true, passive: false });
+    scrollerEl?.addEventListener("touchend", onPhoneTouchEnd);
+    scrollerEl?.addEventListener("touchcancel", onPhoneTouchEnd);
+    host.addEventListener("mousedown", onMouseDownCapture, true);
+    host.addEventListener("touchstart", onTouchStart, { capture: true, passive: false });
+    host.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
+    host.addEventListener("touchend", onTouchEnd);
+    host.addEventListener("touchcancel", onTouchEnd);
+    host.addEventListener("focusin", onHelperFocus, true);
 
     // Page Up/Down while a draft is showing. A trackpad emits a wheel event
     // per frame; one page per event would fly through the transcript.
@@ -539,7 +865,9 @@ export default function XtermView({
       downY = ev.clientY;
       onFocusRef.current(paneId);
       void focusPane(paneId);
-      term.focus();
+      if (terminalTouchPolicy(scrollWithoutKeyboardRef.current).focusHelper) {
+        term.focus();
+      }
     };
     // xterm activates a link on mouseup of the screen element. Refreshing on
     // mousedown clears the hovered link first, so the click never opens.
@@ -567,6 +895,7 @@ export default function XtermView({
 
     const scheduleReseed = () => {
       if (!subscribed || unmounted) return;
+      if (userPanned && scrollWithoutKeyboardRef.current) return;
       if (cursorTimer) window.clearTimeout(cursorTimer);
       cursorTimer = window.setTimeout(() => {
         if (!unmounted) syncTmuxCursor();
@@ -577,16 +906,7 @@ export default function XtermView({
         seedState.seeded = false;
         void bindPaneOutput(paneId, seedState, {
           seed: paintSeed,
-          write: (bytes) => {
-            term.write(bytes, () => {
-              if (!unmounted && !applyingSeed) {
-                const buf = term.buffer.active;
-                if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
-                  scrollCursorIntoView(buf.cursorY, buf.cursorX);
-                }
-              }
-            });
-          },
+          write: writeLive,
         });
       }, 150);
     };
@@ -594,21 +914,18 @@ export default function XtermView({
 
     const doFit = () => {
       if (applyingSeed || unmounted) return;
-      if (paneColsRef.current && paneRowsRef.current) {
-        try {
+      let logicalRows = 0;
+      try {
+        if (paneColsRef.current && paneRowsRef.current) {
           term.resize(paneColsRef.current, paneRowsRef.current);
-          reportCell(term, onCellSizeRef.current);
-        } catch {
-          return;
-        }
-      } else {
-        if (host.clientWidth < 2 || host.clientHeight < 2) return;
-        try {
+        } else {
+          if (host.clientWidth < 2 || host.clientHeight < 2) return;
           fit.fit();
-          reportCell(term, onCellSizeRef.current);
-        } catch {
-          return;
         }
+        logicalRows = term.rows;
+        reportCell(term, onCellSizeRef.current, logicalRows);
+      } catch {
+        return;
       }
       redrawCaret();
       if (term.cols === lastCols && term.rows === lastRows) return;
@@ -624,16 +941,7 @@ export default function XtermView({
         if (unmounted) return;
         void bindPaneOutput(paneId, seedState, {
           seed: paintSeed,
-          write: (bytes) => {
-            term.write(bytes, () => {
-              if (!unmounted && !applyingSeed) {
-                const buf = term.buffer.active;
-                if (!term.hasSelection() && viewportAtBottom(buf.viewportY, buf.baseY)) {
-                  scrollCursorIntoView(buf.cursorY, buf.cursorX);
-                }
-              }
-            });
-          },
+          write: writeLive,
         });
       }, 0);
     };
@@ -643,6 +951,7 @@ export default function XtermView({
     const later = window.setTimeout(doFit, 50);
 
     const ro = new ResizeObserver(() => {
+      if (scrollWithoutKeyboardRef.current) syncPhoneHistory();
       doFit();
       if (!unmounted && termRef.current) {
         const buf = termRef.current.buffer.active;
@@ -652,9 +961,16 @@ export default function XtermView({
       }
     });
     ro.observe(host);
+    if (scrollRef.current) ro.observe(scrollRef.current);
 
     return () => {
       unmounted = true;
+      stopCoast();
+      scrollRef.current?.removeEventListener("scroll", onPhoneScroll);
+      scrollRef.current?.removeEventListener("touchstart", onPhoneTouchStart, true);
+      scrollRef.current?.removeEventListener("touchmove", onPhoneTouchMove, true);
+      scrollRef.current?.removeEventListener("touchend", onPhoneTouchEnd);
+      scrollRef.current?.removeEventListener("touchcancel", onPhoneTouchEnd);
       doFitRef.current = () => {};
       scheduleReseedRef.current = () => {};
       redrawCaretRef.current = () => {};
@@ -665,11 +981,15 @@ export default function XtermView({
       if (cursorTimer) window.clearTimeout(cursorTimer);
       if (reseedTimer) window.clearTimeout(reseedTimer);
       window.clearTimeout(later);
+      host.removeEventListener("mousedown", onMouseDownCapture, true);
       host.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("mouseup", onMouseUp);
       host.removeEventListener("paste", onPaste, true);
-      host.removeEventListener("touchstart", onTouchStart);
-      host.removeEventListener("touchmove", onTouchMove);
+      host.removeEventListener("touchstart", onTouchStart, true);
+      host.removeEventListener("touchmove", onTouchMove, true);
+      host.removeEventListener("touchend", onTouchEnd);
+      host.removeEventListener("touchcancel", onTouchEnd);
+      host.removeEventListener("focusin", onHelperFocus, true);
       ro.disconnect();
       cursorDisp.dispose();
       renderDisp.dispose();
@@ -726,7 +1046,15 @@ export default function XtermView({
 
   useEffect(() => {
     if (focused && !findOpen) {
-      termRef.current?.focus();
+      const term = termRef.current;
+      const policy = terminalTouchPolicy(scrollWithoutKeyboardRef.current);
+      if (policy.focusHelper) {
+        term?.focus();
+      } else if (term?.textarea) {
+        quietTerminalHelper(term.textarea, true);
+        term.textarea.blur();
+      }
+      if (!policy.revealCursor) return;
       redrawCaretRef.current(true);
       syncTmuxCursorRef.current(true);
       requestAnimationFrame(() => {
@@ -737,6 +1065,15 @@ export default function XtermView({
       });
     }
   }, [focused, findOpen]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    const area = term?.textarea;
+    if (!term || !area) return;
+    quietTerminalHelper(area, scrollWithoutKeyboard);
+    term.options.disableStdin = scrollWithoutKeyboard;
+    if (scrollWithoutKeyboard) area.blur();
+  }, [scrollWithoutKeyboard]);
 
   function reveal(backward: boolean) {
     const term = termRef.current;
@@ -768,7 +1105,9 @@ export default function XtermView({
 
   function closeFind() {
     setFindOpen(false);
-    termRef.current?.focus();
+    if (terminalTouchPolicy(scrollWithoutKeyboardRef.current).focusHelper) {
+      termRef.current?.focus();
+    }
   }
 
   useEffect(() => {
@@ -777,7 +1116,22 @@ export default function XtermView({
 
   return (
     <>
-      <div ref={hostRef} className="xterm-host" />
+      <div
+        ref={scrollRef}
+        className={scrollWithoutKeyboard ? "phone-scroll" : "xterm-slot"}
+      >
+        {scrollWithoutKeyboard ? (
+          <>
+            <div className="phone-transcript">
+              <div ref={historyRef} className="phone-history" />
+              <div ref={phoneLiveRef} className="phone-live" />
+            </div>
+            <div ref={hostRef} className="xterm-host phone-xterm-source" aria-hidden="true" />
+          </>
+        ) : (
+          <div ref={hostRef} className="xterm-host" />
+        )}
+      </div>
       {findOpen && (
         <form
           className="pane-find"
@@ -909,6 +1263,7 @@ function openTerminalLink(uri: string) {
 function reportCell(
   term: Terminal,
   onCellSize?: (w: number, h: number, cols: number, rows: number) => void,
+  rows = term.rows,
 ) {
   if (!onCellSize) return;
   const core = term as unknown as {
@@ -918,6 +1273,6 @@ function reportCell(
   };
   const cell = core._core?._renderService?.dimensions?.css?.cell;
   if (cell && cell.width > 0 && cell.height > 0) {
-    onCellSize(cell.width, cell.height, term.cols, term.rows);
+    onCellSize(cell.width, cell.height, term.cols, rows);
   }
 }

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 
-import { isIOSDevice } from "../transport";
 import {
   readPostureOverride,
   resolvePosture,
+  usesMobileShell,
   writePostureOverride,
   type FormFactorPosture,
   type SegmentRect,
@@ -31,11 +31,10 @@ function readSegments(): SegmentRect[] | undefined {
 function readLive(): ViewportGeometry {
   const override = readPostureOverride(window.localStorage);
   const vv = window.visualViewport;
-  const touch =
-    navigator.maxTouchPoints > 0 ||
-    "ontouchstart" in window ||
-    window.matchMedia("(pointer: coarse)").matches ||
-    isIOSDevice();
+  const touch = usesMobileShell({
+    coarsePointer: window.matchMedia("(pointer: coarse)").matches,
+    userAgent: navigator.userAgent,
+  });
   const postureType = (navigator as Navigator & { devicePosture?: { type?: string } }).devicePosture
     ?.type;
   return resolvePosture({

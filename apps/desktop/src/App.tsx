@@ -13,6 +13,7 @@ import {
   type HubOpenCommit,
 } from "./ios/posture";
 import { pinchFontSize } from "./ios/touchKeys";
+import { terminalScrollsWithoutKeyboard } from "./ios/touchKeyboard";
 import { useDevicePosture } from "./ios/useDevicePosture";
 import MobileTopBar, { type MobileCompanion } from "./ios/MobileTopBar";
 import MobileAgentHub, { type HubAgent } from "./ios/MobileAgentHub";
@@ -106,6 +107,7 @@ import {
 import TiledWindow, {
   clientSizeFromFits,
   fallbackLayout,
+  paneHistorySources,
   paneInputModes,
 } from "./terminal/TiledWindow";
 import { canInsertRecipe } from "./terminal/recipes";
@@ -1417,7 +1419,7 @@ export default function App() {
       await paneWrite(pane.id, Array.from(new TextEncoder().encode(text)));
       setDialog(null);
       showToast("Inserted. Press Enter to run it.");
-      getTerm(pane.id)?.focus();
+      if (!mobile) getTerm(pane.id)?.focus();
     } catch (err) {
       showToast(String(err));
     }
@@ -1476,7 +1478,7 @@ export default function App() {
     setZoomedPaneId(commit.zoom.zoomedPaneId);
     if (paneId) {
       void focusPane(paneId);
-      getTerm(paneId)?.focus();
+      if (!mobile) getTerm(paneId)?.focus();
     }
     if (mobile) setAgentHubOpen(false);
   }
@@ -1637,7 +1639,9 @@ export default function App() {
                     dropTarget={dropPane}
                     fontSize={fontSize}
                     paneModes={paneInputModes(snap)}
+                    historySources={paneHistorySources(snap)}
                     onFocus={focusTerminalPane}
+                    scrollWithoutKeyboard={terminalScrollsWithoutKeyboard(posture)}
                     fixedSize={shouldFixTerminalSize(
                       isTauriRuntime(),
                       Boolean(status?.is_headless),

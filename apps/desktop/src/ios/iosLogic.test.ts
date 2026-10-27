@@ -16,6 +16,7 @@ import {
   resolvePosture,
   paneStateAfterHubOpen,
   togglePaneZoom,
+  usesMobileShell,
   writePostureOverride,
   zoomAfterPaneOpen,
   type HeaderPointerState,
@@ -57,6 +58,19 @@ import {
 } from "../transport.ts";
 import { phoneMapFillsSegment } from "../chrome/phoneHudLayout.ts";
 import { decideWheel } from "../terminal/promptScroll.ts";
+import {
+  clampScrollTop,
+  fingerScrollTop,
+  inertialScrollStep,
+  localScrollLines,
+  phoneScrollFollowsBottom,
+  placementFromScrollPx,
+  quietTerminalHelper,
+  scrollPxFromPlacement,
+  touchScrollVelocity,
+  terminalScrollsWithoutKeyboard,
+  terminalTouchPolicy,
+} from "./touchKeyboard.ts";
 import {
   isDoubleTap,
   milestoneHitRadius,
@@ -318,11 +332,11 @@ function sizingBag(): SizingStorage {
   };
 }
 
-test("fit-phone is the default and a stored mirror choice stays", () => {
-  assert.equal(defaultSizingMode(false), "fit-phone");
+test("fit-phone is the headless default and a stored choice stays", () => {
+  assert.equal(defaultSizingMode(false), "mirror");
   assert.equal(defaultSizingMode(true), "fit-phone");
   const storage = sizingBag();
-  assert.equal(readSizingMode(storage, false), "fit-phone");
+  assert.equal(readSizingMode(storage, false), "mirror");
   assert.equal(readSizingMode(storage, true), "fit-phone");
   writeSizingMode(storage, "mirror");
   assert.equal(readSizingMode(storage, false), "mirror");
@@ -340,6 +354,30 @@ test("fit-phone is the default and a stored mirror choice stays", () => {
   assert.equal(shouldFixTerminalSize(false, true, "fit-phone"), false);
 });
 
+test("a Mac trackpad stays on the desktop shell", () => {
+  assert.equal(
+    usesMobileShell({
+      coarsePointer: false,
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+    }),
+    false,
+  );
+  assert.equal(
+    usesMobileShell({
+      coarsePointer: true,
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+    }),
+    true,
+  );
+  assert.equal(
+    usesMobileShell({
+      coarsePointer: false,
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+    }),
+    true,
+  );
+});
+
 test("isMobilePosture is phone and ipad only", () => {
   assert.equal(isMobilePosture("phone-compact"), true);
   assert.equal(isMobilePosture("phone-landscape"), true);
@@ -347,6 +385,135 @@ test("isMobilePosture is phone and ipad only", () => {
   assert.equal(isMobilePosture("desktop"), false);
   assert.equal(isMobilePosture("duo-book"), false);
   assert.equal(isMobilePosture("duo-clamshell"), false);
+});
+
+test("a finger on the phone or iPad scrolls and does not open the keyboard", () => {
+  for (const posture of ["phone-compact", "phone-landscape", "ipad-pro"] as const) {
+    assert.equal(terminalScrollsWithoutKeyboard(posture), true);
+  }
+  assert.equal(terminalScrollsWithoutKeyboard("desktop"), false);
+  assert.equal(terminalScrollsWithoutKeyboard("duo-book"), false);
+  assert.deepEqual(terminalTouchPolicy(true), {
+    focusHelper: false,
+    dismissKeyboard: true,
+    revealCursor: false,
+  });
+  assert.deepEqual(terminalTouchPolicy(false), {
+    focusHelper: true,
+    dismissKeyboard: false,
+    revealCursor: true,
+  });
+
+  const area = {
+    attrs: new Map<string, string>(),
+    inputMode: "text",
+    readOnly: false,
+    disabled: false,
+    tabIndex: 0,
+    setAttribute(name: string, value: string) {
+      this.attrs.set(name, value);
+    },
+    removeAttribute(name: string) {
+      this.attrs.delete(name);
+    },
+  };
+  quietTerminalHelper(area, true);
+  assert.equal(area.inputMode, "none");
+  assert.equal(area.readOnly, true);
+  assert.equal(area.disabled, true);
+  assert.equal(area.tabIndex, -1);
+  assert.equal(area.attrs.get("disabled"), "true");
+  quietTerminalHelper(area, false);
+  assert.equal(area.inputMode, "");
+  assert.equal(area.readOnly, false);
+  assert.equal(area.disabled, false);
+  assert.equal(area.tabIndex, 0);
+  assert.equal(area.attrs.has("readonly"), false);
+
+  assert.equal(localScrollLines(0, 20), 0);
+  assert.equal(localScrollLines(-48, 20), -2);
+  assert.equal(localScrollLines(30, 20), 2);
+  assert.equal(localScrollLines(-8, 20), -1);
+  assert.equal(clampScrollTop(-5, 100), 0);
+  assert.equal(clampScrollTop(40, 100), 40);
+  assert.equal(clampScrollTop(140, 100), 100);
+  assert.equal(fingerScrollTop(200, 100, 140, 1000), 160);
+  assert.equal(fingerScrollTop(200, 100, 60, 1000), 240);
+  assert.equal(fingerScrollTop(10, 0, 40, 1000), 0);
+  assert.deepEqual(placementFromScrollPx(2000, 20, 100), { ydisp: 100, translateY: 0 });
+  assert.deepEqual(placementFromScrollPx(1990, 20, 100), { ydisp: 99, translateY: -10 });
+  assert.deepEqual(placementFromScrollPx(1980, 20, 100), { ydisp: 99, translateY: 0 });
+  assert.deepEqual(placementFromScrollPx(0, 20, 100), { ydisp: 0, translateY: 0 });
+  const partial = placementFromScrollPx(1990, 20, 100);
+  assert.equal(scrollPxFromPlacement(partial.ydisp, partial.translateY, 20, 100), 1990);
+  assert.equal(phoneScrollFollowsBottom(0, 0, 0), true);
+  assert.equal(phoneScrollFollowsBottom(0, 100, 500), false);
+  assert.equal(phoneScrollFollowsBottom(400, 100, 500), true);
+  assert.equal(phoneScrollFollowsBottom(392, 100, 500, 8), true);
+  assert.equal(phoneScrollFollowsBottom(380, 100, 500, 8), false);
+  assert.equal(touchScrollVelocity([]), 0);
+  assert.equal(touchScrollVelocity([{ y: 80, t: 0 }, { y: 40, t: 40 }]), 1);
+  assert.equal(touchScrollVelocity([{ y: 40, t: 0 }, { y: 80, t: 40 }]), -1);
+  const coast = inertialScrollStep(1, 16);
+  assert.ok(coast.deltaPx > 15 && coast.deltaPx < 16);
+  assert.ok(coast.velocity > 0 && coast.velocity < 1);
+  assert.deepEqual(inertialScrollStep(0, 16), { deltaPx: 0, velocity: 0 });
+  const up = inertialScrollStep(-2, 16);
+  assert.ok(up.deltaPx < 0);
+  assert.ok(up.velocity < 0 && up.velocity > -2);
+
+  const dock = readFileSync(new URL("./MobileInputDock.tsx", import.meta.url), "utf8");
+  const send = dock.slice(dock.indexOf("function sendDraft"), dock.indexOf("function sendOption"));
+  assert.match(send, /el\.blur\(\)/);
+  assert.equal(send.includes(".focus()"), false);
+
+  const view = readFileSync(new URL("../terminal/XtermView.tsx", import.meta.url), "utf8");
+  const touch = view.slice(view.indexOf("const onTouchStart"), view.indexOf("const onTouchEnd"));
+  assert.match(touch, /if \(policy\.focusHelper\)/);
+  assert.match(touch, /if \(policy\.revealCursor\)/);
+  assert.match(touch, /if \(policy\.dismissKeyboard\) return/);
+  assert.equal(touch.includes("stopPropagation"), false);
+  assert.equal(touch.includes("preventDefault"), false);
+  assert.equal(touch.includes("dismissSoftwareKeyboard"), false);
+  assert.match(view, /touchstart", onTouchStart, \{ capture: true, passive: false \}/);
+  assert.match(view, /disableStdin: scrollWithoutKeyboardRef\.current/);
+  const move = view.slice(view.indexOf("const onTouchMove"), view.indexOf("const onHelperFocus"));
+  const mobileMove = move.slice(0, move.indexOf("const canScrollHostY"));
+  assert.match(mobileMove, /if \(terminalTouchPolicy\(scrollWithoutKeyboardRef\.current\)\.dismissKeyboard\) return/);
+  assert.equal(mobileMove.includes("stopPropagation"), false);
+  assert.equal(mobileMove.includes("preventDefault"), false);
+  assert.equal(mobileMove.includes("scrollLines"), false);
+  assert.equal(mobileMove.includes("paneWrite"), false);
+  const phoneMove = view.slice(view.indexOf("const onPhoneTouchMove"), view.indexOf("const onPhoneTouchEnd"));
+  assert.match(phoneMove, /fingerScrollTop/);
+  assert.match(phoneMove, /scrollLeft/);
+  assert.match(phoneMove, /ev\.preventDefault\(\)/);
+  assert.equal(phoneMove.includes("scrollLines"), false);
+  assert.equal(phoneMove.includes("paneWrite"), false);
+  assert.match(view, /className="phone-history"/);
+  assert.match(view, /className="phone-live"/);
+  assert.equal(view.includes("fitWidthScale"), false);
+  assert.match(view, /phoneScrollFollowsBottom/);
+  assert.match(view, /filterLocalScrollback/);
+  assert.match(view, /withExtraHistory/);
+  assert.match(view, /independentHistoryLines/);
+  assert.match(view, /if \(!policy\.revealCursor\) return/);
+  assert.match(view, /mousedown", onMouseDownCapture, true/);
+  const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+  const phoneScroll = css.slice(css.indexOf(".phone-scroll {"), css.indexOf(".phone-transcript"));
+  assert.match(phoneScroll, /position:\s*absolute/);
+  assert.match(phoneScroll, /touch-action:\s*none/);
+  assert.match(phoneScroll, /overflow-x:\s*auto/);
+  const phoneHost = css.slice(css.indexOf(".phone-scroll > .phone-xterm-source"), css.indexOf(".phone-scroll .xterm,"));
+  assert.match(phoneHost, /opacity:\s*0/);
+  assert.match(phoneHost, /pointer-events:\s*none/);
+  const phoneLine = css.slice(css.indexOf(".phone-history-line {"), css.indexOf(".app.posture-phone-compact .xterm-host"));
+  assert.match(phoneLine, /white-space:\s*pre;/);
+  assert.equal(phoneLine.includes("pre-wrap"), false);
+  assert.match(phoneLine, /font-size:\s*var\(--phone-font-size,\s*16px\)/);
+  assert.match(phoneLine, /text-size-adjust:\s*100%/);
+  const app = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+  assert.match(app, /scrollWithoutKeyboard=\{terminalScrollsWithoutKeyboard\(posture\)\}/);
 });
 
 test("header swipe steps one target and wraps past 48px", () => {

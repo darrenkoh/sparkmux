@@ -9,9 +9,13 @@ export interface SizingStorage {
   setItem(key: string, value: string): void;
 }
 
-/** Phones and iPads open fitted to the viewport. A stored "mirror" choice still wins in readSizingMode. */
-export function defaultSizingMode(_isHeadless: boolean): MobileSizingMode {
-  return "fit-phone";
+/**
+ * A headless server fits the phone. While the Mac app is open, the phone
+ * mirrors that grid until Fit Device is chosen, so the desktop session
+ * does not collapse to the phone size.
+ */
+export function defaultSizingMode(isHeadless: boolean): MobileSizingMode {
+  return isHeadless ? "fit-phone" : "mirror";
 }
 
 export function readSizingMode(storage: SizingStorage, isHeadless: boolean): MobileSizingMode {

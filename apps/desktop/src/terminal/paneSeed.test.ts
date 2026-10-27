@@ -3,7 +3,7 @@ import { test } from "node:test";
 import xtermPkg from "@xterm/xterm";
 const { Terminal } = xtermPkg;
 
-import { applyPaneSeed, parsePaneSeed } from "./paneSeed.ts";
+import { applyPaneSeed, parsePaneSeed, withExtraHistory } from "./paneSeed.ts";
 
 function seedBytes(history: string[], visible: string): Uint8Array {
   if (history.length === 0) return new TextEncoder().encode(visible);
@@ -26,6 +26,14 @@ test("parsePaneSeed splits a counted history prefix", () => {
   const parsed = parsePaneSeed(seedBytes(["h1", "h2"], "vis\x1b[1;1H"));
   assert.deepEqual(parsed.history, ["h1", "h2"]);
   assert.equal(new TextDecoder().decode(parsed.visible), "vis\x1b[1;1H");
+});
+
+test("withExtraHistory puts phone lines above tmux history and keeps the screen", () => {
+  const merged = withExtraHistory(seedBytes(["tmux"], "vis\x1b[1;1H"), ["You said", ""]);
+  const parsed = parsePaneSeed(merged);
+  assert.deepEqual(parsed.history, ["You said", "", "tmux"]);
+  assert.equal(new TextDecoder().decode(parsed.visible), "vis\x1b[1;1H");
+  assert.deepEqual(withExtraHistory(seedBytes([], "only"), []), seedBytes([], "only"));
 });
 
 test("parsePaneSeed rejects a truncated history prefix", () => {

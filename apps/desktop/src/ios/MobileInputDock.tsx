@@ -119,7 +119,8 @@ export default function MobileInputDock({
     const el = areaRef.current;
     if (el) {
       el.style.height = "auto";
-      el.focus();
+      // Send dismisses the keyboard. The next tap on the composer brings it back.
+      el.blur();
     }
   }
 
@@ -208,7 +209,16 @@ export default function MobileInputDock({
             }
           }}
         />
-        <button type="button" className="mobile-send" onClick={sendDraft}>
+        <button
+          type="button"
+          className="mobile-send"
+          onPointerDown={keepFocus}
+          onPointerUp={(event) => {
+            // preventDefault on pointerdown swallows click in iOS Safari.
+            if (event.button !== 0) return;
+            sendDraft();
+          }}
+        >
           Send ↵
         </button>
       </div>

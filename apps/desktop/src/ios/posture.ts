@@ -179,6 +179,16 @@ function orientationFor(posture: FormFactorPosture, width: number, height: numbe
   return width >= height ? "landscape" : "portrait";
 }
 
+/**
+ * The mobile shell is for a coarse pointer or an iPhone/iPad user agent.
+ * A Mac trackpad reports touch points and `ontouchstart`, and that must
+ * stay on the desktop shell.
+ */
+export function usesMobileShell(input: { coarsePointer: boolean; userAgent: string }): boolean {
+  if (input.coarsePointer) return true;
+  return /iPad|iPhone|iPod/.test(input.userAgent);
+}
+
 /** iPhone portrait, iPhone landscape, and iPad share the minimalist mobile shell. */
 export function isMobilePosture(posture: FormFactorPosture): boolean {
   return posture === "phone-compact" || posture === "phone-landscape" || posture === "ipad-pro";

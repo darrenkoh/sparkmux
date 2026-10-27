@@ -8103,6 +8103,100 @@ div.mini-subagents-head {
   touch-action: pan-x pan-y;
 }
 
+/* The phone transcript scroller owns the finger. The viewport must not pan too. */
+.app.posture-phone-compact .term-viewport,
+.app.posture-phone-landscape .term-viewport,
+.app.posture-ipad-pro .term-viewport {
+  overflow: hidden;
+  touch-action: none;
+}
+
+.xterm-slot {
+  display: contents;
+}
+
+.phone-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* The finger handler moves this element. A native pan would fight it. */
+  touch-action: none;
+  overscroll-behavior: contain;
+  background: #0d0f12;
+}
+
+.phone-transcript {
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px 16px;
+}
+
+/* The buffer still follows the Mac grid. The phone reads wrapped text, so the
+   canvas stays mounted for writes and stays out of the page. */
+.phone-scroll > .phone-xterm-source {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.phone-scroll > .phone-xterm-source .xterm {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+.phone-scroll .xterm,
+.phone-scroll .xterm-viewport,
+.phone-scroll .xterm-screen,
+.phone-scroll .xterm-helper-textarea,
+.phone-scroll canvas {
+  pointer-events: none;
+}
+
+.phone-scroll .xterm-viewport {
+  overflow: hidden !important;
+}
+
+.phone-history-line {
+  box-sizing: border-box;
+  margin: 0;
+  overflow: visible;
+  white-space: pre;
+  width: max-content;
+  min-width: 100%;
+  height: auto;
+  min-height: calc(var(--phone-font-size, 16px) * 1.35);
+  line-height: 1.35;
+  font-size: var(--phone-font-size, 16px);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  font-family: "0xProto Nerd Font Mono", "0xProto Nerd Font", Menlo, ui-monospace, monospace;
+  color: #e6e8ee;
+}
+
+.app.posture-phone-compact .xterm-host,
+.app.posture-phone-landscape .xterm-host,
+.app.posture-ipad-pro .xterm-host {
+  touch-action: none;
+  overflow: hidden;
+}
+
+/* The helper sits on the cursor. A tap must not focus it or iOS opens the keyboard. */
+.app.posture-phone-compact .xterm-helper-textarea,
+.app.posture-phone-landscape .xterm-helper-textarea,
+.app.posture-ipad-pro .xterm-helper-textarea {
+  pointer-events: none;
+}
+
 /* iPhone 17 Pro Max portrait deck and landscape cinema.
    OLED black, glass bars, and the Dynamic Island safe area. */
 .app.posture-phone-compact,
@@ -8110,6 +8204,11 @@ div.mini-subagents-head {
 .app.posture-ipad-pro {
   background: #07080a;
   color: #e7ecf3;
+  /* A wide transcript must not shrink the page. 16px stays 16px. */
+  overflow-x: hidden;
+  max-width: 100%;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   padding-top: env(safe-area-inset-top);
   padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);

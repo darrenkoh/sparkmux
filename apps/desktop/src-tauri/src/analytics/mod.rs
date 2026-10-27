@@ -11,6 +11,13 @@ mod subagents;
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use tauri::command;
+use tokio::sync::Semaphore;
+
+/// One transcript walk at a time. `tab_analytics` holds `LIVE` across that
+/// walk, and the HUD polls every second. A second caller returns immediately
+/// so those polls cannot fill the blocking pool. A full pool makes every tmux
+/// command return "tmux command timed out" while the server is fine.
+static ANALYTICS_TURN: Semaphore = Semaphore::const_new(1);
 
 use self::event::now_ms;
 use self::ingest::{source_id, Cursor};
@@ -157,6 +164,24 @@ pub async fn tab_analytics(
     title: String,
     pid: u32,
 ) -> Result<TabAnalyticsResponse, String> {
+    // Tests share this process and call in parallel, so they wait their turn.
+    // The app bounces an overlapping poll; the HUD keeps the last response.
+    let _turn = {
+        #[cfg(test)]
+        {
+            ANALYTICS_TURN
+                .acquire()
+                .await
+                .expect("analytics gate stays open")
+        }
+        #[cfg(not(test))]
+        {
+            match ANALYTICS_TURN.try_acquire() {
+                Ok(permit) => permit,
+                Err(_) => return Err("analytics busy".into()),
+            }
+        }
+    };
     tokio::task::spawn_blocking(move || {
         let Some((resolved_kind, resolved_path, roots)) = crate::artifacts::resolve_pane_transcript(
             &command,

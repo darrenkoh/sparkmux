@@ -2,6 +2,31 @@ import type { LayoutNode, Snapshot } from "../types";
 import type { PaneInputMode } from "./promptScroll";
 import XtermView from "./XtermView";
 
+export interface PaneHistorySource {
+  command: string;
+  cwd: string;
+  title: string;
+  pid: number;
+}
+
+/** Identity the phone uses to load a transcript into its own scrollback. */
+export function paneHistorySources(snap: Snapshot): Map<string, PaneHistorySource> {
+  const sources = new Map<string, PaneHistorySource>();
+  for (const session of snap.sessions) {
+    for (const win of session.windows) {
+      for (const pane of win.panes) {
+        sources.set(pane.id, {
+          command: pane.command,
+          cwd: pane.path,
+          title: pane.title,
+          pid: pane.pid,
+        });
+      }
+    }
+  }
+  return sources;
+}
+
 export function paneInputModes(snap: Snapshot): Map<string, PaneInputMode> {
   const modes = new Map<string, PaneInputMode>();
   for (const session of snap.sessions) {
@@ -30,7 +55,9 @@ export default function TiledWindow({
   onCellSize,
   fontSize,
   paneModes,
+  historySources,
   fixedSize,
+  scrollWithoutKeyboard = false,
 }: {
   node: LayoutNode;
   focusedPane: string | null;
@@ -47,7 +74,10 @@ export default function TiledWindow({
   ) => void;
   fontSize: number;
   paneModes?: ReadonlyMap<string, PaneInputMode>;
+  historySources?: ReadonlyMap<string, PaneHistorySource>;
   fixedSize?: boolean;
+  /** Phone and iPad: a finger scrolls. The composer owns the keyboard. */
+  scrollWithoutKeyboard?: boolean;
 }) {
   if ("Pane" in node) {
     const paneId = `%${node.Pane.pane_id}`;
@@ -81,6 +111,8 @@ export default function TiledWindow({
           paneRows={fixedSize ? node.Pane.h : undefined}
           tmuxCols={node.Pane.w}
           tmuxRows={node.Pane.h}
+          scrollWithoutKeyboard={scrollWithoutKeyboard}
+          historySource={historySources?.get(paneId)}
         />
       </div>
     );
@@ -115,7 +147,9 @@ export default function TiledWindow({
               onCellSize={onCellSize}
               fontSize={fontSize}
               paneModes={paneModes}
+              historySources={historySources}
               fixedSize={fixedSize}
+              scrollWithoutKeyboard={scrollWithoutKeyboard}
             />
           </div>
         );

@@ -25,6 +25,19 @@ export function parsePaneSeed(bytes: Uint8Array): { history: string[]; visible: 
   return { history, visible: new TextEncoder().encode(rest.slice(pos)) };
 }
 
+/** Phone-only lines above the tmux history. The visible screen bytes stay as captured. */
+export function withExtraHistory(bytes: Uint8Array, extra: string[]): Uint8Array {
+  if (extra.length === 0) return bytes;
+  const lines = extra.map((line) => line.replace(/[\r\n\u001e]/g, ""));
+  const { history, visible } = parsePaneSeed(bytes);
+  const all = lines.concat(history);
+  const header = new TextEncoder().encode(`\x1ehistory:${all.length}\n${all.join("\n")}\n`);
+  const out = new Uint8Array(header.length + visible.length);
+  out.set(header, 0);
+  out.set(visible, header.length);
+  return out;
+}
+
 /** Load tmux history into scrollback, then paint the visible screen.
  *
  * Scrollback only grows when a line feed happens on the bottom row. At one

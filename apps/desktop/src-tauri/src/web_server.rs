@@ -36,6 +36,9 @@ pub const WEB_SERVE_MENU_ID: &str = "web-serve";
 pub const WEB_SERVE_MENU_START: &str = "Start Remote Server";
 pub const WEB_SERVE_MENU_STOP: &str = "Stop Remote Server";
 
+// Release builds embed `dist/` at compile time. Debug builds read that
+// folder from disk on each request. Cargo does not rebuild this module
+// when only the folder contents change.
 #[derive(RustEmbed)]
 #[folder = "../dist/"]
 struct DistAssets;
