@@ -114,18 +114,6 @@ export function resolvePopoutTarget(
   };
 }
 
-export function formatPopoutWindowTitle(
-  kind: PopoutWindowKind,
-  target: ActiveTarget,
-  pinned: boolean,
-): string {
-  const label = kind === "stats" ? "Stats" : "Gits";
-  const loc = `${target.session_name || "sparkmux"}:${target.tab_name || "shell"}`;
-  return pinned
-    ? `Sparkmux — ${label} · ${loc} [Pinned]`
-    : `Sparkmux — ${label} · ${loc}`;
-}
-
 export function readStoredActiveTarget(raw: string | null): ActiveTarget | null {
   if (!raw) return null;
   try {

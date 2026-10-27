@@ -884,11 +884,7 @@ pub fn open_popout_window(
         let _ = existing.set_focus();
         return Ok(());
     }
-    let title = if label == "stats" {
-        "Sparkmux — Stats"
-    } else {
-        "Sparkmux — Gits"
-    };
+    let title = crate::app_window_title();
     let url = WebviewUrl::App(format!("index.html?window={label}").into());
     WebviewWindowBuilder::new(&app, label, url)
         .title(title)

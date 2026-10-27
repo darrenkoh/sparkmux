@@ -269,7 +269,7 @@ const LOGIN_HTML: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Sparkmux — Pair iOS Device</title>
+  <title>__WINDOW_TITLE__</title>
   <style>
     body {
       margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
@@ -300,6 +300,13 @@ const LOGIN_HTML: &str = r#"<!doctype html>
   </form>
 </body>
 </html>"#;
+
+fn login_html() -> String {
+    LOGIN_HTML.replace(
+        "__WINDOW_TITLE__",
+        &crate::app_window_title(),
+    )
+}
 
 /// Name of the persisted pairing secret inside the Sparkmux config directory.
 pub const WEB_TOKEN_FILE: &str = "web_token";
@@ -675,7 +682,7 @@ async fn static_handler(
         return Response::builder()
             .status(StatusCode::UNAUTHORIZED)
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .body(Body::from(LOGIN_HTML))
+            .body(Body::from(login_html()))
             .unwrap_or_else(|_| Response::new(Body::from("unauthorized")));
     }
 

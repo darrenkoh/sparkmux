@@ -70,6 +70,7 @@ import {
   type NoteLabel,
 } from "./chrome/attentionNotify";
 import ArtifactPanel from "./chrome/ArtifactPanel";
+import { formatAppWindowTitle } from "./chrome/windowTitle";
 import AnalyticsHud from "./chrome/AnalyticsHud";
 import ChangeGraph from "./chrome/ChangeGraph";
 import DockedStatsPanel from "./chrome/DockedStatsPanel";
@@ -508,16 +509,6 @@ export default function App() {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => pushClientSize());
       });
-      const title = win ? `Sparkmux — ${session}:${win.name}` : `Sparkmux — ${session}`;
-      if (isTauriRuntime()) {
-        try {
-          await getCurrentWindow().setTitle(title);
-        } catch {
-          /* ACL optional */
-        }
-      } else {
-        document.title = title;
-      }
     },
     [applyWindow, pixelClientSize, pushClientSize],
   );
@@ -1153,6 +1144,19 @@ export default function App() {
   const attached = snap.sessions.find((s) => s.name === attachedSession);
   const visibleWin = attached?.windows.find((w) => w.id === visibleWindowId);
   const winName = visibleWin?.name ?? null;
+
+  useEffect(() => {
+    const version = status?.app_version ?? "";
+    if (!version) return;
+    const title = formatAppWindowTitle(version);
+    document.title = title;
+    if (!isTauriRuntime()) return;
+    void getCurrentWindow()
+      .setTitle(title)
+      .catch(() => {
+        /* ACL optional */
+      });
+  }, [status?.app_version]);
   const outputPane = outputPaneForTab(visibleWin, focusedPane);
   const usageCommand = outputPane?.command ?? "";
   const usageTitle = outputPane?.title ?? "";

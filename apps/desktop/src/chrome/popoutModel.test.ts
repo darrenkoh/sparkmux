@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  formatPopoutWindowTitle,
   parsePopoutWindowKind,
   readStoredActiveTarget,
   resolvePopoutTarget,
@@ -133,21 +132,6 @@ test("resolvePopoutTarget stays locked to pinned tab when main window switches t
   assert.equal(resolved.command, "claude");
   assert.equal(resolved.cwd, "/repo/alpha");
   assert.equal(resolved.pid, 1001);
-});
-
-test("formatPopoutWindowTitle includes session, tab, and pinned status", () => {
-  const target = {
-    session_name: "alpha",
-    tab_id: "@1",
-    tab_name: "agent",
-    focused_pane: "%1",
-    command: "claude",
-    cwd: "/repo/alpha",
-    title: "Claude",
-    pid: 1001,
-  };
-  assert.equal(formatPopoutWindowTitle("stats", target, false), "Sparkmux — Stats · alpha:agent");
-  assert.equal(formatPopoutWindowTitle("gits", target, true), "Sparkmux — Gits · alpha:agent [Pinned]");
 });
 
 test("readStoredActiveTarget safely parses stored JSON", () => {

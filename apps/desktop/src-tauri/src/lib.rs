@@ -24,6 +24,11 @@ mod window_label;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+/// Window and document title: brand plus the build version. The app bundle name stays Sparkmux.
+pub(crate) fn app_window_title() -> String {
+    format!("SparkMux {}", env!("CARGO_PKG_VERSION"))
+}
+
 use crate::state::AppState;
 
 pub use web_server::ServeOptions;
@@ -148,6 +153,9 @@ pub fn run() {
             web_server::web_serve_status,
         ])
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_title(&app_window_title());
+            }
             let handle = app.handle().clone();
             app.state::<AppState>().set_app_handle(handle.clone());
             {
@@ -207,6 +215,19 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Sparkmux");
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::app_window_title;
+
+    #[test]
+    fn window_title_is_brand_and_version() {
+        let title = app_window_title();
+        assert!(title.starts_with("SparkMux "));
+        assert!(!title.contains('—'));
+        assert!(!title.contains(':'));
+    }
 }
 
 fn init_tracing() {

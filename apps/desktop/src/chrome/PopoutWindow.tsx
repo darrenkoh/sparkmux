@@ -8,6 +8,7 @@ import {
   listenActiveTargetChanged,
   listenTreeDirty,
   snapshot as fetchSnapshot,
+  tmuxStatus,
   type ActiveTarget,
 } from "../api";
 import type { Snapshot } from "../types";
@@ -15,12 +16,12 @@ import AnalyticsHud from "./AnalyticsHud";
 import ChangeGraph from "./ChangeGraph";
 import {
   ACTIVE_TARGET_STORAGE_KEY,
-  formatPopoutWindowTitle,
   readStoredActiveTarget,
   resolvePopoutTarget,
   type PinnedTarget,
   type PopoutWindowKind,
 } from "./popoutModel";
+import { formatAppWindowTitle } from "./windowTitle";
 
 export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
   const [followTarget, setFollowTarget] = useState<ActiveTarget | null>(() => {
@@ -32,10 +33,17 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
   });
   const [snap, setSnap] = useState<Snapshot>({ sessions: [] });
   const [pinnedTarget, setPinnedTarget] = useState<PinnedTarget | null>(null);
+  const [appVersion, setAppVersion] = useState("");
 
   const refreshSnapshot = useCallback(() => {
     void fetchSnapshot()
       .then((next) => setSnap(next))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    void tmuxStatus()
+      .then((status) => setAppVersion(status.app_version))
       .catch(() => {});
   }, []);
 
@@ -79,15 +87,14 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
   const isPinned = pinnedTarget !== null;
 
   useEffect(() => {
-    const title = formatPopoutWindowTitle(kind, resolved, isPinned);
-    if (!isTauriRuntime()) {
-      document.title = title;
-      return;
-    }
+    if (!appVersion) return;
+    const title = formatAppWindowTitle(appVersion);
+    document.title = title;
+    if (!isTauriRuntime()) return;
     void getCurrentWindow()
       .setTitle(title)
       .catch(() => {});
-  }, [kind, resolved.session_name, resolved.tab_name, isPinned]);
+  }, [appVersion]);
 
   const handleTogglePin = useCallback(() => {
     setPinnedTarget((prev) => {
