@@ -6,7 +6,6 @@ use tauri::menu::{
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::state::{AppState, ServerPushEvent};
-use crate::web_server::{WEB_SERVE_MENU_ID, WEB_SERVE_MENU_START};
 
 static EXITING: AtomicBool = AtomicBool::new(false);
 
@@ -74,8 +73,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
         Some(if mac { "Cmd+Shift+/" } else { "F1" }),
     )?;
     let check_update = item(app, "check-update", "Check for Updates…", None)?;
-    let web_serve_urls = item(app, "web-serve-urls", "Remote Server URLs…", None)?;
-    let web_serve = item(app, WEB_SERVE_MENU_ID, WEB_SERVE_MENU_START, None)?;
 
     let file = if mac {
         SubmenuBuilder::new(app, "File")
@@ -90,9 +87,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&new_window)
             .separator()
             .item(&close_tab)
-            .separator()
-            .item(&web_serve_urls)
-            .item(&web_serve)
             .separator()
             .item(&quit)
             .build()?
@@ -160,9 +154,6 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<tauri::menu::Menu<
             .item(&about)
             .item(&check_update)
             .separator()
-            .item(&web_serve_urls)
-            .item(&web_serve)
-            .separator()
             .item(&hide)
             .item(&hide_others)
             .item(&show_all)
@@ -222,15 +213,16 @@ mod tests {
     #[test]
     fn window_menu_has_no_tmux_options() {
         let menu = include_str!("menu.rs");
-        assert!(menu.contains("SubmenuBuilder::new(app, \"Window\")"));
-        assert!(!menu.contains("\"split-right\""));
-        assert!(!menu.contains("\"split-down\""));
-        assert!(!menu.contains("\"stop-server\""));
-        assert!(!menu.contains("\"start\""));
-        assert!(!menu.contains("SubmenuBuilder::new(app, \"tmux\")"));
-        assert!(menu.contains("WEB_SERVE_MENU_ID"));
-        assert!(menu.contains("WEB_SERVE_MENU_START"));
-        assert!(menu.contains(".item(&web_serve)"));
+        let src = menu.split("#[cfg(test)]").next().expect("menu source");
+        assert!(src.contains("SubmenuBuilder::new(app, \"Window\")"));
+        assert!(!src.contains("\"split-right\""));
+        assert!(!src.contains("\"split-down\""));
+        assert!(!src.contains("\"stop-server\""));
+        assert!(!src.contains("\"start\""));
+        assert!(!src.contains("SubmenuBuilder::new(app, \"tmux\")"));
+        assert!(!src.contains("web-serve-urls"));
+        assert!(!src.contains("WEB_SERVE_MENU_ID"));
+        assert!(!src.contains(".item(&web_serve)"));
     }
 
     #[test]

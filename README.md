@@ -288,7 +288,7 @@ The phone or tablet page is the Sparkmux UI, served from the Mac or Linux machin
 
 ### Start the page
 
-In the desktop app, choose **Start Remote Server**. On macOS that item is in the Sparkmux menu. On Linux it is in File. The window lists the addresses. **Stop Remote Server** closes the page and leaves your tmux sessions running.
+In the desktop app, click **Remote** at the bottom right. The window lists the addresses. **Stop Remote Server** closes the page and leaves your tmux sessions running.
 
 From a terminal on the host:
 
