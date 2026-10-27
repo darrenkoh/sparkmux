@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.65
+
+### Features & Improvements
+
+- **iPhone transcript**:
+  - A finger on the phone scrolls its own copy of the transcript. The Mac stays on the live prompt, and the software keyboard stays down until the bottom composer is tapped.
+  - Lines stay at least 16px, do not wrap, and scroll sideways as well as up and down.
+  - Typing goes through the bottom field. Sending dismisses the keyboard.
+  - The Mac window stays on the desktop layout. A phone connection does not resize the shared tmux window unless Fit phone is chosen.
+- **Window title**: The window title is SparkMux plus the build version.
+- **Opening a session**: Overlapping Stats walks return busy instead of filling the tmux command pool, so Retry no longer sits on "tmux command timed out".
+
 ## 0.1.64
 
 ### Features & Improvements
