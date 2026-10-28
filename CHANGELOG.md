@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.66
+
+### Features & Improvements
+
+- **Terminal session switching**:
+  - Fixed terminal rendering desync when switching between terminal sessions (e.g. Grok and Gemini/AGY) by resetting container scroll offsets and clearing cached dimensions so the active terminal immediately re-fits without requiring a manual window resize.
+- **Sidebar**:
+  - Removed redundant amber "Off screen" sessions banner in the session tree.
+
 ## 0.1.65
 
 ### Features & Improvements
