@@ -182,51 +182,6 @@ body.is-resizing .sidebar-slot {
   color: var(--muted);
 }
 
-.offscreen {
-  flex: 0 0 auto;
-  margin: 8px 8px 0;
-  border: 1px solid rgba(232, 168, 73, 0.45);
-  border-radius: var(--radius);
-  background: rgba(232, 168, 73, 0.06);
-}
-
-.offscreen-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px 2px 10px;
-}
-
-.offscreen .sidebar-kicker {
-  color: #e8a849;
-}
-
-.offscreen-list {
-  max-height: 132px;
-  overflow: auto;
-}
-
-.offscreen-row .row-main {
-  padding-left: 8px;
-}
-
-.offscreen .live-dot {
-  background: #e8a849;
-  box-shadow: 0 0 0 3px rgba(232, 168, 73, 0.16);
-}
-
-.offscreen-hint {
-  color: var(--muted);
-  font-size: 11px;
-  flex: 0 1 46%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-}
-
 .sidebar-tree {
   flex: 1;
   overflow: auto;
