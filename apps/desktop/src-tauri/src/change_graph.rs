@@ -2047,7 +2047,8 @@ fn resolve_relative(from_file: &Path, spec: &str) -> Option<PathBuf> {
 }
 
 fn cargo_path_deps(text: &str) -> Vec<(String, String)> {
-    let Ok(value) = text.parse::<toml::Value>() else {
+    // toml 1 parses a document with from_str. Value's FromStr parses one value.
+    let Ok(value) = toml::from_str::<toml::Value>(text) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -2218,7 +2219,7 @@ fn strip_go_comment(line: &str) -> &str {
 }
 
 fn py_path_deps(text: &str) -> Vec<(String, String)> {
-    let Ok(value) = text.parse::<toml::Value>() else {
+    let Ok(value) = toml::from_str::<toml::Value>(text) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -2271,7 +2272,7 @@ fn collect_py(value: &toml::Value, out: &mut Vec<(String, String)>) {
 }
 
 fn cargo_package_name(text: &str) -> Option<String> {
-    let value = text.parse::<toml::Value>().ok()?;
+    let value = toml::from_str::<toml::Value>(text).ok()?;
     value
         .get("package")?
         .get("name")?
@@ -2306,7 +2307,7 @@ fn go_module_name(text: &str) -> Option<String> {
 }
 
 fn py_project_name(text: &str) -> Option<String> {
-    let value = text.parse::<toml::Value>().ok()?;
+    let value = toml::from_str::<toml::Value>(text).ok()?;
     value
         .get("project")
         .and_then(|project| project.get("name"))
