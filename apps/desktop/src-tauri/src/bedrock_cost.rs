@@ -443,8 +443,50 @@ fn rollup_dir(root: &Path, focused: Option<&Path>, midnight_ms: i64) -> BedrockC
         if !files.iter().any(|item| item == path) {
             files.push(path.clone());
         }
+        collect_subagents(&jail, path, &mut files);
     }
     rollup_files(&files, focused.as_deref(), midnight_ms)
+}
+
+fn collect_subagents(jail: &Path, focused: &Path, out: &mut Vec<PathBuf>) {
+    let (Some(parent), Some(stem)) = (focused.parent(), focused.file_stem()) else {
+        return;
+    };
+    let subagents_dir = parent.join(stem).join("subagents");
+    if subagents_dir.is_dir() {
+        collect_subagent_dir(jail, &subagents_dir, 0, out);
+    }
+}
+
+fn collect_subagent_dir(jail: &Path, dir: &Path, depth: u8, out: &mut Vec<PathBuf>) {
+    if depth > 4 || out.len() >= FILE_CAP {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if out.len() >= FILE_CAP {
+            return;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if kind.is_dir() {
+            collect_subagent_dir(jail, &path, depth + 1, out);
+            continue;
+        }
+        if kind.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+            let canon = path.canonicalize().unwrap_or(path);
+            if canon.starts_with(jail) && !out.contains(&canon) {
+                out.push(canon);
+            }
+        }
+    }
 }
 
 fn collect_jsonl(jail: &Path, dir: &Path, midnight_ms: i64, depth: u8, out: &mut Vec<PathBuf>) {
@@ -493,15 +535,32 @@ fn mtime_ms(path: &Path) -> Option<i64> {
     i64::try_from(dur.as_millis()).ok()
 }
 
+fn is_session_file(focused: &Path, file: &Path) -> bool {
+    if focused == file {
+        return true;
+    }
+    if let (Some(parent), Some(stem)) = (focused.parent(), focused.file_stem()) {
+        let subagents_dir = parent.join(stem).join("subagents");
+        if file.starts_with(&subagents_dir) {
+            return true;
+        }
+        let session_dir = parent.join(stem);
+        if file.starts_with(&session_dir) {
+            return true;
+        }
+    }
+    false
+}
+
 fn rollup_files(files: &[PathBuf], focused: Option<&Path>, midnight_ms: i64) -> BedrockCost {
     let mut cost = BedrockCost::zero();
     for path in files {
         let summary = summarize(path);
-        let is_focused = focused.is_some_and(|item| item == path);
-        if is_focused {
-            cost.session = session_part(&summary);
+        let is_session = focused.is_some_and(|item| is_session_file(item, path));
+        if is_session {
+            add_session(&mut cost.session, &summary);
         }
-        if is_focused || summary.bedrock_model {
+        if is_session || summary.bedrock_model {
             add_today(&mut cost.today, &summary, midnight_ms);
         }
     }
@@ -522,21 +581,18 @@ fn has_any_tokens(messages: &HashMap<String, MsgUse>) -> bool {
         .any(|m| m.input + m.output + m.read + m.write > 0)
 }
 
-fn session_part(summary: &Summary) -> UsageCostPart {
+fn add_session(part: &mut UsageCostPart, summary: &Summary) {
     if let Some(usd) = trusted_usd(summary) {
-        return UsageCostPart {
-            known_usd: usd,
-            estimated: false,
-            models: Vec::new(),
-        };
+        part.known_usd += usd;
+        return;
     }
     let msgs = messages_to_use(summary);
     let models = fold_models(msgs, |_| true);
-    UsageCostPart {
-        known_usd: 0.0,
-        estimated: !models.is_empty(),
-        models,
+    if models.is_empty() {
+        return;
     }
+    part.estimated = true;
+    merge_models(&mut part.models, &models);
 }
 
 fn add_today(part: &mut UsageCostPart, summary: &Summary, midnight_ms: i64) {
@@ -1044,6 +1100,45 @@ mod tests {
         assert!(cost.session.estimated);
         assert_eq!(cost.session.known_usd, 0.0);
         assert_eq!(cost.session.models[0].input_tokens, 1000);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn focused_session_includes_subagent_files() {
+        let dir = scratch("subagents");
+        let session = write_jsonl(
+            &dir,
+            "session-123.jsonl",
+            &format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{TODAY}\",\"message\":{{\"id\":\"m1\",\"model\":\"claude-opus-5-5\",\"usage\":{{\"input_tokens\":1000,\"output_tokens\":2000,\"cache_read_input_tokens\":10000,\"cache_creation_input_tokens\":500}}}}}}\n\
+                 {{\"type\":\"cost-state\",\"totalCostUSD\":0,\"hasUnknownModelCost\":true,\"startTime\":\"{TODAY}\",\"modelUsage\":{{\"claude-opus-5-5\":{{\"costUSD\":0}}}}}}\n"
+            ),
+        );
+        let subagent_dir = dir.join("session-123").join("subagents");
+        std::fs::create_dir_all(&subagent_dir).unwrap();
+        let subagent = write_jsonl(
+            &subagent_dir,
+            "agent-sub1.jsonl",
+            &format!(
+                "{{\"type\":\"assistant\",\"timestamp\":\"{TODAY}\",\"message\":{{\"id\":\"sub1\",\"model\":\"claude-haiku-4-5\",\"usage\":{{\"input_tokens\":100,\"output_tokens\":200,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":50}}}}}}\n"
+            ),
+        );
+        let files = vec![session.clone(), subagent];
+        let cost = rollup_files(&files, Some(&session), MIDNIGHT);
+        assert_eq!(cost.session.known_usd, 0.0);
+        assert!(cost.session.estimated);
+        assert_eq!(cost.session.models.len(), 2);
+        assert_eq!(cost.session.models[0].model, "claude-haiku-4-5");
+        assert_eq!(cost.session.models[0].input_tokens, 100);
+        assert_eq!(cost.session.models[1].model, "claude-opus-5-5");
+        assert_eq!(cost.session.models[1].input_tokens, 1000);
+
+        // Also test rollup_dir collects and includes subagents
+        let cost_dir = rollup_dir(&dir, Some(&session), MIDNIGHT);
+        assert_eq!(cost_dir.session.models.len(), 2);
+        assert_eq!(cost_dir.session.models[0].model, "claude-haiku-4-5");
+        assert_eq!(cost_dir.session.models[1].model, "claude-opus-5-5");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

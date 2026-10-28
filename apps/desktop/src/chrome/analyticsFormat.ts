@@ -57,15 +57,15 @@ export interface ModelPricing {
 
 /**
  * Returns exact pricing rates (USD per 1M tokens) matching model catalogs:
- * - Claude 3.5 Haiku: $0.80 in, $4.00 out, $0.08 cache read, $1.00 cache write
- * - Claude Haiku 4.5: $1.00 in, $5.00 out, $0.10 cache read, $1.25 cache write
- * - Claude Haiku 5.5: $0.10 in, $0.50 out, $0.01 cache read, $0.125 cache write
- * - Claude Sonnet 3.5/3.7/4.0/4.5/4.6: $3.00 in, $15.00 out, $0.30 cache read, $3.75 cache write
- * - Claude Sonnet 5: $2.00 in, $10.00 out, $0.20 cache read, $2.50 cache write
- * - Claude Sonnet 5.5: $2.00 in, $10.00 out, $0.10 cache read, $2.50 cache write
- * - Claude Opus 4.0/4.1: $15.00 in, $75.00 out, $1.50 cache read, $18.75 cache write
- * - Claude Opus 4.5/4.6/4.7/4.8/5.0: $5.00 in, $25.00 out, $0.50 cache read, $6.25 cache write
- * - Claude Opus 5.5: $4.00 in, $20.00 out, $0.20 cache read, $5.00 cache write
+ * - Claude 3.5 Haiku: $0.80 in, $4.00 out, $0.08 cache read, $1.60 cache write (1h TTL)
+ * - Claude Haiku 4.5: $1.00 in, $5.00 out, $0.10 cache read, $2.00 cache write (1h TTL)
+ * - Claude Haiku 5.5: $0.10 in, $0.50 out, $0.01 cache read, $0.20 cache write (1h TTL)
+ * - Claude Sonnet 3.5/3.7/4.0/4.5/4.6: $3.00 in, $15.00 out, $0.30 cache read, $6.00 cache write (1h TTL)
+ * - Claude Sonnet 5: $2.00 in, $10.00 out, $0.20 cache read, $4.00 cache write (1h TTL)
+ * - Claude Sonnet 5.5: $2.00 in, $10.00 out, $0.10 cache read, $4.00 cache write (1h TTL)
+ * - Claude Opus 4.0/4.1: $15.00 in, $75.00 out, $1.50 cache read, $30.00 cache write (1h TTL)
+ * - Claude Opus 4.5/4.6/4.7/4.8/5.0: $5.00 in, $25.00 out, $0.50 cache read, $10.00 cache write (1h TTL)
+ * - Claude Opus 5.5: $4.00 in, $20.00 out, $0.20 cache read, $8.00 cache write (1h TTL)
  * - Grok: $2.00 in, $10.00 out, $0.20 cache read, $2.50 cache write
  * - Gemini Flash / Mini / Light: $0.25 in, $1.25 out, $0.03 cache read, $0.25 cache write
  */
@@ -74,13 +74,13 @@ export function getModelPricing(model: string | undefined): ModelPricing {
 
   // Haiku family
   if (m.includes("haiku-5-5") || m.includes("haiku-5.5") || m.includes("haiku_55")) {
-    return { inRate: 0.1, outRate: 0.5, cacheReadRate: 0.01, cacheWriteRate: 0.125 };
+    return { inRate: 0.1, outRate: 0.5, cacheReadRate: 0.01, cacheWriteRate: 0.2 };
   }
   if (m.includes("haiku-4-5") || m.includes("haiku-4.5") || m.includes("haiku_45")) {
-    return { inRate: 1.0, outRate: 5.0, cacheReadRate: 0.1, cacheWriteRate: 1.25 };
+    return { inRate: 1.0, outRate: 5.0, cacheReadRate: 0.1, cacheWriteRate: 2.0 };
   }
   if (m.includes("3-5-haiku") || m.includes("3.5-haiku") || m.includes("haiku-3-5") || m.includes("haiku-3.5") || m.includes("haiku_35")) {
-    return { inRate: 0.8, outRate: 4.0, cacheReadRate: 0.08, cacheWriteRate: 1.0 };
+    return { inRate: 0.8, outRate: 4.0, cacheReadRate: 0.08, cacheWriteRate: 1.6 };
   }
   if (
     m.includes("3-haiku") ||
@@ -92,23 +92,23 @@ export function getModelPricing(model: string | undefined): ModelPricing {
     return { inRate: 0.25, outRate: 1.25, cacheReadRate: 0.03, cacheWriteRate: 0.3 };
   }
   if (m.includes("haiku")) {
-    return { inRate: 1.0, outRate: 5.0, cacheReadRate: 0.1, cacheWriteRate: 1.25 };
+    return { inRate: 1.0, outRate: 5.0, cacheReadRate: 0.1, cacheWriteRate: 2.0 };
   }
 
   // Sonnet family
   if (m.includes("sonnet-5-5") || m.includes("sonnet-5.5")) {
-    return { inRate: 2.0, outRate: 10.0, cacheReadRate: 0.1, cacheWriteRate: 2.5 };
+    return { inRate: 2.0, outRate: 10.0, cacheReadRate: 0.1, cacheWriteRate: 4.0 };
   }
   if (m.includes("sonnet-5") || m.includes("sonnet 5")) {
-    return { inRate: 2.0, outRate: 10.0, cacheReadRate: 0.2, cacheWriteRate: 2.5 };
+    return { inRate: 2.0, outRate: 10.0, cacheReadRate: 0.2, cacheWriteRate: 4.0 };
   }
   if (m.includes("sonnet")) {
-    return { inRate: 3.0, outRate: 15.0, cacheReadRate: 0.3, cacheWriteRate: 3.75 };
+    return { inRate: 3.0, outRate: 15.0, cacheReadRate: 0.3, cacheWriteRate: 6.0 };
   }
 
   // Opus family
   if (m.includes("opus-5-5") || m.includes("opus-5.5")) {
-    return { inRate: 4.0, outRate: 20.0, cacheReadRate: 0.2, cacheWriteRate: 5.0 };
+    return { inRate: 4.0, outRate: 20.0, cacheReadRate: 0.2, cacheWriteRate: 8.0 };
   }
   if (
     m.includes("opus-4-5") ||
@@ -118,10 +118,10 @@ export function getModelPricing(model: string | undefined): ModelPricing {
     m.includes("opus-5") ||
     m.includes("opus 5")
   ) {
-    return { inRate: 5.0, outRate: 25.0, cacheReadRate: 0.5, cacheWriteRate: 6.25 };
+    return { inRate: 5.0, outRate: 25.0, cacheReadRate: 0.5, cacheWriteRate: 10.0 };
   }
   if (m.includes("opus-4-0") || m.includes("opus-4-1") || m.includes("3-opus") || m.includes("opus")) {
-    return { inRate: 15.0, outRate: 75.0, cacheReadRate: 1.5, cacheWriteRate: 18.75 };
+    return { inRate: 15.0, outRate: 75.0, cacheReadRate: 1.5, cacheWriteRate: 30.0 };
   }
 
   // Gemini. "gemini" contains the letters "mini", so a substring check
@@ -142,8 +142,8 @@ export function getModelPricing(model: string | undefined): ModelPricing {
     return { inRate: 0.68, outRate: 2.04, cacheReadRate: 0.17, cacheWriteRate: 0.68 };
   }
 
-  // Default / fallback standard pricing (e.g. Sonnet tier 3/15)
-  return { inRate: 3.0, outRate: 15.0, cacheReadRate: 0.3, cacheWriteRate: 3.75 };
+  // Default / fallback standard pricing (e.g. Sonnet tier 3/15, 1h TTL)
+  return { inRate: 3.0, outRate: 15.0, cacheReadRate: 0.3, cacheWriteRate: 6.0 };
 }
 
 /** UTC calendar day `YYYY-MM-DD`, for list prices that change on a published date. */
@@ -633,8 +633,16 @@ export function sessionCostFromStats(
       const parsed = JSON.parse(raw) as UsageLedger;
       if (parsed && typeof parsed === "object") {
         if (!parsed.model && stats.active_model) parsed.model = stats.active_model;
+        const isBedrock =
+          parsed.hasUnknownModelCost === true ||
+          isBedrockModel(parsed.model) ||
+          (parsed.modelUsage != null && Object.keys(parsed.modelUsage).some(isBedrockModel));
+        const unpricedBedrock =
+          isBedrock &&
+          (parsed.totalCostUSD === 0 || parsed.totalCostUSD == null);
+
         if (
-          (!parsed.modelUsage || Object.keys(parsed.modelUsage).length === 0) &&
+          (unpricedBedrock || !parsed.modelUsage || Object.keys(parsed.modelUsage).length === 0) &&
           stats.models &&
           stats.models.length > 0
         ) {
@@ -650,7 +658,7 @@ export function sessionCostFromStats(
           }
           parsed.modelUsage = modelUsage;
         }
-        if (parsed.inputTokens == null && stats.total_input_tokens != null) {
+        if ((unpricedBedrock || parsed.inputTokens == null) && stats.total_input_tokens != null) {
           parsed.inputTokens = stats.total_input_tokens;
           parsed.outputTokens = stats.total_output_tokens;
           parsed.cacheReadTokens = stats.total_cache_read_tokens;

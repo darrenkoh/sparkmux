@@ -409,6 +409,54 @@ test("mini-stat Claude session cost uses totalCostUSD", () => {
   assert.equal(agg.estimatedCostUsd, 1.48);
 });
 
+test("mini-stat Claude on Bedrock calculates session cost from stats.models including subagents", () => {
+  const agg = aggregateMiniStats(
+    stats({
+      cost_ledger: JSON.stringify({
+        provider: "claude",
+        totalCostUSD: 0,
+        hasUnknownModelCost: true,
+        modelUsage: {
+          "claude-opus-5-5": {
+            costUSD: 0,
+            inputTokens: 636,
+            outputTokens: 137_000,
+            cacheCreationInputTokens: 858_000,
+            cacheReadInputTokens: 70_000_000,
+          },
+        },
+      }),
+      models: [
+        {
+          model: "claude-opus-5-5",
+          input_tokens: 153_100,
+          output_tokens: 268_300,
+          cache_read_tokens: 140_900_000,
+          cache_write_tokens: 1_748_850,
+        },
+        {
+          model: "claude-haiku-4-5",
+          input_tokens: 777,
+          output_tokens: 366,
+          cache_read_tokens: 0,
+          cache_write_tokens: 104_200,
+        },
+      ],
+      total_input_tokens: 153_877,
+      total_output_tokens: 268_666,
+      total_cache_read_tokens: 140_900_000,
+      total_cache_write_tokens: 1_853_050,
+      active_model: "claude-opus-5-5",
+    }),
+    "claude",
+    0,
+  );
+  // Opus 5.5: 153.1k*4 + 268.3k*20 + 140.9m*0.2 + 1.74885m*8 = 0.6124 + 5.366 + 28.18 + 13.9908 = $48.1492
+  // Haiku 4.5: 777*1 + 366*5 + 104.2k*2 = 0.000777 + 0.00183 + 0.2084 = $0.211007
+  // Total = $48.36
+  assert.ok(Math.abs((agg.estimatedCostUsd ?? 0) - 48.36) < 0.02);
+});
+
 test("mini-stat Antigravity session cost uses the cumulative total", () => {
   const agg = aggregateMiniStats(
     stats({

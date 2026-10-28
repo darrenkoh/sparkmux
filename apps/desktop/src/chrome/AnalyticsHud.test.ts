@@ -64,12 +64,12 @@ test("estimateCost accurately calculates Claude Haiku 4.5 pricing", () => {
   assert.equal(pricing.inRate, 1.0);
   assert.equal(pricing.outRate, 5.0);
   assert.equal(pricing.cacheReadRate, 0.1);
-  assert.equal(pricing.cacheWriteRate, 1.25);
+  assert.equal(pricing.cacheWriteRate, 2.0);
 
-  // Haiku 4.5 with 803 in, 23 out, 12M cache read, 600k cache write
+  // Haiku 4.5 with 803 in, 23 out, 12M cache read, 600k cache write (1h TTL)
   const haikuCost = estimateCost("claude-haiku-4-5-20251001", 803, 23, 12_000_000, 600_000);
-  // 803/1e6*1 + 23/1e6*5 + 12*0.1 + 0.6*1.25 = 0.000803 + 0.000115 + 1.20 + 0.75 = 1.9509
-  assert.ok(Math.abs(haikuCost - 1.950918) < 0.001);
+  // 803/1e6*1 + 23/1e6*5 + 12*0.1 + 0.6*2.0 = 0.000803 + 0.000115 + 1.20 + 1.20 = 2.400918
+  assert.ok(Math.abs(haikuCost - 2.400918) < 0.001);
 });
 
 test("estimateTotalCost calculates cost per model breakdown", () => {
@@ -83,7 +83,7 @@ test("estimateTotalCost calculates cost per model breakdown", () => {
     },
   ];
   const totalCost = estimateTotalCost(models, "claude-haiku-4-5", 803, 23, 12_000_000, 600_000);
-  assert.ok(Math.abs(totalCost - 1.950918) < 0.001);
+  assert.ok(Math.abs(totalCost - 2.400918) < 0.001);
 });
 
 test("estimateCost accurately calculates Grok 4.7 pricing matching /usage ticks", () => {
