@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.68
+
+### Features & Improvements
+
+- **Claude on AWS Bedrock Cost Tracking**:
+  - Restored real-time cost estimation for Claude Code sessions running via AWS Bedrock. When Claude records an unpriced `$0.00` total or flags `hasUnknownModelCost`, sparkmux now calculates session and today spend from token usage (input, output, cache read, cache write) against AWS Bedrock's published rates for the active model (Claude 3.5/3.7 Sonnet, Haiku 3.5, Claude 3 Haiku, Opus).
+- **Tab Rename**:
+  - Fixed terminal click handler unintentionally stealing focus and dismissing the tab rename input on double click.
+
 ## 0.1.67
 
 ### Fixes
