@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.69
+
+### Features & Improvements
+
+- **Claude on AWS Bedrock Pricing & Subagent Tracking**:
+  - Matched Claude Code 2.1+ default 1-hour TTL prompt cache write pricing ($8.00/1M for Opus 5.5, $2.00/1M for Haiku 4.5, $6.00/1M for Sonnet 3.5/3.7/4.5, $4.00/1M for Sonnet 5/5.5, $10.00/1M for Opus 4.5..5.0, $30.00/1M for Opus 4.0/3 Opus, $1.60/1M for Haiku 3.5, $0.20/1M for Haiku 5.5).
+  - Included child subagent transcripts (`<session>/subagents/agent-*.jsonl`) in the active session's cost aggregation, ensuring both Mini Stat (`COST · CACHE`) and the bottom telemetry cost pill (`Session Cost` & `Today's Total`) accurately reflect total session spend across all spawned subagents.
+  - When Claude runs via AWS Bedrock with an unpriced `$0.00` total, Mini Stat now prices the complete session-wide multi-model tokens from `stats.models` rather than being masked by partial parent turns in `cost-state`.
+
 ## 0.1.68
 
 ### Features & Improvements
