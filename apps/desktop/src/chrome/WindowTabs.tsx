@@ -71,10 +71,16 @@ export default function WindowTabs({
             aria-selected={active}
           >
             {editing ? (
-              <div className="window-tab-main">
+              <div
+                className="window-tab-main"
+                onMouseDown={(e) => {
+                  if (e.target !== inputRef.current) e.preventDefault();
+                }}
+              >
                 <span className="window-tab-idx">{win.index}</span>
                 <input
                   ref={inputRef}
+                  autoFocus
                   className="window-tab-rename"
                   value={draft}
                   aria-label="Tab name"
@@ -97,14 +103,13 @@ export default function WindowTabs({
                 type="button"
                 className="window-tab-main"
                 onClick={(e) => {
+                  if (e.detail > 1) return;
                   e.currentTarget.blur();
                   onSelect(win.id);
                 }}
                 onDoubleClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  e.currentTarget.blur();
-                  onSelect(win.id);
                   startRename(win);
                 }}
                 title={

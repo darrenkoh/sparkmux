@@ -473,7 +473,10 @@ export default function App() {
         const existing = getTerm(pane.id);
         if (existing) {
           existing.scrollToBottom();
-          existing.focus();
+          const activeTag = document.activeElement?.tagName;
+          if (activeTag !== "INPUT" && activeTag !== "TEXTAREA") {
+            existing.focus();
+          }
         }
       }
       if (commit) {
@@ -1138,6 +1141,9 @@ export default function App() {
         });
       }
       await refreshTree();
+      if (focusedRef.current) {
+        getTerm(focusedRef.current)?.focus();
+      }
     } catch (e) {
       showToast(String(e));
     }
@@ -1769,7 +1775,20 @@ export default function App() {
             name: win.name,
             sessionName: attachedSession ?? "",
           });
-          void applyWindow(win);
+          if (visibleWindowId !== windowId) {
+            void applyWindow(win);
+          } else {
+            const pane = win.panes.find((p) => p.active) ?? win.panes[0];
+            if (pane) {
+              const existing = getTerm(pane.id);
+              if (existing) {
+                const activeTag = document.activeElement?.tagName;
+                if (activeTag !== "INPUT" && activeTag !== "TEXTAREA") {
+                  existing.focus();
+                }
+              }
+            }
+          }
         }
       }}
       onNewTab={() => {

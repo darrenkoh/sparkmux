@@ -576,6 +576,8 @@ body.is-resizing * {
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
   flex: 0 0 auto;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .window-tab {
@@ -644,6 +646,8 @@ body.is-resizing * {
   border-radius: 4px;
   font: inherit;
   font-weight: 550;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .window-tab-meta {
