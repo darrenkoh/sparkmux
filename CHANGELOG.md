@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.67
+
+### Fixes
+
+- **Left panel**: The collapse chevron on the sessions sash receives clicks again. The widened touch target no longer sits on top of the button.
+
 ## 0.1.66
 
 ### Features & Improvements
