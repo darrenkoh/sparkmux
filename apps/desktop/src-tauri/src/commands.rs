@@ -446,6 +446,24 @@ pub async fn select_window_core(state: &AppState, window_id: String) -> Result<(
     off_lock(move || client.select_window(&window_id).map_err(|e| map_error(&e))).await
 }
 
+pub async fn move_window_core(
+    state: &AppState,
+    src_window_id: String,
+    dst_window_id: String,
+    before: bool,
+) -> Result<(), String> {
+    let client = {
+        let inner = state.inner.lock().await;
+        inner.client()?.clone()
+    };
+    off_lock(move || {
+        client
+            .move_window(&src_window_id, &dst_window_id, before)
+            .map_err(|e| map_error(&e))
+    })
+    .await
+}
+
 pub async fn rename_window_core(
     state: &AppState,
     window_id: String,
@@ -744,6 +762,16 @@ pub async fn new_window(
 #[tauri::command]
 pub async fn select_window(state: State<'_, AppState>, window_id: String) -> Result<(), String> {
     select_window_core(&state, window_id).await
+}
+
+#[tauri::command]
+pub async fn move_window(
+    state: State<'_, AppState>,
+    src_window_id: String,
+    dst_window_id: String,
+    before: bool,
+) -> Result<(), String> {
+    move_window_core(&state, src_window_id, dst_window_id, before).await
 }
 
 #[tauri::command]

@@ -50,6 +50,14 @@ export function selectWindow(windowId: string): Promise<void> {
   return rpcInvoke("select_window", { windowId });
 }
 
+export function moveWindow(
+  srcWindowId: string,
+  dstWindowId: string,
+  before: boolean,
+): Promise<void> {
+  return rpcInvoke("move_window", { srcWindowId, dstWindowId, before });
+}
+
 export function renameWindow(windowId: string, name: string): Promise<void> {
   return rpcInvoke("rename_window", { windowId, name });
 }

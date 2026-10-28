@@ -107,6 +107,7 @@ pub fn run() {
             commands::kill_session,
             commands::new_window,
             commands::select_window,
+            commands::move_window,
             commands::rename_window,
             commands::kill_window,
             commands::kill_pane,

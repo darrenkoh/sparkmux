@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Window as TmuxWindow } from "../types";
+import { onTabPointerDown, shouldIgnoreTabClick } from "./tabReorder";
+import { useTabDragIndicator } from "./useTabDragIndicator";
 
 export default function WindowTabs({
+  sessionName,
   windows,
   visibleWindowId,
   onSelect,
@@ -10,6 +13,7 @@ export default function WindowTabs({
   onCloseTab,
   onRenameTab,
 }: {
+  sessionName: string;
   windows: TmuxWindow[];
   visibleWindowId: string | null;
   onSelect: (windowId: string) => void;
@@ -20,6 +24,8 @@ export default function WindowTabs({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const { draggingId, hint } = useTabDragIndicator();
+  const canReorder = windows.length > 1 && sessionName.length > 0;
 
   useEffect(() => {
     if (!editingId) return;
@@ -63,12 +69,27 @@ export default function WindowTabs({
         ]
           .filter(Boolean)
           .join(", ");
+        const drop =
+          hint?.session === sessionName && hint.id === win.id
+            ? hint.edge === "before"
+              ? "drop-before"
+              : "drop-after"
+            : "";
         return (
           <div
             key={win.id}
-            className={`window-tab ${active ? "active" : ""} ${editing ? "editing" : ""}`}
+            className={`window-tab ${active ? "active" : ""} ${editing ? "editing" : ""} ${
+              draggingId === win.id ? "dragging" : ""
+            } ${canReorder ? "can-reorder" : ""} ${drop}`}
             role="tab"
             aria-selected={active}
+            data-tab-window={win.id}
+            data-tab-session={sessionName}
+            data-tab-axis="horizontal"
+            onPointerDown={(event) => {
+              if (!canReorder || editing) return;
+              onTabPointerDown(event, { session: sessionName, windowId: win.id });
+            }}
           >
             {editing ? (
               <div
@@ -103,6 +124,7 @@ export default function WindowTabs({
                 type="button"
                 className="window-tab-main"
                 onClick={(e) => {
+                  if (shouldIgnoreTabClick()) return;
                   if (e.detail > 1) return;
                   e.currentTarget.blur();
                   onSelect(win.id);
@@ -140,6 +162,7 @@ export default function WindowTabs({
             <button
               type="button"
               className="window-tab-close"
+              data-no-drag=""
               title="Close tab"
               aria-label={`Close ${win.name}`}
               onClick={() => onCloseTab(win.id)}

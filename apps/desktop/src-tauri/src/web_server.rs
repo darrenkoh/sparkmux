@@ -926,6 +926,16 @@ async fn dispatch_rpc_inner(
             crate::commands::select_window_core(state, str_arg(&args, "windowId")).await?;
             Ok(Value::Null)
         }
+        "move_window" => {
+            crate::commands::move_window_core(
+                state,
+                str_arg(&args, "srcWindowId"),
+                str_arg(&args, "dstWindowId"),
+                bool_arg(&args, "before"),
+            )
+            .await?;
+            Ok(Value::Null)
+        }
         "rename_window" => {
             crate::commands::rename_window_core(
                 state,

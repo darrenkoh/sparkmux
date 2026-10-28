@@ -49,6 +49,7 @@ import {
   listenServerStopped,
   listenTreeDirty,
   newSession,
+  moveWindow,
   newWindow,
   openPopoutWindow,
   parseLayout,
@@ -93,6 +94,7 @@ import Splitter, {
 } from "./chrome/Splitter";
 import StatusBar from "./chrome/StatusBar";
 import { formatCpu, formatMemory } from "./chrome/telemetry";
+import { installWindowTabDrag, orderAfterDrop, windowsInOrder } from "./chrome/tabReorder";
 import WindowTabs from "./chrome/WindowTabs";
 import Modal from "./dialogs/Modal";
 import Sidebar from "./sidebar/Sidebar";
@@ -255,6 +257,11 @@ export default function App() {
   const visibleRef = useRef<string | null>(null);
   const focusedRef = useRef<string | null>(null);
   const snapRef = useRef<Snapshot>({ sessions: [] });
+  const reorderHold = useRef(0);
+  const reorderQueue = useRef(Promise.resolve());
+  const reorderTabRef = useRef<
+    (sessionName: string, srcWindowId: string, dstWindowId: string, before: boolean) => void
+  >(() => {});
   const statusRef = useRef<TmuxStatus | null>(null);
   const errorRef = useRef<GuiError>(null);
   const chromeFocus = useRef<"sidebar" | "terminal">("terminal");
@@ -576,11 +583,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const refreshTree = useCallback(async () => {
+  useEffect(() => {
+    return installWindowTabDrag((session, src, dst, before) => {
+      reorderTabRef.current(session, src, dst, before);
+    });
+  }, []);
+
+  const refreshTree = useCallback(async (opts?: { force?: boolean }) => {
+    if (!opts?.force && reorderHold.current > 0) return;
     if (errorRef.current === "missing-tmux" || errorRef.current === "too-old") return;
     if (errorRef.current === "server-stopped") return;
     try {
       const tree = await fetchSnapshot();
+      snapRef.current = tree;
       setSnap(tree);
       if (tree.sessions.length === 0) {
         setEmpty(true);
@@ -1042,6 +1057,46 @@ export default function App() {
       showToast(String(e));
     }
   }
+
+  function reorderTab(
+    sessionName: string,
+    srcWindowId: string,
+    dstWindowId: string,
+    before: boolean,
+  ) {
+    const sess = snapRef.current.sessions.find((session) => session.name === sessionName);
+    if (!sess) return;
+    const nextIds = orderAfterDrop(
+      sess.windows.map((window) => window.id),
+      srcWindowId,
+      dstWindowId,
+      before ? "before" : "after",
+    );
+    if (!nextIds) return;
+    const nextSnap: Snapshot = {
+      sessions: snapRef.current.sessions.map((session) =>
+        session.name === sessionName
+          ? { ...session, windows: windowsInOrder(session.windows, nextIds) }
+          : session,
+      ),
+    };
+    snapRef.current = nextSnap;
+    setSnap(nextSnap);
+    reorderHold.current += 1;
+    reorderQueue.current = reorderQueue.current
+      .then(async () => {
+        try {
+          await moveWindow(srcWindowId, dstWindowId, before);
+        } catch (e) {
+          showToast(String(e));
+        } finally {
+          reorderHold.current = Math.max(0, reorderHold.current - 1);
+          if (reorderHold.current === 0) await refreshTree({ force: true });
+        }
+      })
+      .catch(() => {});
+  }
+  reorderTabRef.current = reorderTab;
 
   async function createNewTab(name = "shell") {
     const session = attachedRef.current;
@@ -1764,6 +1819,7 @@ export default function App() {
 
   const renderTabs = () => (
     <WindowTabs
+      sessionName={attachedSession ?? ""}
       windows={attached?.windows ?? []}
       visibleWindowId={visibleWindowId}
       onSelect={(windowId) => {
@@ -2287,6 +2343,8 @@ export default function App() {
             <dd>⌘T / tab bar +</dd>
             <dt>Rename tab</dt>
             <dd>Double-click the tab name</dd>
+            <dt>Reorder tab</dt>
+            <dd>Drag it in the tab bar or the sidebar</dd>
             <dt>Close tab</dt>
             <dd>⌘W / tab × (asks first)</dd>
             <dt>Copy / paste</dt>

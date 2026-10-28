@@ -400,6 +400,50 @@ impl TmuxClient {
         self.run(&["select-window", "-t", window_id]).map(|_| ())
     }
 
+    /// Place `src_window_id` immediately before or after `dst_window_id`.
+    ///
+    /// Both windows must be in the same session. The session's current window
+    /// stays current. `move-window -a/-b` can leave an index gap, and `-r` on
+    /// that same command skips the insert, so renumber is a second call.
+    pub fn move_window(
+        &self,
+        src_window_id: &str,
+        dst_window_id: &str,
+        before: bool,
+    ) -> Result<()> {
+        let src = crate::target::window_id(src_window_id)?.to_string();
+        let dst = crate::target::window_id(dst_window_id)?.to_string();
+        if src == dst {
+            return Ok(());
+        }
+        let src_session = self.window_session_id(&src)?;
+        let dst_session = self.window_session_id(&dst)?;
+        if src_session != dst_session {
+            return Err(Error::Command(
+                "tabs can only be rearranged within the same session".into(),
+            ));
+        }
+        let current = self.session_window_id(&src_session)?;
+        let place = if before { "-b" } else { "-a" };
+        self.run(&["move-window", "-d", "-s", &src, "-t", &dst, place])?;
+        self.run(&["move-window", "-r", "-t", &src_session])?;
+        let now = self.session_window_id(&src_session)?;
+        if now != current {
+            self.run(&["select-window", "-t", &current])?;
+        }
+        Ok(())
+    }
+
+    fn window_session_id(&self, window_id: &str) -> Result<String> {
+        let raw = self.run(&["display-message", "-p", "-t", window_id, "#{session_id}"])?;
+        Ok(crate::target::session_target(raw.trim())?.to_string())
+    }
+
+    fn session_window_id(&self, session_id: &str) -> Result<String> {
+        let raw = self.run(&["display-message", "-p", "-t", session_id, "#{window_id}"])?;
+        Ok(crate::target::window_id(raw.trim())?.to_string())
+    }
+
     pub fn select_pane(&self, pane_id: &str) -> Result<()> {
         let pane_id = crate::target::pane_id(pane_id)?;
         self.run(&["select-pane", "-t", pane_id]).map(|_| ())
@@ -977,6 +1021,130 @@ mod tests {
             "hidden window should be unread after output (activity={} bell={})",
             build.activity,
             build.bell
+        );
+    }
+
+    #[test]
+    fn move_window_reorders_inside_one_session() {
+        let _live = live_lock();
+        let Ok(client) =
+            TmuxClient::new(None, Some(format!("smux-mov-{}", std::process::id())), None)
+        else {
+            return;
+        };
+        struct Guard<'a>(&'a TmuxClient);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.kill_server();
+            }
+        }
+        let _guard = Guard(&client);
+        if client
+            .run(&["new-session", "-d", "-s", "demo", "-n", "A"])
+            .is_err()
+        {
+            return;
+        }
+        for name in ["B", "C", "D"] {
+            client.new_window("demo", name).expect("new window");
+        }
+        let by_name = |client: &TmuxClient, name: &str| -> String {
+            client
+                .snapshot()
+                .expect("snapshot")
+                .sessions
+                .into_iter()
+                .find(|session| session.name == "demo")
+                .expect("demo")
+                .windows
+                .into_iter()
+                .find(|window| window.name == name)
+                .unwrap_or_else(|| panic!("missing {name}"))
+                .id
+        };
+        let listed = |client: &TmuxClient| -> Vec<(String, u32, bool)> {
+            client
+                .snapshot()
+                .expect("snapshot")
+                .sessions
+                .into_iter()
+                .find(|session| session.name == "demo")
+                .expect("demo")
+                .windows
+                .into_iter()
+                .map(|window| (window.name, window.index, window.active))
+                .collect()
+        };
+
+        let b = by_name(&client, "B");
+        client.select_window(&b).expect("select B");
+        let d = by_name(&client, "D");
+        let a = by_name(&client, "A");
+        client.move_window(&d, &a, true).expect("move D before A");
+        let after_idle = listed(&client);
+        assert_eq!(
+            after_idle
+                .iter()
+                .map(|(name, _, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["D", "A", "B", "C"]
+        );
+        assert!(
+            after_idle
+                .iter()
+                .any(|(name, _, active)| name == "B" && *active),
+            "moving another tab should keep B current: {after_idle:?}"
+        );
+        for pair in after_idle.windows(2) {
+            assert_eq!(pair[1].1, pair[0].1 + 1, "indexes packed: {after_idle:?}");
+        }
+
+        let b = by_name(&client, "B");
+        let c = by_name(&client, "C");
+        client
+            .move_window(&b, &c, false)
+            .expect("move active B after C");
+        let after_active = listed(&client);
+        assert_eq!(
+            after_active
+                .iter()
+                .map(|(name, _, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["D", "A", "C", "B"]
+        );
+        assert!(
+            after_active
+                .iter()
+                .any(|(name, _, active)| name == "B" && *active),
+            "the moved current tab should stay current: {after_active:?}"
+        );
+
+        client.new_session("other").expect("other session");
+        let other = client
+            .snapshot()
+            .expect("snapshot")
+            .sessions
+            .into_iter()
+            .find(|session| session.name == "other")
+            .expect("other")
+            .windows
+            .into_iter()
+            .next()
+            .expect("other window")
+            .id;
+        let err = client
+            .move_window(&b, &other, true)
+            .expect_err("cross-session move");
+        assert!(
+            err.to_string().contains("same session"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            listed(&client)
+                .iter()
+                .map(|(name, _, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["D", "A", "C", "B"]
         );
     }
 

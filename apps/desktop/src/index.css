@@ -288,6 +288,31 @@ body.is-resizing .sidebar-slot {
 
 .win-row {
   padding-left: 8px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.win-row.dragging,
+.window-tab.dragging {
+  opacity: 0.45;
+}
+
+.win-row.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.win-row.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.win-row.can-reorder .row-main {
+  cursor: grab;
+}
+
+body.tab-reordering,
+body.tab-reordering * {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 
 .win-row.visible .name {
@@ -615,6 +640,18 @@ body.is-resizing * {
   background: var(--bg);
   border-color: var(--border);
   border-bottom-color: var(--bg);
+}
+
+.window-tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.window-tab.drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+
+.window-tab.can-reorder .window-tab-main {
+  cursor: grab;
 }
 
 .window-tab-idx {

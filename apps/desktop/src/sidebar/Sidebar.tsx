@@ -2,6 +2,8 @@ import { useState } from "react";
 
 import AgentBoard from "../chrome/AgentBoard.tsx";
 import type { AgentBoardRow } from "../chrome/agentBoard.ts";
+import { onTabPointerDown, shouldIgnoreTabClick } from "../chrome/tabReorder.ts";
+import { useTabDragIndicator } from "../chrome/useTabDragIndicator.ts";
 import type { Selection, Snapshot } from "../types";
 
 export default function Sidebar({
@@ -41,6 +43,7 @@ export default function Sidebar({
   onSelectAgent?: (session: string, windowId: string, paneId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const { draggingId, hint } = useTabDragIndicator();
 
   function toggle(id: string) {
     setCollapsed((prev) => {
@@ -190,10 +193,26 @@ export default function Sidebar({
                       <div
                         className={`row win-row ${winSelected ? "selected" : ""} ${
                           winVisible ? "visible" : ""
+                        } ${draggingId === win.id ? "dragging" : ""} ${
+                          session.windows.length > 1 ? "can-reorder" : ""
+                        } ${
+                          hint?.session === session.name && hint.id === win.id
+                            ? hint.edge === "before"
+                              ? "drop-before"
+                              : "drop-after"
+                            : ""
                         }`}
+                        data-tab-window={win.id}
+                        data-tab-session={session.name}
+                        data-tab-axis="vertical"
+                        onPointerDown={(event) => {
+                          if (session.windows.length < 2) return;
+                          onTabPointerDown(event, { session: session.name, windowId: win.id });
+                        }}
                       >
                         <button
                           className="twist"
+                          data-no-drag=""
                           aria-label={winCollapsed ? "Expand panes" : "Collapse panes"}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -205,7 +224,10 @@ export default function Sidebar({
                         <button
                           className="row-main"
                           aria-label={winLabel}
-                          onClick={() => onSelectWindow(session.name, win.id)}
+                          onClick={() => {
+                            if (shouldIgnoreTabClick()) return;
+                            onSelectWindow(session.name, win.id);
+                          }}
                         >
                           <span className="badge">{win.index}</span>
                           <span className="name-stack">
