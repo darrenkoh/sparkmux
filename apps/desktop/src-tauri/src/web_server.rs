@@ -16,7 +16,7 @@ use axum::response::IntoResponse;
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
-use rand::RngCore;
+use rand::TryRngCore;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -412,7 +412,10 @@ fn trimmed_token(value: Option<String>) -> Option<String> {
 
 fn generate_token() -> String {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    // rand 0.9 OsRng is fallible. A pairing token must come from the OS source.
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("operating system random source");
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
