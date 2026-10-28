@@ -433,6 +433,11 @@ export default function App() {
   const applyWindow = useCallback(
     async (win: TmuxWindow | undefined, commit?: HubOpenCommit) => {
       paneFitRef.current.clear();
+      lastPushedSizeRef.current = null;
+      if (hostRef.current) {
+        hostRef.current.scrollTop = 0;
+        hostRef.current.scrollLeft = 0;
+      }
       if (!commit) {
         setZoomedPaneId(null);
         setPhoneTiled(false);
@@ -475,12 +480,20 @@ export default function App() {
         setPhoneTiled(commit.zoom.phoneTiled);
         setZoomedPaneId(commit.zoom.zoomedPaneId);
       }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => pushClientSize());
+      });
     },
-    [showToast],
+    [pushClientSize, showToast],
   );
 
   const connectTo = useCallback(
     async (session: string, preferredWindow?: string, commit?: HubOpenCommit) => {
+      lastPushedSizeRef.current = null;
+      if (hostRef.current) {
+        hostRef.current.scrollTop = 0;
+        hostRef.current.scrollLeft = 0;
+      }
       const { cols, rows } = pixelClientSize();
       const curSess = snapRef.current.sessions.find((s) => s.name === session);
       const expectedWin =

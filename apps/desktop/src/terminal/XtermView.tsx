@@ -260,6 +260,11 @@ export default function XtermView({
       const host = hostRef.current;
       const live = termRef.current;
       if (!host || !live) return;
+      if (!scrollWithoutKeyboardRef.current && !paneColsRef.current && !paneRowsRef.current) {
+        if (host.scrollTop !== 0) host.scrollTop = 0;
+        if (host.scrollLeft !== 0) host.scrollLeft = 0;
+        return;
+      }
       const buf = live.buffer.active;
       const r = row ?? buf.cursorY;
       const c = col ?? buf.cursorX;
@@ -269,14 +274,14 @@ export default function XtermView({
       const maxRow = Math.min(live.rows, r + 2);
       const targetBottom = maxRow * cellH;
       const viewH = host.clientHeight;
-      if (viewH > 0) {
+      if (viewH > 0 && host.scrollHeight > viewH) {
         if (targetTop < host.scrollTop) {
           host.scrollTop = targetTop;
         } else if (targetBottom > host.scrollTop + viewH) {
           host.scrollTop = Math.max(0, targetBottom - viewH + 4);
         }
       }
-      if (cellW > 0) {
+      if (cellW > 0 && host.scrollWidth > host.clientWidth) {
         const targetLeft = c * cellW;
         const viewW = host.clientWidth;
         if (viewW > 0) {
@@ -921,6 +926,10 @@ export default function XtermView({
         } else {
           if (host.clientWidth < 2 || host.clientHeight < 2) return;
           fit.fit();
+          if (!scrollWithoutKeyboardRef.current) {
+            if (host.scrollTop !== 0) host.scrollTop = 0;
+            if (host.scrollLeft !== 0) host.scrollLeft = 0;
+          }
         }
         logicalRows = term.rows;
         reportCell(term, onCellSizeRef.current, logicalRows);
