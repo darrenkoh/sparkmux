@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.70
+
+### Features & Improvements
+
+- **Tab order**: Drag a tab in the tab bar, or a window row in the sidebar, to move it within the same session. The tab you are viewing stays selected.
+
 ## 0.1.69
 
 ### Features & Improvements
