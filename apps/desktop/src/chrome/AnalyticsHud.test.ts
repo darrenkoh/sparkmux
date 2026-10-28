@@ -337,6 +337,48 @@ test("Claude session cost equals totalCostUSD and per-model costUSD", () => {
   assert.equal(recordedZero.usd, 0);
   assert.equal(recordedZero.stamped, true);
   assert.notEqual(recordedZero.usd, estimateCost("claude-sonnet-4-5", 100_000, 10_000, 0, 0));
+
+  const bedrockUnpriced = sessionCost({
+    provider: "claude",
+    totalCostUSD: 0,
+    hasUnknownModelCost: true,
+    inputTokens: 100_000,
+    outputTokens: 10_000,
+    model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+  });
+  assert.equal(bedrockUnpriced.stamped, false);
+  assert.equal(
+    bedrockUnpriced.usd,
+    estimateCost("anthropic.claude-3-5-sonnet-20241022-v2:0", 100_000, 10_000, 0, 0),
+  );
+
+  const bedrockFromStats = sessionCostFromStats(
+    {
+      cost_ledger: JSON.stringify({
+        provider: "claude",
+        totalCostUSD: 0,
+        hasUnknownModelCost: true,
+      }),
+      models: [
+        {
+          model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+          input_tokens: 100_000,
+          output_tokens: 10_000,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+        },
+      ],
+      total_input_tokens: 100_000,
+      total_output_tokens: 10_000,
+      active_model: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    },
+    "claude",
+  );
+  assert.equal(bedrockFromStats.stamped, false);
+  assert.equal(
+    bedrockFromStats.usd,
+    estimateCost("anthropic.claude-3-5-sonnet-20241022-v2:0", 100_000, 10_000, 0, 0),
+  );
 });
 
 test("formatSessionUsd matches Claude /usage decimals", () => {

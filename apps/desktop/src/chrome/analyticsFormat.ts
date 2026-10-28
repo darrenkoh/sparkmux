@@ -82,6 +82,15 @@ export function getModelPricing(model: string | undefined): ModelPricing {
   if (m.includes("3-5-haiku") || m.includes("3.5-haiku") || m.includes("haiku-3-5") || m.includes("haiku-3.5") || m.includes("haiku_35")) {
     return { inRate: 0.8, outRate: 4.0, cacheReadRate: 0.08, cacheWriteRate: 1.0 };
   }
+  if (
+    m.includes("3-haiku") ||
+    m.includes("3.0-haiku") ||
+    m.includes("haiku-3-0") ||
+    m.includes("haiku-3") ||
+    m.includes("haiku_3")
+  ) {
+    return { inRate: 0.25, outRate: 1.25, cacheReadRate: 0.03, cacheWriteRate: 0.3 };
+  }
   if (m.includes("haiku")) {
     return { inRate: 1.0, outRate: 5.0, cacheReadRate: 0.1, cacheWriteRate: 1.25 };
   }
@@ -518,6 +527,18 @@ function antigravityFallback(ledger: UsageLedger): number | null {
   return any ? sum : null;
 }
 
+function isBedrockModel(model?: string): boolean {
+  if (!model) return false;
+  const m = model.toLowerCase();
+  return (
+    m.includes("anthropic.") ||
+    m.includes("amazon.") ||
+    m.includes("bedrock") ||
+    m.startsWith("arn:aws:") ||
+    m.includes(":inference-profile/")
+  );
+}
+
 /**
  * Session USD for one CLI ledger. The HUD and the mini-stat both call this.
  * A complete stamp wins. A partial or incomplete Grok total with no ticks is
@@ -542,7 +563,28 @@ export function sessionCost(ledger: UsageLedger): SessionCost {
     };
   }
   if (provider === "claude") {
-    if (finiteNumber(ledger.totalCostUSD)) {
+    const hasTokens =
+      nonNeg(ledger.inputTokens) > 0 ||
+      nonNeg(ledger.outputTokens) > 0 ||
+      nonNeg(ledger.cachedReadTokens ?? ledger.cacheReadTokens) > 0 ||
+      nonNeg(ledger.cacheCreationTokens) > 0 ||
+      (ledger.modelUsage != null &&
+        Object.values(ledger.modelUsage).some(
+          (row) =>
+            nonNeg(row.inputTokens) > 0 ||
+            nonNeg(row.outputTokens) > 0 ||
+            rowCacheRead(row) > 0 ||
+            rowCacheWrite(row) > 0,
+        ));
+    const isBedrock =
+      ledger.hasUnknownModelCost === true ||
+      isBedrockModel(ledger.model) ||
+      (ledger.modelUsage != null && Object.keys(ledger.modelUsage).some(isBedrockModel));
+    const unpricedBedrock =
+      isBedrock &&
+      (ledger.totalCostUSD === 0 || ledger.totalCostUSD == null) &&
+      hasTokens;
+    if (finiteNumber(ledger.totalCostUSD) && !unpricedBedrock) {
       return {
         usd: ledger.totalCostUSD,
         stamped: true,
@@ -591,6 +633,29 @@ export function sessionCostFromStats(
       const parsed = JSON.parse(raw) as UsageLedger;
       if (parsed && typeof parsed === "object") {
         if (!parsed.model && stats.active_model) parsed.model = stats.active_model;
+        if (
+          (!parsed.modelUsage || Object.keys(parsed.modelUsage).length === 0) &&
+          stats.models &&
+          stats.models.length > 0
+        ) {
+          const modelUsage: Record<string, LedgerModelRow> = {};
+          for (const row of stats.models) {
+            if (!row?.model) continue;
+            modelUsage[row.model] = {
+              inputTokens: row.input_tokens,
+              outputTokens: row.output_tokens,
+              cacheReadTokens: row.cache_read_tokens,
+              cacheWriteTokens: row.cache_write_tokens ?? 0,
+            };
+          }
+          parsed.modelUsage = modelUsage;
+        }
+        if (parsed.inputTokens == null && stats.total_input_tokens != null) {
+          parsed.inputTokens = stats.total_input_tokens;
+          parsed.outputTokens = stats.total_output_tokens;
+          parsed.cacheReadTokens = stats.total_cache_read_tokens;
+          parsed.cacheCreationTokens = stats.total_cache_write_tokens;
+        }
         return sessionCost(parsed);
       }
     } catch {

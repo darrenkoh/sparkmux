@@ -89,7 +89,9 @@ struct Summary {
     total_usd: Option<f64>,
     saw_cost: bool,
     bedrock_model: bool,
+    has_unknown_model_cost: bool,
     messages: HashMap<String, MsgUse>,
+    model_usage_messages: HashMap<String, MsgUse>,
     anon: u32,
 }
 
@@ -100,7 +102,9 @@ impl Summary {
             total_usd: None,
             saw_cost: false,
             bedrock_model: false,
+            has_unknown_model_cost: false,
             messages: HashMap::new(),
+            model_usage_messages: HashMap::new(),
             anon: 0,
         }
     }
@@ -504,6 +508,20 @@ fn rollup_files(files: &[PathBuf], focused: Option<&Path>, midnight_ms: i64) -> 
     cost
 }
 
+fn messages_to_use(summary: &Summary) -> &HashMap<String, MsgUse> {
+    if has_any_tokens(&summary.messages) {
+        &summary.messages
+    } else {
+        &summary.model_usage_messages
+    }
+}
+
+fn has_any_tokens(messages: &HashMap<String, MsgUse>) -> bool {
+    messages
+        .values()
+        .any(|m| m.input + m.output + m.read + m.write > 0)
+}
+
 fn session_part(summary: &Summary) -> UsageCostPart {
     if let Some(usd) = trusted_usd(summary) {
         return UsageCostPart {
@@ -512,7 +530,8 @@ fn session_part(summary: &Summary) -> UsageCostPart {
             models: Vec::new(),
         };
     }
-    let models = fold_models(&summary.messages, |_| true);
+    let msgs = messages_to_use(summary);
+    let models = fold_models(msgs, |_| true);
     UsageCostPart {
         known_usd: 0.0,
         estimated: !models.is_empty(),
@@ -528,10 +547,11 @@ fn add_today(part: &mut UsageCostPart, summary: &Summary, midnight_ms: i64) {
             return;
         }
     }
+    let msgs = messages_to_use(summary);
     let models = if today {
-        fold_models(&summary.messages, |_| true)
+        fold_models(msgs, |_| true)
     } else {
-        fold_models(&summary.messages, |msg| msg.ts >= midnight_ms)
+        fold_models(msgs, |msg| msg.ts >= midnight_ms)
     };
     if models.is_empty() {
         return;
@@ -548,10 +568,19 @@ fn trusted_usd(summary: &Summary) -> Option<f64> {
     if !summary.saw_cost {
         return None;
     }
-    // `totalCostUSD` is the Total cost `/usage` prints, including a recorded
-    // zero. `hasUnknownModelCost` does not replace that stamp, and `modelUsage`
-    // is not added on as a second token-rate estimate.
-    summary.total_usd
+    if let Some(total) = summary.total_usd {
+        if total > 0.0 {
+            return Some(total);
+        }
+        // total == 0.0: If tokens were consumed or Claude flagged unknown
+        // model cost (e.g. AWS Bedrock / 3P providers), Claude recorded no
+        // true price. Return None so models are returned for a rate-table estimate.
+        if has_any_tokens(messages_to_use(summary)) || summary.has_unknown_model_cost {
+            return None;
+        }
+        return Some(0.0);
+    }
+    None
 }
 
 fn summarize(path: &Path) -> Summary {
@@ -672,12 +701,34 @@ fn take_cost(summary: &mut Summary, obj: &Map<String, Value>) {
     if let Some(usd) = obj.get("totalCostUSD").and_then(nonneg_f64) {
         summary.total_usd = Some(usd);
     }
+    if obj.get("hasUnknownModelCost").and_then(Value::as_bool) == Some(true) {
+        summary.has_unknown_model_cost = true;
+    }
     if let Some(ts) = obj.get("startTime").and_then(timestamp_ms) {
         note_start(summary, ts);
     }
     if let Some(models) = obj.get("modelUsage").and_then(Value::as_object) {
-        for key in models.keys() {
+        for (key, val) in models {
             note_model(summary, key);
+            if let Some(row) = val.as_object() {
+                let input = u64_of(row, "inputTokens");
+                let output = u64_of(row, "outputTokens");
+                let read = u64_of(row, "cacheReadInputTokens");
+                let write = u64_of(row, "cacheCreationInputTokens");
+                if input + output + read + write > 0 {
+                    summary.model_usage_messages.insert(
+                        key.clone(),
+                        MsgUse {
+                            model: key.clone(),
+                            ts: summary.start_ms.unwrap_or(0),
+                            input,
+                            output,
+                            read,
+                            write,
+                        },
+                    );
+                }
+            }
         }
     }
 }
@@ -917,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_model_cost_keeps_the_recorded_total() {
+    fn unknown_model_cost_returns_tokens_for_an_estimate() {
         let dir = scratch("unknown");
         let path = write_jsonl(
             &dir,
@@ -930,11 +981,13 @@ mod tests {
         );
         let cost = rollup_files(std::slice::from_ref(&path), Some(&path), MIDNIGHT);
         assert_eq!(cost.session.known_usd, 0.0);
-        assert!(!cost.session.estimated);
-        assert!(cost.session.models.is_empty());
-        assert_eq!(cost.today.known_usd, 0.0);
-        assert!(!cost.today.estimated);
-        assert!(cost.today.models.is_empty());
+        assert!(cost.session.estimated);
+        assert_eq!(cost.session.models.len(), 1);
+        assert_eq!(cost.session.models[0].input_tokens, 10);
+        assert_eq!(cost.session.models[0].output_tokens, 1);
+        assert_eq!(cost.session.models[0].cache_read_tokens, 0);
+        assert!(cost.today.estimated);
+        assert_eq!(cost.today.models[0].input_tokens, 10);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -960,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_total_with_tokens_stays_the_recorded_zero() {
+    fn zero_total_with_tokens_and_no_model_price_is_an_estimate() {
         let dir = scratch("empty-price");
         let path = write_jsonl(
             &dir,
@@ -971,9 +1024,9 @@ mod tests {
             ),
         );
         let cost = rollup_files(std::slice::from_ref(&path), Some(&path), MIDNIGHT);
+        assert!(cost.session.estimated);
         assert_eq!(cost.session.known_usd, 0.0);
-        assert!(!cost.session.estimated);
-        assert!(cost.session.models.is_empty());
+        assert_eq!(cost.session.models[0].input_tokens, 1000);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
