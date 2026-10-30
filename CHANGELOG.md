@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.71
+
+### Features & Improvements
+
+- **Agent Office**: The status bar opens an isometric office of the live Grok, Claude, and Antigravity panes on this socket. Avatars act out the current tool, a raised hand when an agent needs you, and a walk to the sofa when the turn is finished. SSH panes are not shown. The same view opens as its own window.
+
 ## 0.1.70
 
 ### Features & Improvements
