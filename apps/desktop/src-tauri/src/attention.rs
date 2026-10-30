@@ -464,7 +464,7 @@ pub(crate) fn command_is_ssh(command: &str) -> bool {
     name.eq_ignore_ascii_case("ssh")
 }
 
-fn cli_label(kind: crate::artifacts::CliKind) -> &'static str {
+pub(crate) fn cli_label(kind: crate::artifacts::CliKind) -> &'static str {
     match kind {
         crate::artifacts::CliKind::Grok => "Grok",
         crate::artifacts::CliKind::Claude => "Claude",

@@ -1,7 +1,7 @@
 import type { ActiveTarget } from "../api";
 import type { Pane, Snapshot } from "../types";
 
-export type PopoutWindowKind = "stats" | "gits";
+export type PopoutWindowKind = "stats" | "gits" | "office";
 
 export interface PinnedTarget {
   sessionName: string;
@@ -14,7 +14,7 @@ export const ACTIVE_TARGET_STORAGE_KEY = "sparkmux.activeTarget";
 export function parsePopoutWindowKind(search: string): PopoutWindowKind | null {
   const params = new URLSearchParams(search.startsWith("?") ? search : `?${search}`);
   const val = params.get("window")?.trim().toLowerCase();
-  if (val === "stats" || val === "gits") return val;
+  if (val === "stats" || val === "gits" || val === "office") return val;
   return null;
 }
 

@@ -1199,6 +1199,15 @@ async fn dispatch_rpc_inner(
             .map_err(|err| err.to_string())?;
             json_ok(crate::board_api::agent_board(panes).await?)
         }
+        "agent_office" => {
+            let panes: Vec<BoardPane> = serde_json::from_value(
+                args.get("panes")
+                    .cloned()
+                    .unwrap_or_else(|| Value::Array(vec![])),
+            )
+            .map_err(|err| err.to_string())?;
+            json_ok(crate::office::agent_office(panes).await?)
+        }
         "sync_active_target" => {
             let target = serde_json::from_value(args.get("target").cloned().unwrap_or(Value::Null))
                 .map_err(|err| err.to_string())?;

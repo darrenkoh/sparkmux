@@ -2984,6 +2984,15 @@ body.is-resizing * {
   white-space: nowrap;
 }
 
+.status-office {
+  color: #e7d7c3;
+}
+
+.status-office.open {
+  color: #f8fafc;
+  background: rgba(139, 124, 246, 0.18);
+}
+
 .status-output {
   color: var(--fg);
 }

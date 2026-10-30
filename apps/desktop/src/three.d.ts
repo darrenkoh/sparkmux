@@ -2,11 +2,20 @@ declare module "three" {
   export const ACESFilmicToneMapping: number;
   export const DoubleSide: number;
   export const FrontSide: number;
+  export const SRGBColorSpace: string;
+  export const PCFSoftShadowMap: number;
+
+  export const MathUtils: {
+    lerp(from: number, to: number, alpha: number): number;
+    clamp(value: number, min: number, max: number): number;
+    damp(from: number, to: number, lambda: number, dt: number): number;
+  };
 
   export class Vector2 {
     constructor(x?: number, y?: number);
     x: number;
     y: number;
+    set(x: number, y: number): this;
   }
 
   export class Vector3 {
@@ -36,7 +45,10 @@ declare module "three" {
     set(x: number, y: number, z: number): this;
   }
 
-  export class Matrix4 {}
+  export class Matrix4 {
+    identity(): this;
+    makeTranslation(x: number, y: number, z: number): this;
+  }
 
   export class Color {
     constructor(color?: number);
@@ -137,10 +149,14 @@ declare module "three" {
     matrix: Matrix4;
     children: Object3D[];
     userData: Record<string, unknown>;
+    castShadow: boolean;
+    receiveShadow: boolean;
     add(...objects: Object3D[]): this;
     remove(...objects: Object3D[]): this;
     traverse(callback: (object: Object3D) => void): void;
     updateMatrix(): void;
+    lookAt(x: number, y: number, z: number): void;
+    clone(recursive?: boolean): this;
   }
 
   export class Camera extends Object3D {}
@@ -213,9 +229,114 @@ declare module "three" {
     toneMapping: number;
     setPixelRatio(value: number): void;
     setSize(width: number, height: number, updateStyle?: boolean): void;
+    shadowMap: { enabled: boolean; type: number };
+    outputColorSpace: string;
+    info: { memory: { geometries: number; textures: number } };
     render(scene: Scene, camera: Camera): void;
     dispose(): void;
     forceContextLoss(): void;
+  }
+
+  export class Light extends Object3D {
+    color: Color;
+    intensity: number;
+  }
+
+  export class AmbientLight extends Light {
+    constructor(color?: number, intensity?: number);
+  }
+
+  export class HemisphereLight extends Light {
+    constructor(skyColor?: number, groundColor?: number, intensity?: number);
+  }
+
+  export class DirectionalLight extends Light {
+    constructor(color?: number, intensity?: number);
+    castShadow: boolean;
+    target: Object3D;
+    shadow: {
+      bias: number;
+      autoUpdate: boolean;
+      needsUpdate: boolean;
+      mapSize: Vector2;
+      camera: OrthographicCamera;
+    };
+  }
+
+  export class PointLight extends Light {
+    constructor(color?: number, intensity?: number, distance?: number);
+    castShadow: boolean;
+  }
+
+  export class OrthographicCamera extends Camera {
+    constructor(left?: number, right?: number, top?: number, bottom?: number, near?: number, far?: number);
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+    near: number;
+    far: number;
+    zoom: number;
+    updateProjectionMatrix(): void;
+  }
+
+  export class SphereGeometry extends BufferGeometry {
+    constructor(radius?: number, widthSegments?: number, heightSegments?: number);
+  }
+
+  export class CapsuleGeometry extends BufferGeometry {
+    constructor(radius?: number, length?: number, capSegments?: number, radialSegments?: number);
+  }
+
+  export class ConeGeometry extends BufferGeometry {
+    constructor(radius?: number, height?: number, radialSegments?: number);
+  }
+
+  export class CircleGeometry extends BufferGeometry {
+    constructor(radius?: number, segments?: number);
+  }
+
+  export class IcosahedronGeometry extends BufferGeometry {
+    constructor(radius?: number, detail?: number);
+  }
+
+  export class MeshStandardMaterial extends Material {
+    constructor(parameters?: {
+      color?: number;
+      roughness?: number;
+      metalness?: number;
+      emissive?: number;
+      emissiveIntensity?: number;
+      transparent?: boolean;
+      opacity?: number;
+      map?: Texture | null;
+      side?: number;
+    });
+    color: Color;
+    roughness: number;
+    metalness: number;
+    emissive: Color;
+    emissiveIntensity: number;
+    map: Texture | null;
+  }
+
+  export class SpriteMaterial extends Material {
+    constructor(parameters?: {
+      map?: Texture | null;
+      color?: number;
+      transparent?: boolean;
+      opacity?: number;
+      depthWrite?: boolean;
+    });
+    color: Color;
+    map: Texture | null;
+    rotation: number;
+  }
+
+  export class Sprite extends Object3D {
+    constructor(material?: SpriteMaterial);
+    material: SpriteMaterial;
+    center: Vector2;
   }
 }
 
@@ -234,10 +355,16 @@ declare module "three/addons/controls/OrbitControls.js" {
     maxDistance: number;
     minAzimuthAngle: number;
     maxAzimuthAngle: number;
+    enableRotate: boolean;
+    screenSpacePanning: boolean;
+    minZoom: number;
+    maxZoom: number;
     autoRotate: boolean;
     autoRotateSpeed: number;
     update(): void;
     dispose(): void;
+    addEventListener(type: "start" | "change" | "end", listener: () => void): void;
+    removeEventListener(type: "start" | "change" | "end", listener: () => void): void;
   }
 }
 

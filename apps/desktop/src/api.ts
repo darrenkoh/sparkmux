@@ -1,5 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { emit, type UnlistenFn } from "@tauri-apps/api/event";
 
 import {
   acceptPaneSubscriptionMessage,
@@ -9,6 +9,7 @@ import {
 import { isTauriRuntime, rpcInvoke, rpcListen, wsTransport } from "./transport.ts";
 
 import type { AgentBoardRow } from "./chrome/agentBoard";
+import type { OfficeSnapshot } from "./chrome/office/officeTypes.ts";
 import type {
   AppTelemetry,
   LayoutChangePayload,
@@ -249,6 +250,10 @@ export interface AgentBoardPane {
 
 export function agentBoard(panes: AgentBoardPane[]): Promise<AgentBoardRow[]> {
   return rpcInvoke("agent_board", { panes });
+}
+
+export function agentOffice(panes: AgentBoardPane[]): Promise<OfficeSnapshot> {
+  return rpcInvoke("agent_office", { panes });
 }
 
 export interface ArtifactEntry {
@@ -753,8 +758,46 @@ export function getActiveTarget(): Promise<ActiveTarget> {
   return rpcInvoke("get_active_target");
 }
 
+export interface OfficeFocusPayload {
+  session: string;
+  window_id: string;
+  pane_id: string;
+}
+
+export function emitOfficeFocus(payload: OfficeFocusPayload): void {
+  if (isTauriRuntime()) {
+    void emit("office-focus-pane", payload);
+    return;
+  }
+  try {
+    const channel = new BroadcastChannel("office-focus-pane");
+    channel.postMessage(payload);
+    channel.close();
+  } catch {
+    /* private mode */
+  }
+}
+
+export function listenOfficeFocus(
+  handler: (payload: OfficeFocusPayload) => void,
+): Promise<UnlistenFn> {
+  let channel: BroadcastChannel | null = null;
+  try {
+    channel = new BroadcastChannel("office-focus-pane");
+    channel.onmessage = (event: MessageEvent<OfficeFocusPayload>) => {
+      if (event.data && typeof event.data.session === "string") handler(event.data);
+    };
+  } catch {
+    channel = null;
+  }
+  return rpcListen<OfficeFocusPayload>("office-focus-pane", handler).then((stop) => () => {
+    stop();
+    channel?.close();
+  });
+}
+
 export async function openPopoutWindow(
-  kind: "stats" | "gits",
+  kind: "stats" | "gits" | "office",
   target?: ActiveTarget,
 ): Promise<void> {
   if (target) await syncActiveTarget(target).catch(() => {});

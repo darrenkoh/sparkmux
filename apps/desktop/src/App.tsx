@@ -51,6 +51,7 @@ import {
   newSession,
   moveWindow,
   newWindow,
+  listenOfficeFocus,
   openPopoutWindow,
   parseLayout,
   selectWindow,
@@ -65,7 +66,7 @@ import {
   windowResize,
   type ActiveTarget,
 } from "./api";
-import type { AgentBoardRow } from "./chrome/agentBoard";
+import { boardPanesFromSnapshot, type AgentBoardRow } from "./chrome/agentBoard";
 import {
   postAttentionNotification,
   trackAttention,
@@ -75,6 +76,7 @@ import ArtifactPanel from "./chrome/ArtifactPanel";
 import { formatAppWindowTitle } from "./chrome/windowTitle";
 import AnalyticsHud from "./chrome/AnalyticsHud";
 import ChangeGraph from "./chrome/ChangeGraph";
+import OfficeView from "./chrome/office/OfficeView";
 import DockedStatsPanel from "./chrome/DockedStatsPanel";
 import {
   DockWidthSplitter,
@@ -220,6 +222,7 @@ export default function App() {
   );
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [officeOpen, setOfficeOpen] = useState(false);
   const [dockWidth, setDockWidth] = useState(() => {
     const raw = Number(window.localStorage.getItem("sparkmux.dockWidth"));
     if (Number.isFinite(raw) && raw >= DOCK_MIN_WIDTH && raw <= 960) return raw;
@@ -1298,20 +1301,7 @@ export default function App() {
   }, [attachedSession, allowanceKey, usagePaneId]);
 
   useEffect(() => {
-    const panes = snap.sessions.flatMap((session) =>
-      session.windows.flatMap((win) =>
-        win.panes.map((pane) => ({
-          session: session.name,
-          window_id: win.id,
-          window_name: win.name,
-          pane_id: pane.id,
-          command: pane.command,
-          cwd: pane.path,
-          title: pane.title,
-          pid: pane.pid,
-        })),
-      ),
-    );
+    const panes = boardPanesFromSnapshot(snap);
     let cancel = false;
     void agentBoard(panes)
       .then((rows) => {
@@ -1486,6 +1476,32 @@ export default function App() {
     showToast,
   ]);
 
+  const popOutOffice = useCallback(() => {
+    const target: ActiveTarget = {
+      session_name: attachedSession ?? "sparkmux",
+      tab_id: visibleWindowId ?? "main",
+      tab_name: winName ?? "shell",
+      focused_pane: usagePaneId || focusedPane || "",
+      command: usageCommand,
+      cwd: usageCwd,
+      title: usageTitle,
+      pid: usagePid,
+    };
+    setOfficeOpen(false);
+    void openPopoutWindow("office", target).catch((e) => showToast(String(e)));
+  }, [
+    attachedSession,
+    visibleWindowId,
+    winName,
+    usagePaneId,
+    focusedPane,
+    usageCommand,
+    usageCwd,
+    usageTitle,
+    usagePid,
+    showToast,
+  ]);
+
   async function insertRecipe(text: string) {
     const pane = outputPane;
     if (!pane || !canInsertRecipe(pane.command, pane.alternate)) return;
@@ -1556,6 +1572,17 @@ export default function App() {
     }
     if (mobile) setAgentHubOpen(false);
   }
+
+  const jumpToTargetRef = useRef(jumpToTarget);
+  jumpToTargetRef.current = jumpToTarget;
+  useEffect(() => {
+    const unlisten = listenOfficeFocus((payload) => {
+      void jumpToTargetRef.current(payload.session, payload.window_id, payload.pane_id);
+    });
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, []);
 
   function renderSidebar() {
     return (
@@ -1965,6 +1992,7 @@ export default function App() {
                       type="button"
                       onClick={() => {
                         setGraphOpen(false);
+                        setOfficeOpen(false);
                         setAnalyticsOpen(true);
                       }}
                     >
@@ -1977,10 +2005,21 @@ export default function App() {
                       type="button"
                       onClick={() => {
                         setAnalyticsOpen(false);
+                        setOfficeOpen(false);
                         setGraphOpen(true);
                       }}
                     >
                       GIT
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAnalyticsOpen(false);
+                        setGraphOpen(false);
+                        setOfficeOpen(true);
+                      }}
+                    >
+                      Office
                     </button>
                   </div>
                 )}
@@ -2134,6 +2173,18 @@ export default function App() {
                     onPopOut={popOutGits}
                   />
                 )}
+                {officeOpen && (
+                  <OfficeView
+                    variant="overlay"
+                    snap={snap}
+                    onClose={() => setOfficeOpen(false)}
+                    onPopOut={popOutOffice}
+                    onSelectAgent={(session, windowId, paneId) => {
+                      setOfficeOpen(false);
+                      void jumpToTarget(session, windowId, paneId);
+                    }}
+                  />
+                )}
                 </div>
               </div>
             </>
@@ -2159,8 +2210,10 @@ export default function App() {
           setOutputOpen((open) => !open);
         }}
         graphOpen={graphOpen}
+        officeOpen={officeOpen}
         onAnalytics={() => {
           setGraphOpen(false);
+          setOfficeOpen(false);
           if (analyticsOpen || statsDocked) {
             setAnalyticsOpen(false);
             setStatsDocked(false);
@@ -2171,7 +2224,13 @@ export default function App() {
         }}
         onGraph={() => {
           setAnalyticsOpen(false);
+          setOfficeOpen(false);
           setGraphOpen((open) => !open);
+        }}
+        onOffice={() => {
+          setAnalyticsOpen(false);
+          setGraphOpen(false);
+          setOfficeOpen((open) => !open);
         }}
         onRecipes={() => setDialog({ kind: "recipes" })}
         webRunning={webStatus?.running ?? false}

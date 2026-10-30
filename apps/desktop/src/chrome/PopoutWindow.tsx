@@ -4,6 +4,7 @@ import { isTauriRuntime } from "../transport";
 import { useCallback, useEffect, useState } from "react";
 
 import {
+  emitOfficeFocus,
   getActiveTarget,
   listenActiveTargetChanged,
   listenTreeDirty,
@@ -11,6 +12,7 @@ import {
   tmuxStatus,
   type ActiveTarget,
 } from "../api";
+import OfficeView from "./office/OfficeView";
 import type { Snapshot } from "../types";
 import AnalyticsHud from "./AnalyticsHud";
 import ChangeGraph from "./ChangeGraph";
@@ -118,6 +120,19 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
         window.close();
       });
   }, []);
+
+  if (kind === "office") {
+    return (
+      <OfficeView
+        variant="popout"
+        snap={snap}
+        onClose={handleClose}
+        onSelectAgent={(session, windowId, paneId) => {
+          emitOfficeFocus({ session, window_id: windowId, pane_id: paneId });
+        }}
+      />
+    );
+  }
 
   if (kind === "stats") {
     return (

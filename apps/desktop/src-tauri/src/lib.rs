@@ -11,6 +11,7 @@ mod error;
 mod llm_usage;
 mod menu;
 mod notify_attention;
+mod office;
 mod open_path;
 mod open_url;
 mod relaunch;
@@ -146,6 +147,7 @@ pub fn run() {
             open_path::open_editor_path,
             notify_attention::post_attention_notification,
             board_api::agent_board,
+            office::agent_office,
             relaunch::relaunch_after_update,
             commands::sync_active_target,
             commands::get_active_target,

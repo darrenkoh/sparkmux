@@ -16,7 +16,8 @@ Desktop app that owns a private tmux server (`-L sparkmux`) and shows tiled real
   - `src/chrome/TerrainViewport.tsx` (`globeSensor.ts`, `terrainWindow.ts`, `terrainHud.ts`): WebGL2 interactive 3D Topographical Area Map with `RECT` (Cartesian island ridges) and `GLOBE` (polar channel rings + outward radar ping) modes across session channels (User, Think, Reply, Tool), compressed idle-gap time windows, elevation contours, and 50k particle fields.
   - `src/chrome/AnalyticsHud.tsx` & `DockedStatsPanel.tsx`: Fullscreen and dockable Sci-Fi Telemetry HUD with Neural Cortex synaptogenesis visualization, Actions/Tools matrix, Token Spectrum gauge, Context buffer & TTFT metrics, and filtered Event Stream Log.
   - `src/chrome/ChangeGraph.tsx`, `ChronicleView.tsx`, `GitHistoryView.tsx`: Interactive `⬡ Gits` explorer with Canvas card layouts (`grid`, `pipeline`, `modules`, `impact`, `radial`), Chronicle transit timeline, and Git commit history.
-  - `src/chrome/PopoutWindow.tsx` (`popoutModel.ts`): Standalone popout windows (`?window=stats`, `?window=gits`) synchronized with the active terminal target (`sync_active_target`) with target pinning.
+  - `src/chrome/PopoutWindow.tsx` (`popoutModel.ts`): Standalone popout windows (`?window=stats`, `?window=gits`, `?window=office`) synchronized with the active terminal target (`sync_active_target`) with target pinning.
+  - `src/chrome/office/` and `src-tauri/src/office.rs`: Isometric Agent Office. Read-only `agent_office` rows for Grok, Claude, and Antigravity panes become avatars, a team list, and an activity feed. SSH panes are skipped.
 
 ## Product rules
 

@@ -895,9 +895,10 @@ pub fn open_popout_window(
     kind: String,
     target: Option<ActiveTarget>,
 ) -> Result<(), String> {
-    let label = match kind.as_str() {
-        "stats" => "stats",
-        "gits" => "gits",
+    let (label, width, height) = match kind.as_str() {
+        "stats" => ("stats", 1200.0, 800.0),
+        "gits" => ("gits", 1200.0, 800.0),
+        "office" => ("office", 1400.0, 900.0),
         _ => return Err(format!("unsupported popout window kind: {kind}")),
     };
     if let Some(target) = target {
@@ -916,7 +917,7 @@ pub fn open_popout_window(
     let url = WebviewUrl::App(format!("index.html?window={label}").into());
     WebviewWindowBuilder::new(&app, label, url)
         .title(title)
-        .inner_size(1200.0, 800.0)
+        .inner_size(width, height)
         .min_inner_size(720.0, 480.0)
         .build()
         .map_err(|e| e.to_string())?;

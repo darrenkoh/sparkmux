@@ -503,9 +503,11 @@ export default function StatusBar({
   outputOpen,
   analyticsOpen,
   graphOpen,
+  officeOpen,
   onOutput,
   onAnalytics,
   onGraph,
+  onOffice,
   onRecipes,
   webRunning,
   webModalOpen,
@@ -516,9 +518,11 @@ export default function StatusBar({
   outputOpen: boolean;
   analyticsOpen?: boolean;
   graphOpen?: boolean;
+  officeOpen?: boolean;
   onOutput: () => void;
   onAnalytics?: () => void;
   onGraph?: () => void;
+  onOffice?: () => void;
   onRecipes: () => void;
   webRunning?: boolean;
   webModalOpen?: boolean;
@@ -700,6 +704,19 @@ export default function StatusBar({
           >
             <span className="status-pill-btn-icon" aria-hidden="true">⬡</span>
             <span className="status-pill-btn-text">GIT</span>
+          </button>
+        )}
+        {onOffice && (
+          <button
+            type="button"
+            className={`status-pill-btn status-office${officeOpen ? " open" : ""}`}
+            aria-pressed={officeOpen}
+            aria-label="Agent office"
+            title="Show agents in the 3D office"
+            onClick={onOffice}
+          >
+            <span className="status-pill-btn-icon" aria-hidden="true">⌂</span>
+            <span className="status-pill-btn-text">Office</span>
           </button>
         )}
         {onWebServe && (

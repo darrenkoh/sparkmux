@@ -1,0 +1,296 @@
+.office-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  background: #0b1220;
+  color: #e5e7eb;
+  font-family: inherit;
+}
+
+.office-frame {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.office-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 14px;
+  background: #111827;
+  border-bottom: 1px solid #1f2937;
+}
+
+.office-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 650;
+}
+
+.office-chip {
+  border: 1px solid #1f2937;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+}
+
+.office-chip.sim {
+  color: #facc15;
+  border-color: #854d0e;
+}
+
+.office-chip.stale {
+  color: #f97316;
+}
+
+.office-counters {
+  display: flex;
+  gap: 12px;
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.office-header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.office-header-actions button,
+.office-hover button,
+.office-sim,
+.office-tod button {
+  background: #111827;
+  color: #e5e7eb;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.office-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.office-stage-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.office-stage-host,
+.office-fallback {
+  position: absolute;
+  inset: 0;
+}
+
+.office-fallback {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  color: #9ca3af;
+}
+
+.office-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.office-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.office-label-name::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--dot);
+}
+
+.office-ask,
+.office-warn {
+  max-width: 180px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: #111827;
+  border: 1px solid #1f2937;
+}
+
+.office-warn {
+  color: #ef4444;
+}
+
+.office-legend,
+.office-tod,
+.office-sim,
+.office-empty {
+  position: absolute;
+  z-index: 2;
+}
+
+.office-legend {
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.office-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+
+.office-tod {
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+}
+
+.office-tod button.on {
+  border-color: #8b7cf6;
+}
+
+.office-glow,
+.office-sim {
+  right: 12px;
+  bottom: 12px;
+}
+
+.office-glow {
+  right: 132px;
+}
+
+.office-empty {
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 8px 12px;
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+}
+
+.office-side {
+  border-left: 1px solid #1f2937;
+  background: #111827;
+  overflow: auto;
+  padding: 12px;
+}
+
+.office-side h2 {
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.office-team,
+.office-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.office-team button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.office-team button.selected {
+  border-color: #8b7cf6;
+}
+
+.office-team i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+
+.office-team em,
+.office-team small,
+.office-feed time {
+  display: block;
+  color: #9ca3af;
+  font-style: normal;
+}
+
+.office-hover {
+  position: fixed;
+  z-index: 5;
+  width: 240px;
+  padding: 10px;
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.office-hover ul {
+  margin: 4px 0;
+  padding-left: 16px;
+}
+
+@media (max-width: 900px) {
+  .office-body {
+    grid-template-columns: 1fr;
+  }
+
+  .office-side {
+    position: absolute;
+    top: 48px;
+    right: 0;
+    bottom: 0;
+    width: min(320px, 100%);
+    z-index: 4;
+  }
+}
