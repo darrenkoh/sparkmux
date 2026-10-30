@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             name: macos-aarch64
           - os: ubuntu-24.04-arm
             name: linux-aarch64
