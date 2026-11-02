@@ -49,7 +49,14 @@ export interface LayoutSession {
 }
 
 const POD_COLORS = [
-  0x1e3a5f, 0x4c1d95, 0x115e59, 0x14532d, 0x7f1d1d, 0x78350f, 0x334155, 0x312e81,
+  0x3b6694, // Soft Nordic Blue
+  0x49775f, // Muted Sage Green
+  0x875a8f, // Soft Violet
+  0xa86e4e, // Warm Clay
+  0x477884, // Dusty Teal
+  0x967341, // Soft Bronze
+  0x495b70, // Slate
+  0x915865, // Muted Mauve
 ];
 
 const DESK_W = 1.6;
@@ -58,6 +65,7 @@ const PITCH_X = 2.4;
 const PITCH_Z = 2.2;
 const PAD = 0.6;
 const AISLE = 1.6;
+const LEFT = 3;
 const BACK = 3.5;
 const FRONT = 3.5;
 
@@ -76,15 +84,15 @@ export function layoutOffice(input: LayoutSession[]): OfficeLayout {
   const packW = Math.max(14, Math.ceil(Math.sqrt(total)) * 5);
 
   const pods: Pod[] = [];
-  let cursorX = 0;
+  let cursorX = LEFT;
   let cursorZ = BACK;
   let rowH = 0;
   let placed = 0;
   for (const row of sessions) {
     if (row.keys.length === 0) continue;
     const size = podSize(row.keys.length);
-    if (cursorX > 0 && cursorX + size.w > packW + 1e-6) {
-      cursorX = 0;
+    if (cursorX > LEFT && cursorX - LEFT + size.w > packW + 1e-6) {
+      cursorX = LEFT;
       cursorZ = round3(cursorZ + rowH + AISLE);
       rowH = 0;
     }
@@ -150,9 +158,14 @@ export function routeBetween(
 
 export function windowAnchors(room: { w: number; d: number }): [number, number][] {
   const points: [number, number][] = [];
-  const x = round3(Math.max(0.8, room.w - 1.2));
-  for (let z = 2.4; z < room.d - 1; z += 2.4) points.push([x, round3(z)]);
-  if (points.length === 0) points.push([x, round3(room.d / 2)]);
+  const cx = room.w / 2;
+  const cz = room.d / 2;
+  const rx = Math.max(2, room.w / 2 - 1.2);
+  const rz = Math.max(2, room.d / 2 - 1.2);
+  for (const deg of [-35, -18, 0, 18]) {
+    const rad = (deg * Math.PI) / 180;
+    points.push(clampPoint(room, [cx + Math.cos(rad) * rx, cz + Math.sin(rad) * rz]));
+  }
   return points;
 }
 
@@ -206,16 +219,17 @@ function makePod(
 
 function placeFixtures(room: { w: number; d: number }, pods: Pod[]): Fixture[] {
   const backZ = 1.15;
+  const coffeePos = clampPoint(room, [1.8, room.d * 0.65]);
   const fixtures: Fixture[] = [
     {
       kind: "coffee",
-      pos: [1.6, backZ],
-      rot: 0,
-      anchors: shiftAnchors([1.6, backZ], [
-        [0, 1.15],
-        [-0.7, 1.15],
-        [0.7, 1.15],
-      ]),
+      pos: coffeePos,
+      rot: Math.PI / 2,
+      anchors: shiftAnchors(coffeePos, [
+        [1.1, -0.5],
+        [1.1, 0],
+        [1.1, 0.5],
+      ]).map((point) => clampPoint(room, point)),
     },
     {
       kind: "bookshelf",
@@ -225,7 +239,7 @@ function placeFixtures(room: { w: number; d: number }, pods: Pod[]): Fixture[] {
         [-0.6, 1.2],
         [0, 1.2],
         [0.6, 1.2],
-      ]),
+      ]).map((point) => clampPoint(room, point)),
     },
     {
       kind: "bookshelf",
@@ -235,7 +249,7 @@ function placeFixtures(room: { w: number; d: number }, pods: Pod[]): Fixture[] {
         [-0.6, 1.2],
         [0, 1.2],
         [0.6, 1.2],
-      ]),
+      ]).map((point) => clampPoint(room, point)),
     },
     {
       kind: "whiteboard",
@@ -244,12 +258,12 @@ function placeFixtures(room: { w: number; d: number }, pods: Pod[]): Fixture[] {
       anchors: shiftAnchors([9.4, backZ], [
         [-0.45, 1.2],
         [0.45, 1.2],
-      ]),
+      ]).map((point) => clampPoint(room, point)),
     },
     {
       kind: "server",
-      pos: [11.6, backZ],
-      rot: 0,
+      pos: [2.2, backZ],
+      rot: 0.35,
       anchors: [],
     },
     {

@@ -40,12 +40,15 @@ export interface StageAgent {
   name: string;
   color: number;
   accent: number;
+  cli?: string;
   pose: Pose;
   zone: Zone;
   marker: OfficeMarker;
   deskKey: string;
   ask: string;
   state: string;
+  tool?: string;
+  toolArg?: string;
 }
 
 export interface OfficeHooks {
@@ -76,6 +79,9 @@ interface Walker {
   ask: string;
   name: string;
   state: string;
+  cli?: string;
+  tool?: string;
+  toolArg?: string;
   leaving: boolean;
   intern: boolean;
 }
@@ -85,7 +91,7 @@ const SPEED = 1.4;
 
 export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle {
   const renderer = new WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.toneMapping = ACESFilmicToneMapping;
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.shadowMap.enabled = true;
@@ -115,11 +121,12 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
   controls.maxZoom = 3;
   controls.target.set(8, 0, 6);
 
-  const hemi = new HemisphereLight(0xbfd8ff, 0x3a2a1a, 0.6);
-  const ambient = new AmbientLight(0xffffff, 0.15);
-  const sun = new DirectionalLight(0xfff4e0, 2.2);
+  // Soft, balanced Scandinavian daylight
+  const hemi = new HemisphereLight(0xc8d8ec, 0x262c33, 0.75);
+  const ambient = new AmbientLight(0xffffff, 0.35);
+  const sun = new DirectionalLight(0xfffaed, 1.4);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.bias = -0.0005;
   sun.shadow.autoUpdate = false;
   sun.shadow.needsUpdate = true;
@@ -147,11 +154,11 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
   let glow = false;
   let tod: TimeOfDay = "now";
   let focusKey: string | null = null;
+  let resettingCamera = false;
   let pointerHighlight: string | null = null;
   let listHighlight: string | null = null;
   let userGrab = false;
   let lastFrame = 0;
-  let labelTick = 0;
   let hoverTick = 0;
   let shadowTick = 0;
   let screenTick = 0;
@@ -169,7 +176,8 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
     const width = Math.max(1, host.clientWidth);
     const height = Math.max(1, host.clientHeight);
     const aspect = width / height;
-    const diag = Math.hypot(layout.room.w, layout.room.d) * 0.55;
+    const radius = Math.max(layout.room.w, layout.room.d) * 0.58 + 0.6;
+    const diag = radius * 1.08;
     camera.top = diag;
     camera.bottom = -diag;
     camera.left = -diag * aspect;
@@ -209,14 +217,24 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
       lamp.visible = preset === "night";
       lamp.intensity = preset === "night" ? 1.6 : 0;
     }
-    if (glow && preset === "night" && !composer) {
+    if (scene.background instanceof Color) {
+      scene.background.set(0x0b1220);
+    }
+    room?.setTod?.(preset);
+
+    if (glow && !composer) {
       composer = new EffectComposer(renderer);
       composer.addPass(new RenderPass(scene, camera));
-      const pass = new UnrealBloomPass(new Vector2(host.clientWidth, host.clientHeight), 0.6, 0.4, 0.85);
+      const strength = preset === "night" ? 0.7 : preset === "evening" ? 0.55 : 0.35;
+      const thresh = preset === "night" ? 0.65 : preset === "evening" ? 0.72 : 0.82;
+      const pass = new UnrealBloomPass(new Vector2(host.clientWidth, host.clientHeight), strength, 0.45, thresh);
       bloom = pass;
       composer.addPass(pass);
+    } else if (glow && composer && bloom) {
+      bloom.strength = preset === "night" ? 0.7 : preset === "evening" ? 0.55 : 0.35;
+      bloom.threshold = preset === "night" ? 0.65 : preset === "evening" ? 0.72 : 0.82;
     }
-    if (!(glow && preset === "night")) {
+    if (!glow && composer) {
       composer?.dispose();
       bloom?.dispose();
       composer = null;
@@ -231,9 +249,14 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
     }
     room = buildOfficeRoom(next, screens, 0);
     scene.add(room.root);
+    room.setTod?.(tod === "now" ? todFromHour(new Date().getHours()) : tod);
     layout = next;
-    DOOR.z = next.room.d * 0.45;
-    controls.target.set(next.room.w / 2, 0, next.room.d / 2);
+    const cx = next.room.w / 2;
+    const cz = next.room.d / 2;
+    const radius = Math.max(next.room.w, next.room.d) * 0.58 + 0.6;
+    DOOR.x = cx - radius + 0.9;
+    DOOR.z = cz;
+    controls.target.set(cx, 0, cz);
     const elev = Math.asin(1 / Math.sqrt(3));
     const az = Math.PI / 4;
     const dist = 60;
@@ -260,7 +283,7 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
   const ensureWalker = (agent: StageAgent, fromDoor: boolean): Walker => {
     let walker = walkers.get(agent.key);
     if (!walker) {
-      const rig = createAvatar(agent.key, agent.color, agent.accent, fnv1a(agent.key) % 4);
+      const rig = createAvatar(agent.key, agent.color, agent.accent, fnv1a(agent.key) % 4, agent.cli);
       const startX = fromDoor ? DOOR.x : agentTarget(agent).x;
       const startZ = fromDoor ? DOOR.z : agentTarget(agent).z;
       rig.root.position.set(startX, 0, startZ);
@@ -276,6 +299,9 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
         ask: agent.ask,
         name: agent.name,
         state: agent.state,
+        cli: agent.cli,
+        tool: agent.tool,
+        toolArg: agent.toolArg,
         leaving: false,
         intern: false,
       };
@@ -327,6 +353,9 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
       walker.ask = agent.ask.slice(0, 80);
       walker.name = agent.name;
       walker.state = agent.state;
+      walker.cli = agent.cli;
+      walker.tool = agent.tool;
+      walker.toolArg = agent.toolArg;
       if (moved && !walker.leaving) routeWalker(walker, target);
       const screen = room?.screens.get(agent.deskKey);
       if (screen) screen.material = screens.material(screenActivity(agent));
@@ -363,11 +392,7 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
     if (!running) return;
     raf = 0;
     if (paused || hidden || offscreen) return;
-    if (now - lastFrame < 33) {
-      raf = requestAnimationFrame(frame);
-      return;
-    }
-    const dt = Math.min(0.1, (now - lastFrame) / 1000 || 0.016);
+    const dt = Math.min(0.05, (now - lastFrame) / 1000 || 0.016);
     lastFrame = now;
     const time = now / 1000;
     let walking = false;
@@ -421,15 +446,26 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
         controls.target.x = MathUtils.damp(controls.target.x, walker.x, 3, dt);
         controls.target.z = MathUtils.damp(controls.target.z, walker.z, 3, dt);
       }
+    } else if (resettingCamera && layout && !userGrab) {
+      const tx = layout.room.w / 2;
+      const tz = layout.room.d / 2;
+      controls.target.x = MathUtils.damp(controls.target.x, tx, 4, dt);
+      controls.target.z = MathUtils.damp(controls.target.z, tz, 4, dt);
+      camera.zoom = MathUtils.damp(camera.zoom, 1, 4, dt);
+      camera.updateProjectionMatrix();
+      if (Math.hypot(controls.target.x - tx, controls.target.z - tz) < 0.05 && Math.abs(camera.zoom - 1) < 0.02) {
+        resettingCamera = false;
+      }
     }
     controls.update();
+    room?.tick?.(time);
     if (now - screenTick > 250) {
       screenTick = now;
       screens.tick(time);
       for (const led of room?.leds ?? []) {
         const material = led.material;
         if (material instanceof MeshStandardMaterial) {
-          material.emissiveIntensity = Math.sin(time * 8 + led.position.y) > 0 ? 1.4 : 0.2;
+          material.emissiveIntensity = Math.sin(time * 8 + led.position.y) > 0 ? 0.8 : 0.15;
         }
       }
     }
@@ -441,14 +477,15 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
       if (hour) hour.rotation.z = -((date.getHours() % 12) / 12) * Math.PI * 2;
       if (minute) minute.rotation.z = -(date.getMinutes() / 60) * Math.PI * 2;
     }
-    sun.shadow.needsUpdate = walking || now - shadowTick > 200;
-    if (sun.shadow.needsUpdate) shadowTick = now;
+    // Throttle shadow map recomputation to save GPU fill rate
+    const shadowInterval = walking ? 50 : 1000;
+    if (now - shadowTick > shadowInterval) {
+      shadowTick = now;
+      sun.shadow.needsUpdate = true;
+    }
     if (composer && glow) composer.render();
     else renderer.render(scene, camera);
-    if (now - labelTick > 66) {
-      labelTick = now;
-      projectLabels();
-    }
+    projectLabels();
     raf = requestAnimationFrame(frame);
   };
 
@@ -465,21 +502,32 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
         labelNodes.set(walker.key, node);
       }
       const dot = stateColor(walker.state);
+      const toolSummary =
+        walker.state === "running" && walker.tool
+          ? walker.toolArg
+            ? `${walker.tool} · ${walker.toolArg.slice(0, 22)}`
+            : walker.tool
+          : "";
+      const toolPill = toolSummary ? `<span class="office-tool-pill">${escapeHtml(toolSummary)}</span>` : "";
       const ask = walker.marker === "ask" && walker.ask ? `<span class="office-ask">${escapeHtml(walker.ask)}</span>` : "";
       const warn = walker.marker === "error" ? `<span class="office-warn">⚠</span>` : "";
-      node.innerHTML = `<span class="office-label-name" style="--dot:${dot}">${escapeHtml(walker.name)}</span>${warn}${ask}`;
-      const vector = new Vector3(walker.x, 1.7, walker.z);
+      const content = `<span class="office-label-name" style="--dot:${dot}">${escapeHtml(walker.name)}</span>${toolPill}${warn}${ask}`;
+      if (node.dataset.content !== content) {
+        node.innerHTML = content;
+        node.dataset.content = content;
+      }
+      const vector = new Vector3(walker.x, 1.45, walker.z);
       vector.project(camera);
       const x = (vector.x * 0.5 + 0.5) * width;
       const y = (-vector.y * 0.5 + 0.5) * height;
       const visible = vector.z < 1 && x > -40 && x < width + 40 && y > -40 && y < height + 40;
-      node.style.display = visible ? "block" : "none";
+      node.style.display = visible ? "flex" : "none";
       if (!visible) continue;
       let stack = 0;
       for (const other of placed) {
         if (Math.abs(other.y - y) < 18) stack += 16;
       }
-      node.style.transform = `translate(${x}px, ${y - stack}px)`;
+      node.style.transform = `translate(calc(${x}px - 50%), calc(${y - stack}px - 100%))`;
       placed.push({ y, node });
     }
   };
@@ -510,18 +558,20 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
   };
   const resetCamera = () => {
     focusKey = null;
-    if (!layout) return;
-    controls.target.set(layout.room.w / 2, 0, layout.room.d / 2);
-    fitCamera();
+    resettingCamera = true;
   };
   const onGrabStart = () => {
     userGrab = true;
+    resettingCamera = false;
   };
   const onGrabEnd = () => {
     userGrab = false;
   };
   const onGrabChange = () => {
-    if (userGrab) focusKey = null;
+    if (userGrab) {
+      focusKey = null;
+      resettingCamera = false;
+    }
   };
   controls.addEventListener("start", onGrabStart);
   controls.addEventListener("end", onGrabEnd);
@@ -602,6 +652,7 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
     },
     focus(key) {
       focusKey = key;
+      if (key) resettingCamera = false;
     },
     highlight(key) {
       listHighlight = key;
@@ -645,9 +696,9 @@ export function mountOffice(host: HTMLElement, hooks: OfficeHooks): OfficeHandle
 }
 
 const TOD = {
-  day: { sun: 0xfff4e0, intensity: 2.2, hemi: 0.7, elev: 55 },
-  evening: { sun: 0xffb070, intensity: 1.4, hemi: 0.45, elev: 15 },
-  night: { sun: 0x7a8cff, intensity: 0.25, hemi: 0.2, elev: 40 },
+  day: { sun: 0xfffaed, intensity: 1.4, hemi: 0.75, elev: 55 },
+  evening: { sun: 0xf5a878, intensity: 1.1, hemi: 0.5, elev: 18 },
+  night: { sun: 0x6e80e0, intensity: 0.3, hemi: 0.25, elev: 40 },
 };
 
 function todFromHour(hour: number): "day" | "evening" | "night" {

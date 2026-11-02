@@ -66,14 +66,31 @@
 
 .office-header-actions button,
 .office-hover button,
+.office-glow,
 .office-sim,
 .office-tod button {
-  background: #111827;
+  background: rgba(17, 24, 39, 0.85);
   color: #e5e7eb;
   border: 1px solid #1f2937;
   border-radius: 8px;
   padding: 4px 8px;
   cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.office-header-actions button:hover,
+.office-hover button:hover,
+.office-glow:hover,
+.office-sim:hover,
+.office-tod button:hover {
+  border-color: #38bdf8;
+  background: rgba(30, 41, 59, 0.9);
+}
+
+.office-glow[aria-pressed="true"] {
+  border-color: #8b7cf6;
+  color: #c4b5fd;
 }
 
 .office-body {
@@ -114,39 +131,81 @@
   position: absolute;
   left: 0;
   top: 0;
-  transform: translate(-50%, -100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 11px;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.office-label-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 7px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 9999px;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
 }
 
 .office-label-name::before {
   content: "";
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 4px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--dot);
+  box-shadow: 0 0 6px var(--dot);
+}
+
+.office-tool-pill {
+  max-width: 180px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #bae6fd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9.5px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 .office-ask,
 .office-warn {
-  max-width: 180px;
-  padding: 4px 6px;
-  border-radius: 8px;
-  background: #111827;
-  border: 1px solid #1f2937;
+  max-width: 200px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid #f59e0b;
+  color: #fef08a;
+  font-size: 10px;
+  line-height: 1.3;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  text-align: center;
 }
 
 .office-warn {
-  color: #ef4444;
+  border-color: #ef4444;
+  color: #fca5a5;
 }
 
 .office-legend,
 .office-tod,
+.office-glow,
 .office-sim,
 .office-empty {
   position: absolute;

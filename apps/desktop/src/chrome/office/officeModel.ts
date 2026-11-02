@@ -28,8 +28,18 @@ export const CALLSIGNS = [
 ];
 
 export const AGENT_PALETTE = [
-  0x3b82f6, 0xfacc15, 0xf97316, 0x38bdf8, 0x22c55e, 0x9ca3af, 0x111827, 0x8b5a2b, 0xec4899,
-  0xa855f7, 0x14b8a6, 0xef4444,
+  0x4a739e, // Muted Denim Blue
+  0x4d8065, // Soft Sage Green
+  0xba7654, // Warm Terracotta
+  0x4a7e8c, // Dusty Slate Teal
+  0xab8848, // Muted Amber Ochre
+  0x7b6a94, // Dusty Heather Purple
+  0xa65d74, // Dusty Rose
+  0x497570, // Sea Glass
+  0x576578, // Slate Grey
+  0x8c6d4d, // Warm Chestnut
+  0x3c4e61, // Deep Navy Slate
+  0x9c5950, // Muted Brick
 ];
 
 export const CLI_ACCENT = { claude: 0xd97757, grok: 0xe5e7eb, antigravity: 0x4f8ff7 } as const;

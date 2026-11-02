@@ -208,12 +208,15 @@ export default function OfficeView(props: {
         name: namesRef.current.get(key) ?? "Agent",
         color: agentColor(key),
         accent: CLI_ACCENT[cli],
+        cli,
         pose: pose.pose,
         zone: pose.zone,
         marker: pose.marker,
         deskKey: key,
         ask: agent.ask,
         state: agent.state,
+        tool: agent.tool,
+        toolArg: agent.tool_arg,
       };
     });
   }, [ordered, namesVersion, poseTick]);

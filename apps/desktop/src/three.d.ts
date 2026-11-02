@@ -84,7 +84,20 @@ declare module "three" {
   }
 
   export class CylinderGeometry extends BufferGeometry {
-    constructor(radiusTop?: number, radiusBottom?: number, height?: number, radialSegments?: number);
+    constructor(
+      radiusTop?: number,
+      radiusBottom?: number,
+      height?: number,
+      radialSegments?: number,
+      heightSegments?: number,
+      openEnded?: boolean,
+      thetaStart?: number,
+      thetaLength?: number,
+    );
+  }
+
+  export class TorusGeometry extends BufferGeometry {
+    constructor(radius?: number, tube?: number, radialSegments?: number, tubularSegments?: number, arc?: number);
   }
 
   export class OctahedronGeometry extends BufferGeometry {
@@ -119,6 +132,7 @@ declare module "three" {
   export class Material {
     transparent: boolean;
     opacity: number;
+    needsUpdate: boolean;
     dispose(): void;
   }
 
@@ -193,7 +207,14 @@ declare module "three" {
   }
 
   export class RingGeometry extends BufferGeometry {
-    constructor(innerRadius?: number, outerRadius?: number, thetaSegments?: number);
+    constructor(
+      innerRadius?: number,
+      outerRadius?: number,
+      thetaSegments?: number,
+      phiSegments?: number,
+      thetaStart?: number,
+      thetaLength?: number,
+    );
   }
 
   export class PointsMaterial extends Material {
@@ -390,6 +411,9 @@ declare module "three/addons/postprocessing/RenderPass.js" {
 declare module "three/addons/postprocessing/UnrealBloomPass.js" {
   import { Vector2 } from "three";
   export class UnrealBloomPass {
+    strength: number;
+    radius: number;
+    threshold: number;
     constructor(resolution: Vector2, strength?: number, radius?: number, threshold?: number);
     dispose(): void;
   }
