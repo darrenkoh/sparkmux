@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.72
+
+### Features & Improvements
+
+- **Agent Office**: Refined the 3D circular rotunda room layout with sand-oak parquet flooring, overhead halo ring chandelier, CLI-specific avatar head accessories (Antigravity levitating halo, Grok orbital ring, Claude twin antennas), and live tool-calling pills above active agents.
+
 ## 0.1.71
 
 ### Features & Improvements
