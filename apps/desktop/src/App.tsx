@@ -76,6 +76,7 @@ import ArtifactPanel from "./chrome/ArtifactPanel";
 import { formatAppWindowTitle } from "./chrome/windowTitle";
 import AnalyticsHud from "./chrome/AnalyticsHud";
 import ChangeGraph from "./chrome/ChangeGraph";
+import AgentHq from "./chrome/hq/AgentHq";
 import OfficeView from "./chrome/office/OfficeView";
 import DockedStatsPanel from "./chrome/DockedStatsPanel";
 import {
@@ -223,6 +224,7 @@ export default function App() {
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
   const [officeOpen, setOfficeOpen] = useState(false);
+  const [hqOpen, setHqOpen] = useState(false);
   const [dockWidth, setDockWidth] = useState(() => {
     const raw = Number(window.localStorage.getItem("sparkmux.dockWidth"));
     if (Number.isFinite(raw) && raw >= DOCK_MIN_WIDTH && raw <= 960) return raw;
@@ -1488,7 +1490,35 @@ export default function App() {
       pid: usagePid,
     };
     setOfficeOpen(false);
+    setHqOpen(false);
     void openPopoutWindow("office", target).catch((e) => showToast(String(e)));
+  }, [
+    attachedSession,
+    visibleWindowId,
+    winName,
+    usagePaneId,
+    focusedPane,
+    usageCommand,
+    usageCwd,
+    usageTitle,
+    usagePid,
+    showToast,
+  ]);
+
+  const popOutHq = useCallback(() => {
+    const target: ActiveTarget = {
+      session_name: attachedSession ?? "sparkmux",
+      tab_id: visibleWindowId ?? "main",
+      tab_name: winName ?? "shell",
+      focused_pane: usagePaneId || focusedPane || "",
+      command: usageCommand,
+      cwd: usageCwd,
+      title: usageTitle,
+      pid: usagePid,
+    };
+    setOfficeOpen(false);
+    setHqOpen(false);
+    void openPopoutWindow("hq", target).catch((e) => showToast(String(e)));
   }, [
     attachedSession,
     visibleWindowId,
@@ -1993,6 +2023,7 @@ export default function App() {
                       onClick={() => {
                         setGraphOpen(false);
                         setOfficeOpen(false);
+                        setHqOpen(false);
                         setAnalyticsOpen(true);
                       }}
                     >
@@ -2006,6 +2037,7 @@ export default function App() {
                       onClick={() => {
                         setAnalyticsOpen(false);
                         setOfficeOpen(false);
+                        setHqOpen(false);
                         setGraphOpen(true);
                       }}
                     >
@@ -2016,10 +2048,22 @@ export default function App() {
                       onClick={() => {
                         setAnalyticsOpen(false);
                         setGraphOpen(false);
+                        setHqOpen(false);
                         setOfficeOpen(true);
                       }}
                     >
                       Office
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAnalyticsOpen(false);
+                        setGraphOpen(false);
+                        setOfficeOpen(false);
+                        setHqOpen(true);
+                      }}
+                    >
+                      HQ
                     </button>
                   </div>
                 )}
@@ -2185,6 +2229,18 @@ export default function App() {
                     }}
                   />
                 )}
+                {hqOpen && (
+                  <AgentHq
+                    variant="overlay"
+                    snap={snap}
+                    onClose={() => setHqOpen(false)}
+                    onPopOut={popOutHq}
+                    onSelectAgent={(session, windowId, paneId) => {
+                      setHqOpen(false);
+                      void jumpToTarget(session, windowId, paneId);
+                    }}
+                  />
+                )}
                 </div>
               </div>
             </>
@@ -2211,9 +2267,11 @@ export default function App() {
         }}
         graphOpen={graphOpen}
         officeOpen={officeOpen}
+        hqOpen={hqOpen}
         onAnalytics={() => {
           setGraphOpen(false);
           setOfficeOpen(false);
+          setHqOpen(false);
           if (analyticsOpen || statsDocked) {
             setAnalyticsOpen(false);
             setStatsDocked(false);
@@ -2225,12 +2283,20 @@ export default function App() {
         onGraph={() => {
           setAnalyticsOpen(false);
           setOfficeOpen(false);
+          setHqOpen(false);
           setGraphOpen((open) => !open);
         }}
         onOffice={() => {
           setAnalyticsOpen(false);
           setGraphOpen(false);
+          setHqOpen(false);
           setOfficeOpen((open) => !open);
+        }}
+        onHq={() => {
+          setAnalyticsOpen(false);
+          setGraphOpen(false);
+          setOfficeOpen(false);
+          setHqOpen((open) => !open);
         }}
         onRecipes={() => setDialog({ kind: "recipes" })}
         webRunning={webStatus?.running ?? false}

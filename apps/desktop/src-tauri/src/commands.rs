@@ -899,6 +899,7 @@ pub fn open_popout_window(
         "stats" => ("stats", 1200.0, 800.0),
         "gits" => ("gits", 1200.0, 800.0),
         "office" => ("office", 1400.0, 900.0),
+        "hq" => ("hq", 1280.0, 800.0),
         _ => return Err(format!("unsupported popout window kind: {kind}")),
     };
     if let Some(target) = target {
