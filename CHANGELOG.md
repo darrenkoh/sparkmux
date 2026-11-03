@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.73
+
+### Features & Improvements
+
+- **Agent HQ**: The status bar opens a building view of the live Grok, Claude, and Antigravity panes on this socket. Each tmux session is a floor and each agent pane is a room. A green ring means the agent is working, amber means it needs you, and red means it failed. Idle and finished agents are dim. An ask can be answered from the roster. The same view opens as its own window.
+
 ## 0.1.72
 
 ### Features & Improvements
