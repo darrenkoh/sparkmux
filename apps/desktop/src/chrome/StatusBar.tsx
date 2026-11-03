@@ -504,10 +504,12 @@ export default function StatusBar({
   analyticsOpen,
   graphOpen,
   officeOpen,
+  hqOpen,
   onOutput,
   onAnalytics,
   onGraph,
   onOffice,
+  onHq,
   onRecipes,
   webRunning,
   webModalOpen,
@@ -519,10 +521,12 @@ export default function StatusBar({
   analyticsOpen?: boolean;
   graphOpen?: boolean;
   officeOpen?: boolean;
+  hqOpen?: boolean;
   onOutput: () => void;
   onAnalytics?: () => void;
   onGraph?: () => void;
   onOffice?: () => void;
+  onHq?: () => void;
   onRecipes: () => void;
   webRunning?: boolean;
   webModalOpen?: boolean;
@@ -717,6 +721,19 @@ export default function StatusBar({
           >
             <span className="status-pill-btn-icon" aria-hidden="true">⌂</span>
             <span className="status-pill-btn-text">Office</span>
+          </button>
+        )}
+        {onHq && (
+          <button
+            type="button"
+            className={`status-pill-btn status-hq${hqOpen ? " open" : ""}`}
+            aria-pressed={hqOpen}
+            aria-label="Agent HQ"
+            title="Show agents in the building view"
+            onClick={onHq}
+          >
+            <span className="status-pill-btn-icon" aria-hidden="true">▣</span>
+            <span className="status-pill-btn-text">HQ</span>
           </button>
         )}
         {onWebServe && (

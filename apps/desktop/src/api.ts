@@ -797,7 +797,7 @@ export function listenOfficeFocus(
 }
 
 export async function openPopoutWindow(
-  kind: "stats" | "gits" | "office",
+  kind: "stats" | "gits" | "office" | "hq",
   target?: ActiveTarget,
 ): Promise<void> {
   if (target) await syncActiveTarget(target).catch(() => {});

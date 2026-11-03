@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Design only. No feature code until Haku approves. |
+| Status | Approved. The MVP in section 6 is implemented. Later phases are not. |
 | References | Version A, isometric diorama (`office3d-ref`). Version B, 2D night-shift cross-section (`hq3d-ref`). |
 | Bots | Claude Code, Grok Build, and Antigravity panes on the private `-L sparkmux` socket. |
 

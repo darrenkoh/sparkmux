@@ -82,6 +82,7 @@ test("parsePopoutWindowKind identifies stats and gits window modes", () => {
   assert.equal(parsePopoutWindowKind("window=STATS"), "stats");
   assert.equal(parsePopoutWindowKind("?window=office"), "office");
   assert.equal(parsePopoutWindowKind("?window=office&sim=1"), "office");
+  assert.equal(parsePopoutWindowKind("?window=hq"), "hq");
   assert.equal(parsePopoutWindowKind("?window=unknown"), null);
   assert.equal(parsePopoutWindowKind(""), null);
 });

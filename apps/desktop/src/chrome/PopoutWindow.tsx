@@ -12,6 +12,7 @@ import {
   tmuxStatus,
   type ActiveTarget,
 } from "../api";
+import AgentHq from "./hq/AgentHq";
 import OfficeView from "./office/OfficeView";
 import type { Snapshot } from "../types";
 import AnalyticsHud from "./AnalyticsHud";
@@ -124,6 +125,19 @@ export default function PopoutWindow({ kind }: { kind: PopoutWindowKind }) {
   if (kind === "office") {
     return (
       <OfficeView
+        variant="popout"
+        snap={snap}
+        onClose={handleClose}
+        onSelectAgent={(session, windowId, paneId) => {
+          emitOfficeFocus({ session, window_id: windowId, pane_id: paneId });
+        }}
+      />
+    );
+  }
+
+  if (kind === "hq") {
+    return (
+      <AgentHq
         variant="popout"
         snap={snap}
         onClose={handleClose}

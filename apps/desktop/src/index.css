@@ -2993,6 +2993,15 @@ body.is-resizing * {
   background: rgba(139, 124, 246, 0.18);
 }
 
+.status-hq {
+  color: #9ad7d0;
+}
+
+.status-hq.open {
+  color: #f8fafc;
+  background: rgba(56, 189, 248, 0.18);
+}
+
 .status-output {
   color: var(--fg);
 }
