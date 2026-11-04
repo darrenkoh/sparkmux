@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.74
+
+### Bug Fixes
+
+- **Claude Code Multi-Tab Isolation**: Fixed a bug where multiple tabs running Claude Code in the same tmux session (`cwd`) shared Prompt Logs and Stats, and where running `/new` or `/clear` in one tab cleared out other tabs' Prompt Logs. Each pane now binds to its own process session record in `~/.claude/sessions/<pid>.json`.
+
 ## 0.1.73
 
 ### Features & Improvements
