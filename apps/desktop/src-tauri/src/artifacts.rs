@@ -8,8 +8,9 @@
 //!
 //! One project directory holds every console started there. The pane's process
 //! picks its own file: Grok lists `session_id`, `pid`, and `cwd` in
-//! `~/.grok/active_sessions.json`. Antigravity's active conversation for a
-//! workspace is the id in `~/.gemini/antigravity-cli/cache/last_conversations.json`.
+//! `~/.grok/active_sessions.json`. Claude Code writes `sessionId`, `pid`, and
+//! `cwd` in `~/.claude/sessions/<pid>.json`. Antigravity's active conversation
+//! for a workspace is the id in `~/.gemini/antigravity-cli/cache/last_conversations.json`.
 //! A title match and an open transcript file are the fallbacks. Several
 //! transcripts are never merged into one feed. The editor store under
 //! `~/.gemini/antigravity` is not this CLI transcript.
@@ -446,6 +447,14 @@ struct ActiveSession {
     opened_at: String,
 }
 
+struct ClaudeActiveSession {
+    pid: u32,
+    session_id: String,
+    cwd: String,
+    updated_at: u64,
+    started_at: u64,
+}
+
 /// The pane pid, then its descendants, each with a depth from the pane.
 /// Depth 0 is the pane process itself. A shell's Grok child is depth 1.
 pub(crate) fn pane_family(root: u32) -> Vec<(u32, u8)> {
@@ -486,6 +495,9 @@ pub(crate) fn select_transcript(
     if kind == CliKind::Antigravity {
         return select_agy(cwd, family, roots);
     }
+    if kind == CliKind::Claude {
+        return select_claude(cwd, title, family, roots);
+    }
     if let Some(path) = grok_active_transcript(kind, cwd, title, family, roots) {
         return Some(path);
     }
@@ -499,10 +511,49 @@ pub(crate) fn select_transcript(
     if let Some(path) = open_transcript(kind, family, title, roots) {
         return Some(path);
     }
-    if kind == CliKind::Claude && !found.is_empty() && !family.is_empty() {
-        return claude_active_transcript(&found);
-    }
     None
+}
+
+/// The pane's active Claude Code transcript, jailed to `roots.claude_projects`.
+///
+/// Each interactive Claude Code process writes `~/.claude/sessions/<pid>.json`
+/// with its current `sessionId` and `cwd`, updating `sessionId` in place on
+/// `/new`, `/clear`, or `/resume`. When a process in `family` owns a session
+/// record, that `sessionId` is authoritative: if its `<sessionId>.jsonl` has
+/// not been created on disk yet (e.g. right after `/new` or fresh launch),
+/// this returns `None` rather than falling back to another tab's transcript.
+fn select_claude(
+    cwd: &str,
+    title: &str,
+    family: &[(u32, u8)],
+    roots: &TranscriptRoots,
+) -> Option<PathBuf> {
+    if let Some(session) = claude_family_session(family, cwd, roots) {
+        return claude_session_transcript(&session, cwd, roots);
+    }
+    if let Some(path) = open_transcript(CliKind::Claude, family, title, roots) {
+        return Some(path);
+    }
+    let found = transcripts_for_cwd(CliKind::Claude, cwd, roots);
+    if found.is_empty() {
+        return None;
+    }
+    let held = claude_sessions_held_by_others(family, roots);
+    let available: Vec<PathBuf> = found
+        .into_iter()
+        .filter(|path| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .is_none_or(|id| !held.contains(id))
+        })
+        .collect();
+    if family.is_empty() {
+        if available.len() == 1 {
+            return available.into_iter().next();
+        }
+        return None;
+    }
+    claude_active_transcript(&available)
 }
 
 fn claude_active_transcript(found: &[PathBuf]) -> Option<PathBuf> {
@@ -510,6 +561,188 @@ fn claude_active_transcript(found: &[PathBuf]) -> Option<PathBuf> {
         .iter()
         .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok())
         .cloned()
+}
+
+fn claude_sessions_dir(roots: &TranscriptRoots) -> Option<PathBuf> {
+    if roots.claude_projects.as_os_str().is_empty() {
+        return None;
+    }
+    Some(roots.claude_projects.parent()?.join("sessions"))
+}
+
+fn read_claude_session_file(path: &Path) -> Option<ClaudeActiveSession> {
+    let file = File::open(path).ok()?;
+    let value: Value = serde_json::from_reader(file.take(64 * 1024)).ok()?;
+    let obj = value.as_object()?;
+    let session_id = obj.get("sessionId").and_then(Value::as_str)?.trim();
+    if !safe_component(session_id) {
+        return None;
+    }
+    let pid = match obj.get("pid").and_then(Value::as_u64) {
+        Some(p) if p > 0 && p <= u64::from(u32::MAX) => p as u32,
+        None => path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&p| p > 0)?,
+        _ => return None,
+    };
+    let cwd = obj
+        .get("cwd")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let updated_at = obj.get("updatedAt").and_then(Value::as_u64).unwrap_or(0);
+    let started_at = obj.get("startedAt").and_then(Value::as_u64).unwrap_or(0);
+    Some(ClaudeActiveSession {
+        pid,
+        session_id: session_id.to_string(),
+        cwd,
+        updated_at,
+        started_at,
+    })
+}
+
+fn claude_family_session(
+    family: &[(u32, u8)],
+    pane_cwd: &str,
+    roots: &TranscriptRoots,
+) -> Option<ClaudeActiveSession> {
+    if family.is_empty() {
+        return None;
+    }
+    let sessions_dir = claude_sessions_dir(roots)?;
+    let pane_norm = normalize_cwd(pane_cwd);
+    let mut best: Option<(u8, bool, u64, ClaudeActiveSession)> = None;
+    for (pid, depth) in family {
+        if *pid == 0 {
+            continue;
+        }
+        let path = sessions_dir.join(format!("{pid}.json"));
+        let Some(session) = read_claude_session_file(&path) else {
+            continue;
+        };
+        if session.pid != *pid {
+            continue;
+        }
+        let same_cwd = pane_norm
+            .as_ref()
+            .is_some_and(|cwd| normalize_cwd(&session.cwd).as_ref() == Some(cwd));
+        let stamp = session.updated_at.max(session.started_at);
+        let replace = match &best {
+            None => true,
+            Some((prev_depth, prev_cwd, prev_stamp, prev_sess)) => {
+                *depth < *prev_depth
+                    || (*depth == *prev_depth && same_cwd && !*prev_cwd)
+                    || (*depth == *prev_depth
+                        && same_cwd == *prev_cwd
+                        && (stamp, session.session_id.as_str())
+                            > (*prev_stamp, prev_sess.session_id.as_str()))
+            }
+        };
+        if replace {
+            best = Some((*depth, same_cwd, stamp, session));
+        }
+    }
+    best.map(|(_, _, _, session)| session)
+}
+
+fn claude_session_transcript(
+    session: &ClaudeActiveSession,
+    pane_cwd: &str,
+    roots: &TranscriptRoots,
+) -> Option<PathBuf> {
+    if !safe_component(&session.session_id) || roots.claude_projects.as_os_str().is_empty() {
+        return None;
+    }
+    let file_name = format!("{}.jsonl", session.session_id);
+    for raw_cwd in [session.cwd.as_str(), pane_cwd] {
+        if let Some(found) =
+            claude_transcript_in_cwd_chain(raw_cwd, &file_name, &roots.claude_projects)
+        {
+            return Some(found);
+        }
+        if let Ok(canon_cwd) = Path::new(raw_cwd.trim()).canonicalize() {
+            if let Some(canon_str) = canon_cwd.to_str() {
+                if canon_str != raw_cwd.trim() {
+                    if let Some(found) = claude_transcript_in_cwd_chain(
+                        canon_str,
+                        &file_name,
+                        &roots.claude_projects,
+                    ) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn claude_transcript_in_cwd_chain(cwd: &str, file_name: &str, jail: &Path) -> Option<PathBuf> {
+    let mut path = normalize_cwd(cwd)?;
+    for _ in 0..8 {
+        let name = encode_claude_path(&path)?;
+        if safe_component(&name) {
+            let candidate = jail.join(&name).join(file_name);
+            if let Some(canon) = under_jail(jail, &candidate) {
+                return Some(canon);
+            }
+        }
+        if !path.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn claude_sessions_held_by_others(
+    family: &[(u32, u8)],
+    roots: &TranscriptRoots,
+) -> HashSet<String> {
+    if family.is_empty() {
+        return HashSet::new();
+    }
+    let Some(sessions_dir) = claude_sessions_dir(roots) else {
+        return HashSet::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&sessions_dir) else {
+        return HashSet::new();
+    };
+    let mut held = HashSet::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(session) = read_claude_session_file(&path) else {
+            continue;
+        };
+        if family.iter().any(|(pid, _)| *pid == session.pid) {
+            continue;
+        }
+        if pid_is_alive(session.pid) {
+            held.insert(session.session_id);
+        }
+    }
+    held
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    unsafe { kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> bool {
+    false
 }
 
 /// The workspace's active Antigravity conversation, jailed to the CLI store.
@@ -3877,6 +4110,174 @@ mod tests {
                 .any(|entry| entry.body == "active reply"),
             "{feed:?}"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claude_multiple_tabs_in_same_session_do_not_join_or_clear_each_other() {
+        let dir = scratch("claude-multi-tab");
+        let project = dir.join("repo");
+        fs::create_dir_all(&project).unwrap();
+        let cwd = project.to_string_lossy().to_string();
+        let claude_root = dir.join("claude");
+        let projects = claude_root.join("projects");
+        let sessions = claude_root.join("sessions");
+        let encoded = encode_claude_path(&project).unwrap();
+        let folder = projects.join(&encoded);
+        fs::create_dir_all(&folder).unwrap();
+        fs::create_dir_all(&sessions).unwrap();
+
+        let id1 = "11111111-aaaa-bbbb-cccc-111111111111";
+        let id2 = "22222222-aaaa-bbbb-cccc-222222222222";
+        let id3 = "33333333-aaaa-bbbb-cccc-333333333333";
+
+        let file1 = folder.join(format!("{id1}.jsonl"));
+        fs::write(
+            &file1,
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"tab 1 prompt\"}}\n\
+             {\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"tab 1 reply\"}}\n",
+        )
+        .unwrap();
+
+        let pid_tab1: u32 = 1001;
+        let pid_tab2: u32 = 2002;
+        fs::write(
+            sessions.join(format!("{pid_tab1}.json")),
+            format!(
+                "{{\"pid\":{pid_tab1},\"sessionId\":\"{id1}\",\"cwd\":\"{cwd}\",\"startedAt\":1000,\"kind\":\"interactive\"}}"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            sessions.join(format!("{pid_tab2}.json")),
+            format!(
+                "{{\"pid\":{pid_tab2},\"sessionId\":\"{id2}\",\"cwd\":\"{cwd}\",\"startedAt\":2000,\"kind\":\"interactive\"}}"
+            ),
+        )
+        .unwrap();
+
+        let roots = roots(&dir, dir.join("no-grok"), projects);
+        let family_tab1 = [(1000, 0), (pid_tab1, 1)];
+        let family_tab2 = [(2000, 0), (pid_tab2, 1)];
+
+        // 1. Tab 2 has launched `claude` (session id2 in 2002.json) before sending any prompt
+        // (id2.jsonl does not exist yet). Tab 2 must NOT fall back to Tab 1's transcript.
+        let feed_tab1 = load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab1, &roots);
+        let feed_tab2 = load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab2, &roots);
+        assert_eq!(
+            feed_tab1.transcript_path.as_deref(),
+            Some(file1.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert!(
+            feed_tab2.transcript_path.is_none() && feed_tab2.entries.is_empty(),
+            "unprompted tab 2 must not join tab 1's prompt logs: {feed_tab2:?}"
+        );
+
+        // 2. Tab 2 sends a prompt, creating id2.jsonl with a newer mtime than id1.jsonl.
+        // Tab 1 must stay bound to id1.jsonl while Tab 2 binds to id2.jsonl.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let file2 = folder.join(format!("{id2}.jsonl"));
+        fs::write(
+            &file2,
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"tab 2 prompt\"}}\n\
+             {\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"tab 2 reply\"}}\n",
+        )
+        .unwrap();
+
+        let feed_tab1 = load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab1, &roots);
+        let feed_tab2 = load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab2, &roots);
+        assert_eq!(
+            feed_tab1.transcript_path.as_deref(),
+            Some(file1.canonicalize().unwrap().to_str().unwrap()),
+            "tab 1 must remain on its own transcript even when tab 2 is newer"
+        );
+        assert_eq!(
+            feed_tab2.transcript_path.as_deref(),
+            Some(file2.canonicalize().unwrap().to_str().unwrap())
+        );
+
+        // 3. Tab 2 runs `/new` (updating 2002.json in place to id3).
+        // Case 3a: Before id3.jsonl is written, Tab 2 clears to None while Tab 1 keeps id1.jsonl.
+        fs::write(
+            sessions.join(format!("{pid_tab2}.json")),
+            format!(
+                "{{\"pid\":{pid_tab2},\"sessionId\":\"{id3}\",\"cwd\":\"{cwd}\",\"startedAt\":2000,\"updatedAt\":3000,\"kind\":\"interactive\"}}"
+            ),
+        )
+        .unwrap();
+        let feed_tab1_after_new =
+            load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab1, &roots);
+        let feed_tab2_after_new =
+            load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab2, &roots);
+        assert_eq!(
+            feed_tab1_after_new.transcript_path.as_deref(),
+            Some(file1.canonicalize().unwrap().to_str().unwrap()),
+            "tab 2 running /new must not clear tab 1's prompt logs"
+        );
+        assert!(feed_tab1_after_new
+            .entries
+            .iter()
+            .any(|e| e.body == "tab 1 prompt"));
+        assert!(
+            feed_tab2_after_new.transcript_path.is_none() && feed_tab2_after_new.entries.is_empty(),
+            "tab 2 after /new must clear its own prompt logs: {feed_tab2_after_new:?}"
+        );
+
+        // Case 3b: Claude writes a reset/command record to id3.jsonl (making id3.jsonl the newest file).
+        // Tab 1 STILL keeps id1.jsonl and its prompt logs; Tab 2 binds to id3.jsonl (with empty prompt logs).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let file3 = folder.join(format!("{id3}.jsonl"));
+        fs::write(
+            &file3,
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<command-name>/new</command-name>\"}}\n",
+        )
+        .unwrap();
+        let feed_tab1_with_file3 =
+            load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab1, &roots);
+        let feed_tab2_with_file3 =
+            load_for_family("2.1.312", &cwd, "✳ Claude Code", &family_tab2, &roots);
+        assert_eq!(
+            feed_tab1_with_file3.transcript_path.as_deref(),
+            Some(file1.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert!(feed_tab1_with_file3
+            .entries
+            .iter()
+            .any(|e| e.body == "tab 1 prompt"));
+        assert_eq!(
+            feed_tab2_with_file3.transcript_path.as_deref(),
+            Some(file3.canonicalize().unwrap().to_str().unwrap())
+        );
+        assert!(
+            feed_tab2_with_file3.entries.is_empty(),
+            "tab 2 after /new has empty entries: {feed_tab2_with_file3:?}"
+        );
+
+        // 4. Live PID ownership exclusion: if a live process (std::process::id()) holds id1 in
+        // sessions/<pid>.json, an unregistered pane family must not steal id1.jsonl.
+        let _ = fs::remove_file(&file2);
+        let _ = fs::remove_file(&file3);
+        let _ = fs::remove_file(sessions.join(format!("{pid_tab1}.json")));
+        let _ = fs::remove_file(sessions.join(format!("{pid_tab2}.json")));
+        let live_pid = std::process::id();
+        fs::write(
+            sessions.join(format!("{live_pid}.json")),
+            format!(
+                "{{\"pid\":{live_pid},\"sessionId\":\"{id1}\",\"cwd\":\"{cwd}\",\"startedAt\":1000,\"kind\":\"interactive\"}}"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            let other_family = [(999_991, 0)];
+            let feed_other =
+                load_for_family("2.1.312", &cwd, "✳ Claude Code", &other_family, &roots);
+            assert!(
+                feed_other.transcript_path.is_none(),
+                "unregistered pane must not steal transcript held by another live claude pid: {feed_other:?}"
+            );
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }
