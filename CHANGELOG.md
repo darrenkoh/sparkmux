@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.75
+
+### Bug Fixes
+
+- **Cross-Session Terminal Rendering**: Fixed scrambled and misaligned terminal text when switching directly to a tab in another tmux session running Claude Code or other scrollback-enabled TUIs. Cross-session switches now match `@xterm/addon-fit` scrollbar width on initial attach, activate the target tab before resizing and snapshotting, serialize overlapping `applyPaneSeed` history loads, isolate subscription channels across reseeds, and capture pane metadata and scrollback atomically in a single tmux command.
+
 ## 0.1.74
 
 ### Bug Fixes
