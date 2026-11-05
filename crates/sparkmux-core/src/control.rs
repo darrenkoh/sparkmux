@@ -240,7 +240,7 @@ impl ControlClient {
         let pane_id = crate::target::pane_id(pane_id)?;
         let out = self
             .command(&format!(
-                "display-message -p -t {pane_id} \"#{{cursor_y}} #{{cursor_x}}\""
+                "display-message -p -t {pane_id} \"#{{cursor_y}},#{{cursor_x}}\""
             ))
             .await?;
         crate::client::TmuxClient::parse_cursor_pair(&out)

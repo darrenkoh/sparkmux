@@ -38,6 +38,21 @@ export function withExtraHistory(bytes: Uint8Array, extra: string[]): Uint8Array
   return out;
 }
 
+interface PendingSeed {
+  bytes: Uint8Array;
+  done: () => void;
+  onHistory?: () => void;
+}
+
+interface ActiveSeedState {
+  busy: boolean;
+  cols: number;
+  rows: number;
+  pending: PendingSeed | null;
+}
+
+const activeSeeds = new WeakMap<Terminal, ActiveSeedState>();
+
 /** Load tmux history into scrollback, then paint the visible screen.
  *
  * Scrollback only grows when a line feed happens on the bottom row. At one
@@ -55,20 +70,62 @@ export function applyPaneSeed(
   done: () => void,
   onHistory?: () => void,
 ): void {
-  term.reset();
-  const { history, visible } = parsePaneSeed(bytes);
-  const dump = screenDumpToXterm(visible);
-  if (history.length === 0 || term.cols < 2 || term.rows < 1) {
-    term.write(dump, () => {
-      term.scrollToBottom?.();
-      done();
-    });
+  let state = activeSeeds.get(term);
+  if (!state) {
+    state = { busy: false, cols: term.cols, rows: term.rows, pending: null };
+    activeSeeds.set(term, state);
+  }
+  if (state.busy) {
+    if (term.cols >= 2 && term.rows > 1) {
+      state.cols = term.cols;
+      state.rows = term.rows;
+    }
+    const { history } = parsePaneSeed(bytes);
+    if (history.length > 0 && state.cols >= 2 && state.rows >= 1) {
+      onHistory?.();
+    }
+    const superseded = state.pending;
+    state.pending = { bytes, done, onHistory };
+    superseded?.done();
     return;
   }
 
-  onHistory?.();
-  const cols = term.cols;
-  const rows = term.rows;
+  state.busy = true;
+  state.cols = term.cols;
+  state.rows = term.rows;
+  runPaneSeed(term, state, { bytes, done, onHistory });
+}
+
+function runPaneSeed(term: Terminal, state: ActiveSeedState, seed: PendingSeed): void {
+  if (term.cols >= 2 && term.rows > 1) {
+    state.cols = term.cols;
+    state.rows = term.rows;
+  }
+  const cols = state.cols;
+  const rows = state.rows;
+
+  const finish = () => {
+    const next = state.pending;
+    if (next) {
+      state.pending = null;
+      seed.done();
+      runPaneSeed(term, state, next);
+      return;
+    }
+    state.busy = false;
+    term.scrollToBottom?.();
+    seed.done();
+  };
+
+  term.reset();
+  const { history, visible } = parsePaneSeed(seed.bytes);
+  const dump = screenDumpToXterm(visible);
+  if (history.length === 0 || cols < 2 || rows < 1) {
+    term.write(dump, finish);
+    return;
+  }
+
+  seed.onHistory?.();
   term.resize(cols, 1);
   const payload = `${history.join("\r\n")}\r\n`;
   let restored = false;
@@ -87,7 +144,6 @@ export function applyPaneSeed(
   // Reset SGR left over from the history rows before the screen erase.
   term.write(`\x1b[0m${dump}`, () => {
     restoreSize();
-    term.scrollToBottom?.();
-    done();
+    finish();
   });
 }

@@ -184,6 +184,9 @@ pub async fn subscribe_pane_with_sink(
     } else {
         Vec::new()
     };
+    // Let the control reader drain any `%output` emitted before `capture-pane`
+    // finished in the tmux server; those bytes are already in `seed`.
+    tokio::task::yield_now().await;
     let channels = {
         let inner = state.inner.lock().await;
         inner.channels.clone()
@@ -195,6 +198,7 @@ pub async fn subscribe_pane_with_sink(
     let Some(sub) = subs.iter_mut().find(|sub| sub.id == sub_id) else {
         return Ok(());
     };
+    sub.buf.clear();
     if !sub.sink.send_bytes(true, &pane_id, seed) {
         subs.retain(|sub| sub.id != sub_id);
         if subs.is_empty() {
@@ -203,12 +207,6 @@ pub async fn subscribe_pane_with_sink(
         return Ok(());
     }
     sub.seeded = true;
-    let buffered = std::mem::take(&mut sub.buf);
-    for bytes in buffered {
-        if !sub.sink.send_bytes(false, &pane_id, bytes) {
-            break;
-        }
-    }
     Ok(())
 }
 
@@ -217,25 +215,19 @@ pub async fn subscribe_pane_with_sink(
 async fn seed_pane_bytes(client: &sparkmux_core::TmuxClient, pane_id: &str) -> Vec<u8> {
     let timeout = Duration::from_secs(1);
     match client
-        .capture_pane_scrollback_timeout(pane_id, sparkmux_core::PANE_SCROLLBACK_LINES, timeout)
+        .capture_pane_seed_timeout(pane_id, sparkmux_core::PANE_SCROLLBACK_LINES, timeout)
         .await
     {
-        Ok(text) => match client.pane_seed_meta_timeout(pane_id, timeout).await {
-            Ok((y, x, height)) if height > 0 => {
-                let (history, visible) = sparkmux_core::split_pane_capture(&text, height);
-                let mut body = sparkmux_core::visible_seed_body(&visible);
-                body.push_str(&sparkmux_core::TmuxClient::cursor_cup(y, x));
-                sparkmux_core::format_pane_seed(&history, &body).into_bytes()
-            }
-            Ok(_) => {
-                tracing::debug!(pane = %pane_id, "pane height missing; seeding the visible screen");
-                visible_only_seed(client, pane_id).await
-            }
-            Err(e) => {
-                tracing::debug!(pane = %pane_id, error = %e, "pane meta failed; seeding the visible screen");
-                visible_only_seed(client, pane_id).await
-            }
-        },
+        Ok(((y, x, height), text)) if height > 0 => {
+            let (history, visible) = sparkmux_core::split_pane_capture(&text, height);
+            let mut body = sparkmux_core::visible_seed_body(&visible);
+            body.push_str(&sparkmux_core::TmuxClient::cursor_cup(y, x));
+            sparkmux_core::format_pane_seed(&history, &body).into_bytes()
+        }
+        Ok(_) => {
+            tracing::debug!(pane = %pane_id, "pane height missing; seeding the visible screen");
+            visible_only_seed(client, pane_id).await
+        }
         Err(e) => {
             tracing::debug!(pane = %pane_id, error = %e, "scrollback capture failed");
             visible_only_seed(client, pane_id).await

@@ -295,11 +295,14 @@ export default function XtermView({
     };
     scrollCursorIntoViewRef.current = scrollCursorIntoView;
 
+    let outputEpoch = 0;
+
     const syncTmuxCursor = (forceBottom = false) => {
       if (applyingSeed) return;
+      const epoch = outputEpoch;
       void paneCursor(paneId)
         .then((pos) => {
-          if (unmounted) return;
+          if (unmounted || applyingSeed || epoch !== outputEpoch) return;
           const live = termRef.current;
           if (!live) return;
           live.write(cursorCup(pos.y, pos.x), () => {
@@ -340,7 +343,6 @@ export default function XtermView({
     redrawCaretRef.current = redrawCaret;
     syncTmuxCursorRef.current = syncTmuxCursor;
 
-    const seedState = { seeded: false };
     // The text seed calls reset(), which drops mouse tracking. Restore only
     // after that paint so a tab switch still delivers clicks to Grok.
     let seedApplied = false;
@@ -355,6 +357,7 @@ export default function XtermView({
     restoreMouseRef.current = restoreMouse;
 
     const writeLive = (bytes: Uint8Array<ArrayBufferLike>) => {
+      outputEpoch += 1;
       let payload: Uint8Array<ArrayBufferLike> = bytes;
       if (scrollWithoutKeyboardRef.current) {
         const merged = new Uint8Array(filterRest.length + bytes.length);
@@ -390,6 +393,7 @@ export default function XtermView({
     let historyPending = false;
     let latestSeed: Uint8Array | null = null;
     const paintNow = (payload: Uint8Array) => {
+      outputEpoch += 1;
       const gen = ++paintGen;
       applyPaneSeed(
         term,
@@ -402,10 +406,7 @@ export default function XtermView({
           if (unmounted) return;
           doFitRef.current();
           if (!(userPanned && scrollWithoutKeyboardRef.current)) {
-            term.scrollToBottom();
-            const screen = term.element?.querySelector(".xterm-screen");
-            if (screen instanceof HTMLElement) screen.style.transform = "";
-            syncTmuxCursor(true);
+            showCaret(term, true);
           }
           restoreMouse();
           historyRef.current?.replaceChildren();
@@ -427,7 +428,6 @@ export default function XtermView({
       );
     };
     const paintSeed = (bytes: Uint8Array) => {
-      seedState.seeded = true;
       latestSeed = bytes;
       const source = historySourceRef.current;
       const wantTranscript =
@@ -897,6 +897,24 @@ export default function XtermView({
     let cursorTimer: number | undefined;
     let reseedTimer: number | undefined;
     let subscribed = false;
+    let subGen = 0;
+
+    const subscribeNow = () => {
+      if (unmounted) return;
+      const mySubGen = ++subGen;
+      const subSeedState = { seeded: false };
+      void bindPaneOutput(paneId, subSeedState, {
+        seed: (bytes) => {
+          if (unmounted || mySubGen !== subGen) return;
+          subSeedState.seeded = true;
+          paintSeed(bytes);
+        },
+        write: (bytes) => {
+          if (unmounted || mySubGen !== subGen) return;
+          writeLive(bytes);
+        },
+      });
+    };
 
     const scheduleReseed = () => {
       if (!subscribed || unmounted) return;
@@ -907,12 +925,7 @@ export default function XtermView({
       }, 120);
       if (reseedTimer) window.clearTimeout(reseedTimer);
       reseedTimer = window.setTimeout(() => {
-        if (unmounted) return;
-        seedState.seeded = false;
-        void bindPaneOutput(paneId, seedState, {
-          seed: paintSeed,
-          write: writeLive,
-        });
+        subscribeNow();
       }, 150);
     };
     scheduleReseedRef.current = scheduleReseed;
@@ -947,11 +960,7 @@ export default function XtermView({
       if (subscribed) return;
       subscribed = true;
       seedTimer = window.setTimeout(() => {
-        if (unmounted) return;
-        void bindPaneOutput(paneId, seedState, {
-          seed: paintSeed,
-          write: writeLive,
-        });
+        subscribeNow();
       }, 0);
     };
 

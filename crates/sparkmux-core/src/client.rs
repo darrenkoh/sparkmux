@@ -269,6 +269,44 @@ impl TmuxClient {
         .await
     }
 
+    /// Cursor, pane height, and scrollback capture from a single tmux command list.
+    pub async fn capture_pane_seed_timeout(
+        &self,
+        pane_id: &str,
+        history_lines: u32,
+        timeout: Duration,
+    ) -> Result<((u16, u16, u16), String)> {
+        let pane_id = crate::target::pane_id(pane_id)?;
+        let start = format!("-{history_lines}");
+        let out = self
+            .run_timeout(
+                &[
+                    "display-message",
+                    "-p",
+                    "-t",
+                    pane_id,
+                    "#{cursor_y},#{cursor_x},#{pane_height}",
+                    ";",
+                    "capture-pane",
+                    "-p",
+                    "-e",
+                    "-S",
+                    start.as_str(),
+                    "-t",
+                    pane_id,
+                ],
+                timeout,
+                pane_id,
+            )
+            .await?;
+        let Some((meta_line, captured)) = out.split_once('\n') else {
+            return Err(Error::Parse(format!("pane seed output: {out:?}")));
+        };
+        let meta = crate::pane_seed::parse_pane_meta(meta_line)
+            .ok_or_else(|| Error::Parse(format!("pane meta: {meta_line:?}")))?;
+        Ok((meta, captured.to_string()))
+    }
+
     /// Cursor plus the pane height, from one `display-message`.
     pub async fn pane_seed_meta_timeout(
         &self,

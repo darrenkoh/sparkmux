@@ -108,3 +108,36 @@ test("applyPaneSeed keeps SGR text in scrollback", async () => {
   assert.equal(lineText(term, 0), "red");
   assert.equal(lineText(term, term.buffer.active.baseY), "ok");
 });
+
+test("overlapping applyPaneSeed calls preserve full height and render the latest seed cleanly", async () => {
+  const term = new Terminal({ cols: 40, rows: 6, scrollback: 5000 });
+  const firstHistory = ["stale-1", "stale-2", "stale-3"];
+  const firstVisible = "stale-row-1\nstale-row-2\nstale-row-3\nstale-row-4\nstale-row-5\nstale-row-6\x1b[6;12H";
+  const secondHistory = ["claude-hist-1", "claude-hist-2"];
+  const secondVisible =
+    "header-line\nstatus-line\nbody-line-1\nbody-line-2\nprompt > hi\nfooter-line\x1b[5;12H";
+
+  await new Promise<void>((resolve) => {
+    applyPaneSeed(term, seedBytes(firstHistory, firstVisible), () => {});
+    // While the first seed is still in flight in WriteBuffer, term.rows is 1.
+    assert.equal(term.rows, 1);
+    applyPaneSeed(term, seedBytes(secondHistory, secondVisible), () => resolve());
+  });
+
+  assert.equal(term.rows, 6);
+  assert.equal(term.cols, 40);
+  assert.equal(term.options.windowsMode, false);
+  assert.equal(term.buffer.active.baseY, secondHistory.length);
+  assert.equal(term.buffer.active.viewportY, secondHistory.length);
+  assert.equal(lineText(term, 0), "claude-hist-1");
+  assert.equal(lineText(term, 1), "claude-hist-2");
+  const base = term.buffer.active.baseY;
+  assert.equal(lineText(term, base + 0), "header-line");
+  assert.equal(lineText(term, base + 1), "status-line");
+  assert.equal(lineText(term, base + 2), "body-line-1");
+  assert.equal(lineText(term, base + 3), "body-line-2");
+  assert.equal(lineText(term, base + 4), "prompt > hi");
+  assert.equal(lineText(term, base + 5), "footer-line");
+  assert.equal(term.buffer.active.cursorY, 4);
+  assert.equal(term.buffer.active.cursorX, 11);
+});

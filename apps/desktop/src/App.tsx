@@ -263,6 +263,8 @@ export default function App() {
   const focusedRef = useRef<string | null>(null);
   const snapRef = useRef<Snapshot>({ sessions: [] });
   const reorderHold = useRef(0);
+  const connectingRef = useRef(0);
+  const layoutEpochRef = useRef(0);
   const reorderQueue = useRef(Promise.resolve());
   const reorderTabRef = useRef<
     (sessionName: string, srcWindowId: string, dstWindowId: string, before: boolean) => void
@@ -375,6 +377,8 @@ export default function App() {
     const cw = cellRef.current.w || 8.4;
     const ch = cellRef.current.h || 17;
     const pad = 16;
+    // Match @xterm/addon-fit DEFAULT_SCROLL_BAR_WIDTH (14px) when scrollback > 0.
+    const scrollbar = 14;
     const el = hostRef.current;
     const w =
       el && el.clientWidth > 40
@@ -385,7 +389,7 @@ export default function App() {
         ? el.clientHeight
         : Math.max(120, window.innerHeight - 96);
     return {
-      cols: Math.max(2, Math.floor(Math.max(0, w - pad) / cw)),
+      cols: Math.max(2, Math.floor(Math.max(0, w - pad - scrollbar) / cw)),
       rows: Math.max(1, Math.floor(Math.max(0, h - pad) / ch)),
     };
   }, [sidebarDisplay]);
@@ -455,11 +459,14 @@ export default function App() {
         setPhoneTiled(false);
       }
       if (!win) {
+        visibleRef.current = null;
         setVisibleWindowId(null);
         setLayout(null);
         return;
       }
+      visibleRef.current = win.id;
       setVisibleWindowId(win.id);
+      const epochBefore = layoutEpochRef.current;
       try {
         await selectWindow(win.id);
       } catch {
@@ -467,10 +474,17 @@ export default function App() {
       }
       try {
         const node = await parseLayout(win.layout);
-        setLayout(node);
+        if (visibleRef.current === win.id && layoutEpochRef.current === epochBefore) {
+          layoutRef.current = node;
+          setLayout(node);
+        }
       } catch {
-        const first = win.panes[0]?.id;
-        setLayout(first ? fallbackLayout(first) : null);
+        if (visibleRef.current === win.id && layoutEpochRef.current === epochBefore) {
+          const first = win.panes[0]?.id;
+          const fallback = first ? fallbackLayout(first) : null;
+          layoutRef.current = fallback;
+          setLayout(fallback);
+        }
         showToast("could not parse window layout");
       }
       const requested = commit?.focusedPane;
@@ -504,43 +518,57 @@ export default function App() {
 
   const connectTo = useCallback(
     async (session: string, preferredWindow?: string, commit?: HubOpenCommit) => {
-      lastPushedSizeRef.current = null;
-      if (hostRef.current) {
-        hostRef.current.scrollTop = 0;
-        hostRef.current.scrollLeft = 0;
+      connectingRef.current += 1;
+      try {
+        lastPushedSizeRef.current = null;
+        if (hostRef.current) {
+          hostRef.current.scrollTop = 0;
+          hostRef.current.scrollLeft = 0;
+        }
+        const { cols, rows } = hostSize();
+        const curSess = snapRef.current.sessions.find((s) => s.name === session);
+        const expectedWin =
+          (preferredWindow
+            ? curSess?.windows.find((w) => w.id === preferredWindow)
+            : undefined) ??
+          curSess?.windows.find((w) => w.active) ??
+          curSess?.windows[0];
+        attachedRef.current = session;
+        if (expectedWin) {
+          visibleRef.current = expectedWin.id;
+        }
+        if (preferredWindow) {
+          try {
+            await selectWindow(preferredWindow);
+          } catch {
+            /* window may already be active */
+          }
+        }
+        await controlConnect(session, cols, rows);
+        await rememberSession(session);
+        setAttachedSession(session);
+        setError(null);
+        setFailMsg(null);
+        setEmpty(false);
+        const tree = await fetchSnapshot();
+        snapRef.current = tree;
+        setSnap(tree);
+        const sess = tree.sessions.find((s) => s.name === session);
+        const win =
+          (preferredWindow
+            ? sess?.windows.find((w) => w.id === preferredWindow)
+            : undefined) ??
+          sess?.windows.find((w) => w.active) ??
+          sess?.windows[0];
+        await applyWindow(win, commit);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => pushClientSize());
+        });
+      } finally {
+        connectingRef.current = Math.max(0, connectingRef.current - 1);
       }
-      const { cols, rows } = pixelClientSize();
-      const curSess = snapRef.current.sessions.find((s) => s.name === session);
-      const expectedWin =
-        (preferredWindow
-          ? curSess?.windows.find((w) => w.id === preferredWindow)
-          : undefined) ??
-        curSess?.windows.find((w) => w.active) ??
-        curSess?.windows[0];
-      if (expectedWin) {
-        visibleRef.current = expectedWin.id;
-      }
-      await controlConnect(session, cols, rows);
-      await rememberSession(session);
-      setAttachedSession(session);
-      setError(null);
-      setFailMsg(null);
-      setEmpty(false);
-      const tree = await fetchSnapshot();
-      setSnap(tree);
-      const sess = tree.sessions.find((s) => s.name === session);
-      const win =
-        (preferredWindow
-          ? sess?.windows.find((w) => w.id === preferredWindow)
-          : undefined) ??
-        sess?.windows.find((w) => w.active) ??
-        sess?.windows[0];
-      await applyWindow(win, commit);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => pushClientSize());
-      });
     },
-    [applyWindow, pixelClientSize, pushClientSize],
+    [applyWindow, hostSize, pushClientSize],
   );
 
   const boot = useCallback(async () => {
@@ -595,11 +623,12 @@ export default function App() {
   }, []);
 
   const refreshTree = useCallback(async (opts?: { force?: boolean }) => {
-    if (!opts?.force && reorderHold.current > 0) return;
+    if (!opts?.force && (reorderHold.current > 0 || connectingRef.current > 0)) return;
     if (errorRef.current === "missing-tmux" || errorRef.current === "too-old") return;
     if (errorRef.current === "server-stopped") return;
     try {
       const tree = await fetchSnapshot();
+      if (!opts?.force && (reorderHold.current > 0 || connectingRef.current > 0)) return;
       snapRef.current = tree;
       setSnap(tree);
       if (tree.sessions.length === 0) {
@@ -634,6 +663,7 @@ export default function App() {
           try {
             const node = await parseLayout(win.layout);
             if (JSON.stringify(node) !== JSON.stringify(layoutRef.current)) {
+              layoutRef.current = node;
               setLayout(node);
             }
           } catch {
@@ -665,6 +695,8 @@ export default function App() {
     un.push(
       listenLayoutChange((payload) => {
         if (payload.window_id === visibleRef.current) {
+          layoutEpochRef.current += 1;
+          layoutRef.current = payload.layout;
           setLayout(payload.layout);
         }
       }),
