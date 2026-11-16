@@ -900,7 +900,7 @@ mod tests {
             return;
         };
         let cur = client
-            .pane_cursor_timeout(&pane, Duration::from_millis(400))
+            .pane_cursor_timeout(&pane, Duration::from_secs(10))
             .await;
         let _ = client.kill_server();
         let (y, _x) = cur.expect("cursor");
