@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.76
+
+### Bug Fixes
+
+- **Agents Board `NEW` State**: Agents without a transcript or prompt yet (such as right after `/new` in Claude Code) now display `NEW` in the Agents list instead of `RUNNING`.
+- **Session Unread Dot Clearing**: Clicking a session in the sidebar that has a hidden unread window now switches directly to that unread window (preferring `needs_user` or `failed`) so the glowing red dot clears.
+
 ## 0.1.75
 
 ### Bug Fixes
