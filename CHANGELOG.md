@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.77
+
+### Security
+
+- **Remove Unused `zip` Dependency**: Disabled the unused `zip` default feature on `tauri-plugin-updater` (`rustls-tls` and `system-proxy` remain enabled), eliminating `zip` v4.6.1 from `Cargo.lock` and resolving Dependabot alerts #13 (`CVE-2026-115905`), #14 (`CVE-2026-115909`), and #15 (`CVE-2026-115906`).
+
 ## 0.1.76
 
 ### Bug Fixes
