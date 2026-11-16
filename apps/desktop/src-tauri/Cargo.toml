@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "6"
 arboard = "3"
 url = "2"
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 toml = { workspace = true }
 libc = "0.2"
 tauri-plugin-notification = "2"
