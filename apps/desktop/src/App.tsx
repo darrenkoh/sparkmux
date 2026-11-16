@@ -1660,12 +1660,22 @@ export default function App() {
         }}
         onSelectSession={(name) => {
           chromeFocus.current = "sidebar";
+          const sess = snap.sessions.find((s) => s.name === name);
           setSelection({
             kind: "session",
-            id: snap.sessions.find((s) => s.name === name)?.id ?? name,
+            id: sess?.id ?? name,
             name,
           });
-          void connectTo(name);
+          const isHidden = (w: { id: string }) =>
+            !(attachedSession === name && w.id === visibleWindowId);
+          const unreadWin =
+            sess?.windows.find(
+              (w) =>
+                w.unread &&
+                isHidden(w) &&
+                (w.attention_label === "needs_user" || w.attention_label === "failed"),
+            ) ?? sess?.windows.find((w) => w.unread && isHidden(w));
+          void connectTo(name, unreadWin?.id);
         }}
         onSelectWindow={(sessionName, windowId) => {
           void jumpToTarget(sessionName, windowId, null);

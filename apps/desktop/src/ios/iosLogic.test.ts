@@ -735,6 +735,7 @@ test("agent attention ranks waiting, then failed, then running, then finished", 
   assert.equal(agentAttentionRank("Running"), 2);
   assert.equal(agentAttentionRank("Finished"), 3);
   assert.equal(agentAttentionRank("succeeded"), 3);
+  assert.equal(agentAttentionRank("New"), 4);
 });
 
 function tokenBag(): TokenBag & { dump: () => Map<string, string> } {

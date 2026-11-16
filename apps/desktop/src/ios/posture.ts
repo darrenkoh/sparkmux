@@ -409,6 +409,7 @@ export function agentAttentionRank(state: string): number {
   if (normalized.includes("finish") || normalized === "succeeded" || normalized.includes("done")) {
     return 3;
   }
+  if (normalized === "new") return 4;
   return 2;
 }
 

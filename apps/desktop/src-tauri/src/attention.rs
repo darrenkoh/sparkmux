@@ -477,7 +477,8 @@ fn state_label(label: Option<AttentionLabel>) -> &'static str {
         Some(AttentionLabel::NeedsUser) => "Waiting on you",
         Some(AttentionLabel::Failed) => "Failed",
         Some(AttentionLabel::Succeeded) => "Finished",
-        Some(AttentionLabel::Running | AttentionLabel::Noise) | None => "Running",
+        Some(AttentionLabel::Running | AttentionLabel::Noise) => "Running",
+        None => "New",
     }
 }
 
@@ -1581,7 +1582,7 @@ mod tests {
         named.ask = Some("a question");
         named.assistant = Some("  last reply \n stays ");
         let named = board_row(&named).expect("versioned grok");
-        assert_eq!(named.state, "Running");
+        assert_eq!(named.state, "New");
         assert_eq!(named.model, "grok-4");
         assert_eq!(named.detail, "last reply stays");
 

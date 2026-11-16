@@ -4,6 +4,7 @@ function stateClass(state: string): string {
   if (state === "Waiting on you") return "waiting";
   if (state === "Failed") return "failed";
   if (state === "Finished") return "finished";
+  if (state === "New") return "new";
   return "running";
 }
 
