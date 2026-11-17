@@ -1862,7 +1862,8 @@ body.is-resizing * {
 
 .pane-frame {
   position: relative;
-  background: var(--bg);
+  /* Same gray GrokNight paints on message rows, so those fills do not read as bars. */
+  background: #141414;
 }
 
 .pane-frame.drop-target {
@@ -1889,7 +1890,7 @@ body.is-resizing * {
   position: absolute;
   inset: 8px;
   overflow: auto;
-  background: var(--bg);
+  background: #141414;
   scrollbar-width: thin;
   scrollbar-color: #2a2f3a transparent;
 }

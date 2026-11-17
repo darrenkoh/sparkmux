@@ -175,10 +175,12 @@ export default function XtermView({
       customGlyphs: true,
       rescaleOverlappingGlyphs: true,
       theme: {
-        background: "#0d0f12",
+        // GrokNight fills rows with rgb(20, 20, 20). A canvas even slightly
+        // off that color shows up as a bar behind every message.
+        background: "#141414",
         foreground: "#e6e8ee",
         cursor: "#e6e8ee",
-        cursorAccent: "#0d0f12",
+        cursorAccent: "#141414",
         selectionBackground: "#2a4a70",
         selectionForeground: "#ffffff",
         black: "#1c1f26",
