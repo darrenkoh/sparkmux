@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.78
+
+### Bug Fixes
+
+- **tmux 3.8 layouts**: Window layouts that tmux 3.8 reports as v2 JSON now parse, so panes still tile.
+- **GrokNight row bars**: The terminal canvas is `#141414`, the same gray GrokNight paints on message rows, so empty rows no longer show as a lighter band behind each line.
+
 ## 0.1.77
 
 ### Security
