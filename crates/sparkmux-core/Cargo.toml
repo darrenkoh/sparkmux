@@ -10,6 +10,7 @@ description = "tmux subprocess client and snapshot parser for sparkmux"
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 toml.workspace = true

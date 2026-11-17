@@ -618,6 +618,36 @@ mod tests {
         assert_eq!(parse_control_line("%exit"), ControlLine::Exit);
     }
 
+    #[test]
+    fn layout_change_accepts_v2_json_payload() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut in_block = false;
+        let mut body = String::new();
+        assert!(handle_line(
+            br#"%layout-change @1 {"V":2,"L":{"t":"p","w":144,"h":53,"x":0,"y":0,"a":true,"i":0,"I":"%9"}} {"V":2,"L":{"t":"p","w":144,"h":53,"x":0,"y":0,"a":true,"i":0,"I":"%9"}} *"#,
+            &tx,
+            &mut in_block,
+            &mut body
+        )
+        .is_none());
+        match rx.try_recv().expect("layout event") {
+            ControlEvent::LayoutChange { window_id, layout } => {
+                assert_eq!(window_id, "@1");
+                assert_eq!(
+                    layout,
+                    LayoutNode::Pane {
+                        w: 144,
+                        h: 53,
+                        x: 0,
+                        y: 0,
+                        pane_id: 9,
+                    }
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn live_control_mode_begin_end() {
         let Ok(client) =

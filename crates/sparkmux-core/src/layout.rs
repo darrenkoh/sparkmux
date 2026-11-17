@@ -26,13 +26,131 @@ pub enum LayoutNode {
 }
 
 pub fn parse_window_layout(s: &str) -> Result<LayoutNode> {
-    let body = s.split_once(',').map(|(_, rest)| rest).unwrap_or(s);
+    let trimmed = s.trim();
+    if trimmed.starts_with('{') {
+        return parse_json_window_layout(trimmed);
+    }
+    let body = trimmed
+        .split_once(',')
+        .map(|(_, rest)| rest)
+        .unwrap_or(trimmed);
     let mut p = Parser {
         bytes: body.as_bytes(),
         i: 0,
     };
     let node = p.parse_node()?;
     Ok(node)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum JsonLayoutRoot {
+    Envelope {
+        #[serde(rename = "L")]
+        layout: JsonLayoutCell,
+    },
+    Cell(JsonLayoutCell),
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct JsonLayoutCell {
+    t: String,
+    w: i64,
+    h: i64,
+    x: i64,
+    y: i64,
+    #[serde(default)]
+    c: Vec<JsonLayoutCell>,
+    #[serde(default)]
+    i: Option<u32>,
+    #[serde(rename = "I", default)]
+    pane_id: Option<String>,
+    #[serde(default)]
+    z: Option<i64>,
+}
+
+fn parse_json_window_layout(s: &str) -> Result<LayoutNode> {
+    let root: JsonLayoutRoot =
+        serde_json::from_str(s).map_err(|e| Error::Parse(format!("layout json: {e}")))?;
+    let cell = match root {
+        JsonLayoutRoot::Envelope { layout } => layout,
+        JsonLayoutRoot::Cell(cell) => cell,
+    };
+    json_to_node(&cell)
+}
+
+fn cell_has_tiled(cell: &JsonLayoutCell) -> bool {
+    match cell.t.as_str() {
+        "p" => cell.z.is_none(),
+        _ => cell.c.iter().any(cell_has_tiled),
+    }
+}
+
+fn json_to_node(cell: &JsonLayoutCell) -> Result<LayoutNode> {
+    if cell.w < 0 || cell.h < 0 {
+        return Err(Error::Parse(format!(
+            "layout: negative size {}x{}",
+            cell.w, cell.h
+        )));
+    }
+    let w = cell.w.min(u16::MAX as i64) as u16;
+    let h = cell.h.min(u16::MAX as i64) as u16;
+    let x = cell.x.clamp(0, u16::MAX as i64) as u16;
+    let y = cell.y.clamp(0, u16::MAX as i64) as u16;
+
+    match cell.t.as_str() {
+        "p" => {
+            // In tmux 3.8 V2 JSON, "i" is the window-local index while "I" is the global "%id".
+            let pane_id = if let Some(raw) = cell.pane_id.as_deref() {
+                let digits = raw.strip_prefix('%').unwrap_or(raw);
+                digits
+                    .parse::<u32>()
+                    .map_err(|_| Error::Parse(format!("layout: bad pane id {raw:?}")))?
+            } else if let Some(idx) = cell.i {
+                idx
+            } else {
+                return Err(Error::Parse("layout: missing pane id".into()));
+            };
+            Ok(LayoutNode::Pane {
+                w,
+                h,
+                x,
+                y,
+                pane_id,
+            })
+        }
+        "h" | "v" => {
+            let dir = if cell.t == "h" {
+                SplitDir::LeftRight
+            } else {
+                SplitDir::TopBottom
+            };
+            let has_tiled = cell.c.iter().any(cell_has_tiled);
+            let selected = cell
+                .c
+                .iter()
+                .filter(|child| !has_tiled || cell_has_tiled(child));
+            let mut children = Vec::new();
+            for child in selected {
+                children.push(json_to_node(child)?);
+            }
+            if children.is_empty() {
+                return Err(Error::Parse("layout: split has no children".into()));
+            }
+            if children.len() == 1 {
+                return Ok(children.into_iter().next().expect("single child"));
+            }
+            Ok(LayoutNode::Split {
+                w,
+                h,
+                x,
+                y,
+                dir,
+                children,
+            })
+        }
+        other => Err(Error::Parse(format!("layout: unknown cell type {other:?}"))),
+    }
 }
 
 struct Parser<'a> {
@@ -61,7 +179,7 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_u16(&mut self) -> Result<u16> {
+    fn parse_num<T: std::str::FromStr>(&mut self) -> Result<T> {
         let start = self.i;
         while matches!(self.peek(), Some(b'0'..=b'9')) {
             self.i += 1;
@@ -76,13 +194,13 @@ impl Parser<'_> {
     }
 
     fn parse_node(&mut self) -> Result<LayoutNode> {
-        let w = self.parse_u16()?;
+        let w = self.parse_num::<u16>()?;
         self.eat(b'x')?;
-        let h = self.parse_u16()?;
+        let h = self.parse_num::<u16>()?;
         self.eat(b',')?;
-        let x = self.parse_u16()?;
+        let x = self.parse_num::<u16>()?;
         self.eat(b',')?;
-        let y = self.parse_u16()?;
+        let y = self.parse_num::<u16>()?;
         match self.peek() {
             Some(b'{') => {
                 self.bump();
@@ -110,7 +228,7 @@ impl Parser<'_> {
             }
             Some(b',') => {
                 self.bump();
-                let pane_id = self.parse_u16()? as u32;
+                let pane_id = self.parse_num::<u32>()?;
                 Ok(LayoutNode::Pane {
                     w,
                     h,
@@ -257,5 +375,53 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn v2_single_pane_uses_capital_i_pane_id() {
+        let n = parse_window_layout(
+            r#"{"V":2,"L":{"t":"p","w":144,"h":53,"x":0,"y":0,"a":true,"i":0,"I":"%7"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            n,
+            LayoutNode::Pane {
+                w: 144,
+                h: 53,
+                x: 0,
+                y: 0,
+                pane_id: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn v2_side_by_side_and_stacked_splits() {
+        let v1 =
+            parse_window_layout("ffff,80x24,0,0{40x24,0,0[40x12,0,0,0,40x11,0,13,1],39x24,41,0,2}")
+                .unwrap();
+        let v2 = parse_window_layout(
+            r#"{"V":2,"L":{"t":"h","w":80,"h":24,"x":0,"y":0,"c":[{"t":"v","w":40,"h":24,"x":0,"y":0,"c":[{"t":"p","w":40,"h":12,"x":0,"y":0,"a":true,"i":0,"I":"%0"},{"t":"p","w":40,"h":11,"x":0,"y":13,"i":1,"I":"%1"}]},{"t":"p","w":39,"h":24,"x":41,"y":0,"i":2,"I":"%2"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(v2, v1);
+    }
+
+    #[test]
+    fn v2_floating_pane_is_ignored_when_tiled_pane_exists() {
+        let n = parse_window_layout(
+            r#"{"V":2,"L":{"t":"h","w":80,"h":24,"x":0,"y":0,"c":[{"t":"p","w":80,"h":24,"x":0,"y":0,"a":true,"i":0,"I":"%4"},{"t":"p","w":40,"h":12,"x":10,"y":5,"z":0,"i":1,"I":"%5"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            n,
+            LayoutNode::Pane {
+                w: 80,
+                h: 24,
+                x: 0,
+                y: 0,
+                pane_id: 4,
+            }
+        );
     }
 }
