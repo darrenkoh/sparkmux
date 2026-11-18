@@ -159,6 +159,23 @@ pub struct Cursor {
     /// so a child tool result cannot close a parent tool call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<Box<Cursor>>,
+    /// Factory `<uuid>.settings.json` mtime. `tokenUsage` updates here rather than per-line.
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub factory_settings_mtime: u64,
+    /// Cumulative Factory token counters already emitted as USAGE deltas.
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub factory_input_tokens: u64,
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub factory_output_tokens: u64,
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub factory_cache_read_tokens: u64,
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub factory_cache_write_tokens: u64,
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub factory_thinking_tokens: u64,
+    /// Line 0 (`session_start`) byte length, so a title rewrite can shift `offset`.
+    #[serde(default, skip_serializing_if = "zero_u64")]
+    pub factory_head_len: u64,
 }
 
 fn zero_u64(value: &u64) -> bool {
@@ -202,6 +219,7 @@ impl Cursor {
         if let Some(side) = self.sidechain.as_mut() {
             side.mark_purged();
         }
+        // Factory watermarks stay. The next poll emits only tokens accrued after the purge.
     }
 }
 
@@ -221,6 +239,9 @@ pub fn source_id(kind: CliKind, path: &Path) -> String {
             .and_then(Path::parent)
             .and_then(Path::parent)
             .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned()),
+        CliKind::Factory => path
+            .file_stem()
             .map(|name| name.to_string_lossy().into_owned()),
     }
     .unwrap_or_default();
@@ -255,6 +276,7 @@ pub(super) fn ingest_one(
         CliKind::Grok => ingest_grok(path, cur, now),
         CliKind::Claude => ingest_claude(path, cur, now, keep_sidechain),
         CliKind::Antigravity => ingest_agy(path, cur, now),
+        CliKind::Factory => ingest_factory(path, cur, now),
     }
 }
 
@@ -418,6 +440,9 @@ const ASK_TOOLS: &[&str] = &[
     "ask_user",
     "request_user_input",
     "notify_user", // defensive, for Grok and Antigravity variants
+    "askuser",
+    "exitspecmode",
+    "exit_spec_mode",
 ];
 
 fn is_ask_tool(name: &str) -> bool {
@@ -510,7 +535,7 @@ fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
                 cur.lines_added += count_lines(&new_str);
             }
         }
-        "write_to_file" | "write" | "write_file" | "create_file" => {
+        "write_to_file" | "write" | "write_file" | "create_file" | "create" => {
             let content = str_of_any(
                 args,
                 &[
@@ -527,7 +552,20 @@ fn track_tool_code_delta(tool_name: &str, args: &Value, cur: &mut Cursor) {
                 cur.lines_added += count_lines(&content);
             }
         }
-        "patch" | "apply_patch" => {
+        "multiedit" | "multi_edit" => {
+            if let Some(edits) = args
+                .get("edits")
+                .or_else(|| args.get("replacements"))
+                .and_then(Value::as_array)
+            {
+                for edit in edits {
+                    track_tool_code_delta("edit", edit, cur);
+                }
+            } else {
+                track_tool_code_delta("edit", args, cur);
+            }
+        }
+        "patch" | "apply_patch" | "applypatch" => {
             let patch = str_of_any(args, &["patch", "diff"]);
             for line in patch.lines() {
                 if line.starts_with('+') && !line.starts_with("+++") {
@@ -2072,6 +2110,448 @@ fn take_oldest_pending(cur: &mut Cursor) -> Option<(i64, String)> {
     cur.pending.remove(&oldest)
 }
 
+fn ingest_factory(path: &Path, cur: &mut Cursor, now: i64) -> Vec<Event> {
+    let mut out = Vec::new();
+    let settings_has_usage = poll_factory_settings(path, cur, now, &mut out);
+    align_factory_head(path, cur);
+    let modified = mtime_ms(path) as i64;
+    if let Some((lines, next)) = read_new_lines(path, cur.offset, MAX_READ) {
+        cur.offset = next;
+        for line in lines {
+            if let Some(obj) = parse_obj(&line) {
+                let fallback = if cur.last_ts > 0 {
+                    cur.last_ts
+                } else if modified > 0 {
+                    modified.min(now.max(modified))
+                } else {
+                    now
+                };
+                factory_record(&obj, cur, fallback, settings_has_usage, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn poll_factory_settings(path: &Path, cur: &mut Cursor, now: i64, out: &mut Vec<Event>) -> bool {
+    let Some(settings_path) = crate::artifacts::factory_settings_path(path) else {
+        return false;
+    };
+    let Some(map) = read_small_json(&settings_path, 256 * 1024) else {
+        return false;
+    };
+    let usage = map.get("tokenUsage").and_then(Value::as_object);
+    let has_usage = usage.is_some();
+    let mtime = mtime_ms(&settings_path);
+    if mtime == cur.factory_settings_mtime && cur.factory_settings_mtime != 0 {
+        return has_usage;
+    }
+    cur.factory_settings_mtime = mtime;
+    let model = str_of(&map, "model").trim();
+    if !model.is_empty() {
+        cur.model = model.to_string();
+    }
+    if cur.ctx_window == 0 {
+        cur.ctx_window = factory_context_window(&cur.model);
+    }
+    let active = map.get("assistantActiveTimeMs").and_then(json_u64_present);
+    cur.cost_ledger = factory_cost_ledger(&cur.model, usage, active);
+    let Some(usage) = usage else {
+        return false;
+    };
+    let input = json_u64(usage.get("inputTokens"));
+    let output = json_u64(usage.get("outputTokens"));
+    let cache_read = json_u64(usage.get("cacheReadTokens"));
+    let cache_write = json_u64(
+        usage
+            .get("cacheCreationTokens")
+            .or_else(|| usage.get("cacheWriteTokens")),
+    );
+    let thinking = json_u64(usage.get("thinkingTokens"));
+    let delta_in = input.saturating_sub(cur.factory_input_tokens);
+    let delta_out = output.saturating_sub(cur.factory_output_tokens);
+    let delta_read = cache_read.saturating_sub(cur.factory_cache_read_tokens);
+    let delta_write = cache_write.saturating_sub(cur.factory_cache_write_tokens);
+    let delta_think = thinking.saturating_sub(cur.factory_thinking_tokens);
+    if delta_in > 0 || delta_out > 0 || delta_read > 0 || delta_write > 0 || delta_think > 0 {
+        let ts = if mtime == 0 {
+            now
+        } else {
+            i64::try_from(mtime).unwrap_or(now)
+        };
+        let mut ev = Event::new(ts, event::USAGE);
+        ev.ti = delta_in;
+        ev.to = delta_out;
+        ev.tc = delta_read;
+        ev.tw = delta_write;
+        ev.tr = delta_think;
+        ev.n.clone_from(&cur.model);
+        out.push(ev);
+        if input > 0 {
+            cur.ctx_used = input.saturating_add(cache_read).saturating_add(cache_write);
+        } else {
+            cur.ctx_used = delta_in
+                .saturating_add(delta_read)
+                .saturating_add(delta_write);
+        }
+        cur.factory_input_tokens = cur.factory_input_tokens.max(input);
+        cur.factory_output_tokens = cur.factory_output_tokens.max(output);
+        cur.factory_cache_read_tokens = cur.factory_cache_read_tokens.max(cache_read);
+        cur.factory_cache_write_tokens = cur.factory_cache_write_tokens.max(cache_write);
+        cur.factory_thinking_tokens = cur.factory_thinking_tokens.max(thinking);
+    }
+    true
+}
+
+fn factory_context_window(model: &str) -> u64 {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("gemini") {
+        1_000_000
+    } else if lower.contains("grok") {
+        256_000
+    } else {
+        CLAUDE_WINDOW
+    }
+}
+
+fn factory_cost_ledger(
+    model: &str,
+    usage: Option<&Map<String, Value>>,
+    active_ms: Option<u64>,
+) -> String {
+    let mut ledger = Map::new();
+    ledger.insert("provider".into(), Value::String("factory".into()));
+    ledger.insert("inputIncludesCache".into(), Value::Bool(false));
+    ledger.insert("model".into(), Value::String(model.to_string()));
+    if let Some(ms) = active_ms {
+        ledger.insert("assistantActiveTimeMs".into(), Value::from(ms));
+    }
+    if let Some(usage) = usage {
+        ledger.insert(
+            "inputTokens".into(),
+            Value::from(json_u64(usage.get("inputTokens"))),
+        );
+        ledger.insert(
+            "outputTokens".into(),
+            Value::from(json_u64(usage.get("outputTokens"))),
+        );
+        ledger.insert(
+            "cacheReadTokens".into(),
+            Value::from(json_u64(usage.get("cacheReadTokens"))),
+        );
+        ledger.insert(
+            "cacheCreationTokens".into(),
+            Value::from(json_u64(
+                usage
+                    .get("cacheCreationTokens")
+                    .or_else(|| usage.get("cacheWriteTokens")),
+            )),
+        );
+        ledger.insert(
+            "thinkingTokens".into(),
+            Value::from(json_u64(usage.get("thinkingTokens"))),
+        );
+    }
+    Value::Object(ledger).to_string()
+}
+
+fn json_u64(value: Option<&Value>) -> u64 {
+    let Some(value) = value else {
+        return 0;
+    };
+    if let Some(number) = value.as_u64() {
+        return number;
+    }
+    if let Some(number) = value.as_i64() {
+        if number > 0 {
+            return number as u64;
+        }
+    }
+    if let Some(number) = value.as_f64() {
+        if number.is_finite() && number > 0.0 {
+            return number as u64;
+        }
+    }
+    0
+}
+
+fn json_u64_present(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(_) => Some(json_u64(Some(value))),
+        _ => None,
+    }
+}
+
+fn align_factory_head(path: &Path, cur: &mut Cursor) {
+    let Some(line0_len) = factory_line0_len(path) else {
+        return;
+    };
+    if cur.offset == 0 || cur.factory_head_len == 0 {
+        cur.factory_head_len = line0_len;
+        return;
+    }
+    if line0_len != cur.factory_head_len {
+        let delta = line0_len as i64 - cur.factory_head_len as i64;
+        cur.offset = (cur.offset as i64 + delta).max(line0_len as i64) as u64;
+        cur.factory_head_len = line0_len;
+    }
+}
+
+fn factory_line0_len(path: &Path) -> Option<u64> {
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file.take(1024 * 1024));
+    let mut buf = Vec::new();
+    let n = reader.read_until(b'\n', &mut buf).ok()?;
+    if n == 0 || !buf.ends_with(b"\n") {
+        return None;
+    }
+    Some(n as u64)
+}
+
+fn factory_record(
+    obj: &Map<String, Value>,
+    cur: &mut Cursor,
+    fallback: i64,
+    settings_has_usage: bool,
+    out: &mut Vec<Event>,
+) {
+    if str_of(obj, "type") != "message" {
+        return;
+    }
+    let ts = parse_iso_ms(str_of(obj, "timestamp")).unwrap_or(fallback);
+    cur.last_ts = cur.last_ts.max(ts);
+    let Some(message) = obj.get("message").and_then(Value::as_object) else {
+        return;
+    };
+    match str_of(message, "visibility") {
+        "hidden" | "internal" => return,
+        _ => {}
+    }
+    let model = str_of(message, "model").trim();
+    if !model.is_empty() {
+        cur.model = model.to_string();
+    }
+    match str_of(message, "role") {
+        "user" => factory_user(message, cur, ts, out),
+        "assistant" => factory_assistant(obj, message, cur, ts, settings_has_usage, out),
+        _ => {}
+    }
+}
+
+fn factory_user(message: &Map<String, Value>, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>) {
+    let content = message.get("content").unwrap_or(&Value::Null);
+    let Some(blocks) = content.as_array() else {
+        let before = out.len();
+        claude_prompt(&text_from_value(content), ts, out);
+        if out.len() > before {
+            cur.turn_start = ts;
+        }
+        return;
+    };
+    let mut parts = Vec::new();
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str).unwrap_or("") {
+            "tool_result" => factory_result(block, cur, ts, out),
+            "text" => {
+                let piece = block.get("text").and_then(Value::as_str).unwrap_or("");
+                let query = extract_user_query(piece);
+                if !query.is_empty() && !noise_prompt(&query) {
+                    parts.push(query);
+                }
+            }
+            _ => {}
+        }
+    }
+    if parts.is_empty() {
+        return;
+    }
+    let mut ev = Event::new(ts, event::USER);
+    (ev.b, ev.c) = body(&parts.join("\n"), USER_CAP);
+    out.push(ev);
+    cur.turn_start = ts;
+}
+
+fn factory_assistant(
+    obj: &Map<String, Value>,
+    message: &Map<String, Value>,
+    cur: &mut Cursor,
+    ts: i64,
+    settings_has_usage: bool,
+    out: &mut Vec<Event>,
+) {
+    let mut reasoning = factory_message_reasoning(message);
+    let content = message.get("content").unwrap_or(&Value::Null);
+    let mut reply = String::new();
+    let mut texts = Vec::new();
+    let mut tools = Vec::new();
+    match content.as_array() {
+        Some(blocks) => {
+            for block in blocks {
+                match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "thinking" | "redacted_thinking" => {
+                        let text = claude_thinking_text(block);
+                        if !text.is_empty() {
+                            reasoning.push(text);
+                        }
+                    }
+                    "text" => {
+                        let text = block.get("text").and_then(Value::as_str).unwrap_or("");
+                        if !text.trim().is_empty() {
+                            texts.push(text.to_string());
+                        }
+                    }
+                    "tool_use" => tools.push(block.clone()),
+                    "tool_result" => factory_result(block, cur, ts, out),
+                    _ => {}
+                }
+            }
+        }
+        None => {
+            let text = text_from_value(content);
+            if !text.trim().is_empty() {
+                texts.push(text);
+            }
+        }
+    }
+    if !reasoning.is_empty() {
+        let text = reasoning.join("\n");
+        let mut ev = Event::new(ts, event::THINK);
+        (ev.b, ev.c) = body(&text, THINK_CAP);
+        cur.pending_reasoning_tokens += estimate_tokens(&text);
+        out.push(ev);
+    }
+    for text in &texts {
+        if !reply.is_empty() {
+            reply.push('\n');
+        }
+        reply.push_str(text);
+        let mut ev = Event::new(ts, event::REPLY);
+        (ev.b, ev.c) = body(text, REPLY_CAP);
+        ev.n.clone_from(&cur.model);
+        out.push(ev);
+    }
+    let saw_tool = !tools.is_empty();
+    for block in &tools {
+        let name = block
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("tool")
+            .to_string();
+        let input = block.get("input").unwrap_or(&Value::Null);
+        let mut args_buf = None;
+        let parsed_args = get_args_value(input, &mut args_buf);
+        track_tool_code_delta(&name, parsed_args, cur);
+        let mut ev = Event::new(ts, event::TOOL);
+        fill_tool(&mut ev, input);
+        ev.n.clone_from(&name);
+        if let Some(id) = block.get("id").and_then(Value::as_str) {
+            if cur.pending.len() >= PENDING_CAP {
+                if let Some(oldest) = cur
+                    .pending
+                    .iter()
+                    .min_by_key(|(_, (t, _))| *t)
+                    .map(|(key, _)| key.clone())
+                {
+                    cur.pending.remove(&oldest);
+                }
+            }
+            cur.pending.insert(id.to_string(), (ts, name.clone()));
+        }
+        let ask_g = ev.g.clone();
+        let ask_h = ev.h.clone();
+        out.push(ev);
+        emit_ask(out, ts, &name, parsed_args, &ask_g, &ask_h);
+    }
+    let saw_text = !texts.is_empty();
+    if saw_text && !saw_tool && cur.turn_start > 0 && ts >= cur.turn_start {
+        let mut ev = Event::new(ts, event::TURN);
+        ev.ms = (ts - cur.turn_start) as u64;
+        out.push(ev);
+        cur.turn_start = 0;
+    }
+    if settings_has_usage {
+        cur.pending_reasoning_tokens = 0;
+        return;
+    }
+    let line_tokens = u64_of(obj, "tokens");
+    let produced = estimate_tokens(&reply);
+    let reasoning_tokens = cur.pending_reasoning_tokens;
+    if line_tokens > 0 || produced > 0 || reasoning_tokens > 0 {
+        let mut ev = Event::new(ts, event::USAGE);
+        ev.ti = line_tokens;
+        ev.to = produced;
+        ev.tr = reasoning_tokens;
+        ev.n.clone_from(&cur.model);
+        out.push(ev);
+    }
+    cur.pending_reasoning_tokens = 0;
+}
+
+fn factory_message_reasoning(message: &Map<String, Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(text) = message
+        .get("chatCompletionReasoningContent")
+        .and_then(Value::as_str)
+    {
+        let text = text.trim();
+        if !text.is_empty() {
+            out.push(text.to_string());
+        }
+    }
+    match message.get("openaiReasoningSummary") {
+        Some(Value::String(text)) => {
+            let text = text.trim();
+            if !text.is_empty() {
+                out.push(text.to_string());
+            }
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        out.push(text.to_string());
+                    }
+                } else if let Some(obj) = item.as_object() {
+                    for key in ["summary", "text", "thinking"] {
+                        if let Some(text) = obj.get(key).and_then(Value::as_str) {
+                            let text = text.trim();
+                            if !text.is_empty() {
+                                out.push(text.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn factory_result(block: &Value, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>) {
+    let raw = text_from_value(block.get("content").unwrap_or(&Value::Null));
+    let failed = block.get("is_error").and_then(Value::as_bool) == Some(true)
+        || block.get("isError").and_then(Value::as_bool) == Some(true);
+    let mut ev = Event::new(ts, event::RESULT);
+    (ev.b, ev.c) = body(&raw, RESULT_CAP);
+    ev.err = failed;
+    out.push(ev);
+    let id = block
+        .get("tool_use_id")
+        .and_then(Value::as_str)
+        .or_else(|| block.get("toolUseId").and_then(Value::as_str))
+        .unwrap_or("");
+    if let Some((start, name)) = cur.pending.remove(id) {
+        let mut done = Event::new(ts, event::DONE);
+        done.n = name;
+        done.ms = ts.saturating_sub(start).max(0) as u64;
+        done.err = failed;
+        out.push(done);
+    }
+}
+
 fn claude_result(block: &Value, cur: &mut Cursor, ts: i64, out: &mut Vec<Event>) {
     let raw = text_from_value(block.get("content").unwrap_or(&Value::Null));
     let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
@@ -3032,5 +3512,208 @@ mod tests {
         assert!(stamped["categories"].get("tools").is_none());
         assert!(stamped.get("pricing").is_none());
         let _ = fs::remove_dir_all(&scratch_dir);
+    }
+
+    fn set_mtime(path: &std::path::Path, secs: u64) {
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
+    fn factory_settings(path: &std::path::Path, body: &str, secs: u64) {
+        fs::write(path, body).unwrap();
+        set_mtime(path, secs);
+    }
+
+    #[test]
+    fn factory_token_usage_deltas_are_not_double_counted() {
+        let dir = scratch("factory-usage");
+        let path = dir.join("sess.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session_start\",\"id\":\"sess\",\"title\":\"short\"}\n{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:28:41.248Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
+        )
+        .unwrap();
+        let settings = dir.join("sess.settings.json");
+        factory_settings(
+            &settings,
+            r#"{"model":"claude-3-7-sonnet","assistantActiveTimeMs":10,"tokenUsage":{"inputTokens":100,"outputTokens":10,"cacheCreationTokens":4,"cacheReadTokens":20,"thinkingTokens":3}}"#,
+            1_700_000_100,
+        );
+        let mut cur = Cursor::default();
+        let first = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_100_000);
+        let usage: Vec<_> = first.iter().filter(|ev| ev.k == event::USAGE).collect();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].ti, 100);
+        assert_eq!(usage[0].to, 10);
+        assert_eq!(usage[0].tc, 20);
+        assert_eq!(usage[0].tw, 4);
+        assert_eq!(usage[0].tr, 3);
+        let ledger: serde_json::Value = serde_json::from_str(&cur.cost_ledger).unwrap();
+        assert_eq!(ledger["provider"].as_str(), Some("factory"));
+        assert_eq!(ledger["inputIncludesCache"].as_bool(), Some(false));
+        let again = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_100_000);
+        assert!(again.iter().all(|ev| ev.k != event::USAGE));
+        factory_settings(
+            &settings,
+            r#"{"model":"claude-3-7-sonnet","tokenUsage":{"inputTokens":150,"outputTokens":25,"cacheCreationTokens":4,"cacheReadTokens":30,"thinkingTokens":3}}"#,
+            1_700_000_200,
+        );
+        let third = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_200_000);
+        let usage: Vec<_> = third.iter().filter(|ev| ev.k == event::USAGE).collect();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].ti, 50);
+        assert_eq!(usage[0].to, 15);
+        assert_eq!(usage[0].tc, 10);
+        assert_eq!(usage[0].tw, 0);
+        let kept_in = cur.factory_input_tokens;
+        let kept_mtime = cur.factory_settings_mtime;
+        cur.mark_purged();
+        assert_eq!(cur.factory_input_tokens, kept_in);
+        assert_eq!(cur.factory_settings_mtime, kept_mtime);
+        let after_purge = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_200_000);
+        assert!(after_purge.iter().all(|ev| ev.k != event::USAGE));
+        let old: Cursor = serde_json::from_str(r#"{"offset":12}"#).unwrap();
+        assert_eq!(old.offset, 12);
+        assert_eq!(old.factory_input_tokens, 0);
+        assert_eq!(old.factory_settings_mtime, 0);
+        assert_eq!(old.factory_head_len, 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn factory_estimates_tokens_when_settings_omit_usage() {
+        let dir = scratch("factory-estimate");
+        let path = dir.join("sess.jsonl");
+        let reply = "abcdefgh";
+        fs::write(
+            &path,
+            format!(
+                "{{\"type\":\"session_start\",\"id\":\"sess\",\"title\":\"t\"}}\n{{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:28:41.248Z\",\"tokens\":40,\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"thinking\",\"thinking\":\"abcd\"}},{{\"type\":\"text\",\"text\":\"{reply}\"}}]}}}}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("sess.settings.json"),
+            r#"{"model":"local-vllm","providerLock":"generic-chat-completion-api"}"#,
+        )
+        .unwrap();
+        let mut cur = Cursor::default();
+        let events = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_000_000);
+        let usage = events.iter().find(|ev| ev.k == event::USAGE).unwrap();
+        assert_eq!(usage.ti, 40);
+        assert_eq!(usage.to, estimate_tokens(reply));
+        assert_eq!(usage.tr, estimate_tokens("abcd"));
+        assert!(events.iter().filter(|ev| ev.k == event::USAGE).count() == 1);
+        let second = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_000_000);
+        assert!(second.iter().all(|ev| ev.k != event::USAGE));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn factory_line0_rewrite_shifts_the_cursor_both_ways() {
+        let dir = scratch("factory-rewrite");
+        let path = dir.join("sess.jsonl");
+        let start = |title: &str| {
+            format!("{{\"type\":\"session_start\",\"id\":\"sess\",\"title\":\"{title}\"}}\n")
+        };
+        let user = "{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:28:41.248Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"first prompt\"}]}}\n";
+        let reply = "{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:29:41.248Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"first reply\"}]}}\n";
+        let second = "{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:30:41.248Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"second prompt\"}]}}\n";
+        fs::write(&path, format!("{}{user}", start("short"))).unwrap();
+        let mut cur = Cursor::default();
+        let first = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_000_000);
+        assert_eq!(first.iter().filter(|ev| ev.k == event::USER).count(), 1);
+        assert!(first.iter().all(|ev| ev.k != "session_start"));
+        let grown = format!(
+            "{}{user}{reply}",
+            start("a much longer generated session title")
+        );
+        fs::write(&path, &grown).unwrap();
+        let mid = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_000_000);
+        assert_eq!(mid.iter().filter(|ev| ev.k == event::USER).count(), 0);
+        assert_eq!(mid.iter().filter(|ev| ev.k == event::REPLY).count(), 1);
+        assert_eq!(
+            mid.iter()
+                .filter(|ev| ev.b.contains("first prompt"))
+                .count(),
+            0
+        );
+        let shrunk = format!("{}{user}{reply}{second}", start("s"));
+        fs::write(&path, &shrunk).unwrap();
+        let last = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_000_000);
+        assert_eq!(last.iter().filter(|ev| ev.k == event::USER).count(), 1);
+        assert!(last.iter().any(|ev| ev.b.contains("second prompt")));
+        assert!(!last.iter().any(|ev| ev.b.contains("first prompt")));
+        assert_eq!(last.iter().filter(|ev| ev.k == event::REPLY).count(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn factory_tool_deltas_and_asks() {
+        let mut cur = Cursor::default();
+        track_tool_code_delta(
+            "Create",
+            &serde_json::json!({"file_path":"a.rs","content":"a\nb\nc"}),
+            &mut cur,
+        );
+        track_tool_code_delta(
+            "Edit",
+            &serde_json::json!({"file_path":"a.rs","old_str":"a\nb","new_str":"c"}),
+            &mut cur,
+        );
+        track_tool_code_delta(
+            "MultiEdit",
+            &serde_json::json!({
+                "file_path": "a.rs",
+                "edits": [
+                    {"old_str": "c", "new_str": "d\ne"},
+                    {"old_str": "x", "new_str": "y"}
+                ]
+            }),
+            &mut cur,
+        );
+        track_tool_code_delta(
+            "ApplyPatch",
+            &serde_json::json!({
+                "patch": "*** Begin Patch\n*** Add File: a.rs\n+one\n+two\n*** End Patch\n"
+            }),
+            &mut cur,
+        );
+        assert_eq!(cur.lines_added, 3 + 1 + 2 + 1 + 2);
+        assert_eq!(cur.lines_removed, 2 + 1 + 1);
+
+        let dir = scratch("factory-ask");
+        let path = dir.join("sess.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_start\",\"id\":\"sess\",\"title\":\"t\"}\n",
+                "{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:28:41.248Z\",\"message\":{\"role\":\"assistant\",\"content\":[",
+                "{\"type\":\"tool_use\",\"id\":\"q\",\"name\":\"AskUser\",\"input\":{\"question\":\"Which file?\"}},",
+                "{\"type\":\"tool_use\",\"id\":\"p\",\"name\":\"ExitSpecMode\",\"input\":{\"plan\":\"ship it\"}}",
+                "]}}\n",
+                "{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:28:42.248Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"toolUseId\":\"q\",\"isError\":true,\"content\":\"no\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        let mut cur = Cursor::default();
+        let events = ingest(CliKind::Factory, &path, &mut cur, 1_700_000_000_000);
+        let asks: Vec<_> = events.iter().filter(|ev| ev.k == event::ASK).collect();
+        assert_eq!(asks.len(), 2);
+        assert_eq!(asks[0].n, "AskUser");
+        assert!(asks[0].b.contains("Which file?"));
+        assert_eq!(asks[1].n, "ExitSpecMode");
+        assert!(asks[1].b.contains("ship it"));
+        let result = events.iter().find(|ev| ev.k == event::RESULT).unwrap();
+        assert!(result.err);
+        assert!(events
+            .iter()
+            .any(|ev| ev.k == event::DONE && ev.n == "AskUser" && ev.err));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

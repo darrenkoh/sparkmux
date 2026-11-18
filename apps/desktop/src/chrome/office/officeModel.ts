@@ -42,7 +42,12 @@ export const AGENT_PALETTE = [
   0x9c5950, // Muted Brick
 ];
 
-export const CLI_ACCENT = { claude: 0xd97757, grok: 0xe5e7eb, antigravity: 0x4f8ff7 } as const;
+export const CLI_ACCENT = {
+  claude: 0xd97757,
+  grok: 0xe5e7eb,
+  antigravity: 0x4f8ff7,
+  factory: 0x10b981,
+} as const;
 
 /** How long a finished agent stays at the coffee bar before the sofa. */
 export const COFFEE_HOLD_MS = 20_000;

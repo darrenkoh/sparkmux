@@ -2,9 +2,10 @@
 //! module wrote. A name the user typed is left alone.
 //!
 //! Grok and Claude versions come from the executable name tmux already reports
-//! (`grok-1.0.62`, `2.1.296`). `agy` does not, so one `agy --version` is cached.
-//! A shell command wins over a stale pane title: Grok leaves ` - grok` behind
-//! after it exits.
+//! (`grok-1.0.62`, `2.1.296`). `agy` and `droid` do not, so one `--version`
+//! probe is cached for each. A shell command wins over a stale pane title:
+//! Grok leaves ` - grok` behind after it exits. A missing `droid` binary is a
+//! soft miss and the tab is labeled `Droid`.
 
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +18,7 @@ use sparkmux_core::{Pane, Snapshot, Window};
 
 use crate::artifacts::{cli_kind, CliKind};
 
-const AGY_VERSION_TIMEOUT: Duration = Duration::from_secs(3);
+const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LabelVersions {
@@ -26,6 +27,9 @@ pub(crate) struct LabelVersions {
     pub agy_pending: bool,
     /// The probe already finished, including a failure.
     pub agy_tried: bool,
+    pub droid: Option<String>,
+    pub droid_pending: bool,
+    pub droid_tried: bool,
     pub grok_fallback: Option<String>,
     pub claude_fallback: Option<String>,
 }
@@ -37,10 +41,20 @@ impl LabelVersions {
             agy: None,
             agy_pending: false,
             agy_tried: false,
+            droid: None,
+            droid_pending: false,
+            droid_tried: false,
             grok_fallback: None,
             claude_fallback: None,
         }
     }
+}
+
+/// Which version probes `plan` wants started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProbePlan {
+    pub agy: bool,
+    pub droid: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,70 +63,93 @@ pub(crate) struct LabelChange {
     pub name: String,
 }
 
-enum AgyProbe {
+enum VersionProbe {
     Idle,
     Running,
     Ready(Option<String>),
 }
 
-static AGY_PROBE: Mutex<AgyProbe> = Mutex::new(AgyProbe::Idle);
+static AGY_PROBE: Mutex<VersionProbe> = Mutex::new(VersionProbe::Idle);
+static DROID_PROBE: Mutex<VersionProbe> = Mutex::new(VersionProbe::Idle);
 static GROK_FALLBACK: Mutex<Option<String>> = Mutex::new(None);
 static CLAUDE_FALLBACK: Mutex<Option<String>> = Mutex::new(None);
 
 /// Versions already known, plus a one-time symlink read when a bare `grok` or
 /// `claude` command has no version in its file name.
+fn probe_bits(slot: &Mutex<VersionProbe>) -> (Option<String>, bool, bool) {
+    let guard = slot.lock().unwrap_or_else(|err| err.into_inner());
+    match &*guard {
+        VersionProbe::Idle => (None, false, false),
+        VersionProbe::Running => (None, true, false),
+        VersionProbe::Ready(version) => (version.clone(), false, true),
+    }
+}
+
 pub(crate) fn cached_versions() -> LabelVersions {
-    let (agy, agy_pending, agy_tried) = {
-        let guard = AGY_PROBE.lock().unwrap_or_else(|err| err.into_inner());
-        match &*guard {
-            AgyProbe::Idle => (None, false, false),
-            AgyProbe::Running => (None, true, false),
-            AgyProbe::Ready(version) => (version.clone(), false, true),
-        }
-    };
+    let (agy, agy_pending, agy_tried) = probe_bits(&AGY_PROBE);
+    let (droid, droid_pending, droid_tried) = probe_bits(&DROID_PROBE);
     LabelVersions {
         agy,
         agy_pending,
         agy_tried,
+        droid,
+        droid_pending,
+        droid_tried,
         grok_fallback: cached_fallback(&GROK_FALLBACK, &[".grok/bin/grok", ".local/bin/grok"]),
         claude_fallback: cached_fallback(&CLAUDE_FALLBACK, &[".local/bin/claude"]),
     }
 }
 
-/// One background `agy --version`. Later calls do nothing.
-pub(crate) fn start_agy_probe() {
+fn start_probe(slot: &'static Mutex<VersionProbe>, name: &str, probe: fn() -> Option<String>) {
     {
-        let mut guard = AGY_PROBE.lock().unwrap_or_else(|err| err.into_inner());
-        if !matches!(&*guard, AgyProbe::Idle) {
+        let mut guard = slot.lock().unwrap_or_else(|err| err.into_inner());
+        if !matches!(&*guard, VersionProbe::Idle) {
             return;
         }
-        *guard = AgyProbe::Running;
+        *guard = VersionProbe::Running;
     }
     let spawned = thread::Builder::new()
-        .name("sparkmux-agy-version".to_string())
-        .spawn(|| {
-            let version = probe_agy_version();
-            let mut guard = AGY_PROBE.lock().unwrap_or_else(|err| err.into_inner());
-            *guard = AgyProbe::Ready(version);
+        .name(name.to_string())
+        .spawn(move || {
+            let version = probe();
+            let mut guard = slot.lock().unwrap_or_else(|err| err.into_inner());
+            *guard = VersionProbe::Ready(version);
         })
         .is_ok();
     if !spawned {
-        let mut guard = AGY_PROBE.lock().unwrap_or_else(|err| err.into_inner());
-        if matches!(&*guard, AgyProbe::Running) {
-            *guard = AgyProbe::Ready(None);
+        let mut guard = slot.lock().unwrap_or_else(|err| err.into_inner());
+        if matches!(&*guard, VersionProbe::Running) {
+            *guard = VersionProbe::Ready(None);
         }
     }
 }
 
-/// Renames to apply, and whether the caller should [`start_agy_probe`].
-pub(crate) fn plan(snap: &Snapshot, versions: &LabelVersions) -> (Vec<LabelChange>, bool) {
+/// One background `agy --version`. Later calls do nothing.
+pub(crate) fn start_agy_probe() {
+    start_probe(&AGY_PROBE, "sparkmux-agy-version", probe_agy_version);
+}
+
+/// One background `droid --version`. A missing binary finishes as no version.
+pub(crate) fn start_droid_probe() {
+    start_probe(&DROID_PROBE, "sparkmux-droid-version", probe_droid_version);
+}
+
+/// Renames to apply, and which version probes the caller should start.
+pub(crate) fn plan(snap: &Snapshot, versions: &LabelVersions) -> (Vec<LabelChange>, ProbePlan) {
     let mut versions = versions.clone();
-    let need_probe = versions.agy.is_none()
+    let need_agy = versions.agy.is_none()
         && !versions.agy_pending
         && !versions.agy_tried
         && snap_needs_agy(snap);
-    if need_probe {
+    let need_droid = versions.droid.is_none()
+        && !versions.droid_pending
+        && !versions.droid_tried
+        && snap_needs_droid(snap);
+    if need_agy {
         versions.agy_pending = true;
+    }
+    if need_droid {
+        versions.droid_pending = true;
     }
     let mut changes = Vec::new();
     for session in &snap.sessions {
@@ -134,7 +171,13 @@ pub(crate) fn plan(snap: &Snapshot, versions: &LabelVersions) -> (Vec<LabelChang
             });
         }
     }
-    (changes, need_probe)
+    (
+        changes,
+        ProbePlan {
+            agy: need_agy,
+            droid: need_droid,
+        },
+    )
 }
 
 pub(crate) fn desired_window_name(
@@ -170,6 +213,18 @@ fn snap_needs_agy(snap: &Snapshot) -> bool {
                 && active_pane(window).is_some_and(|pane| {
                     cli_from_pane(&pane.command, &pane.title) == Some(CliKind::Antigravity)
                         && command_version(CliKind::Antigravity, &pane.command).is_none()
+                })
+        })
+    })
+}
+
+fn snap_needs_droid(snap: &Snapshot) -> bool {
+    snap.sessions.iter().any(|session| {
+        session.windows.iter().any(|window| {
+            is_managed(window.name.trim())
+                && active_pane(window).is_some_and(|pane| {
+                    cli_from_pane(&pane.command, &pane.title) == Some(CliKind::Factory)
+                        && command_version(CliKind::Factory, &pane.command).is_none()
                 })
         })
     })
@@ -211,6 +266,15 @@ fn version_for(kind: CliKind, command: &str, versions: &LabelVersions) -> Versio
                 VersionChoice::Missing
             }
         }
+        CliKind::Factory => {
+            if let Some(version) = &versions.droid {
+                VersionChoice::Known(version.clone())
+            } else if versions.droid_pending || !versions.droid_tried {
+                VersionChoice::Wait
+            } else {
+                VersionChoice::Missing
+            }
+        }
     }
 }
 
@@ -219,6 +283,7 @@ fn product_label(kind: CliKind, version: Option<&str>) -> String {
         CliKind::Grok => "Grok",
         CliKind::Claude => "Claude",
         CliKind::Antigravity => "AGY",
+        CliKind::Factory => "Droid",
     };
     match version {
         Some(version) if looks_like_version(version) => format!("{name} v{version}"),
@@ -232,10 +297,10 @@ fn is_claude_managed(name: &str) -> bool {
 
 /// `shell`, or a label this module writes (`Grok v1.0.62`, `AGY`).
 fn is_managed(name: &str) -> bool {
-    if matches!(name, "shell" | "Grok" | "Claude" | "AGY") {
+    if matches!(name, "shell" | "Grok" | "Claude" | "AGY" | "Droid") {
         return true;
     }
-    for prefix in ["Grok v", "Claude v", "AGY v"] {
+    for prefix in ["Grok v", "Claude v", "AGY v", "Droid v"] {
         if let Some(rest) = name.strip_prefix(prefix) {
             return looks_like_version(rest);
         }
@@ -277,6 +342,7 @@ fn command_version(kind: CliKind, command: &str) -> Option<String> {
             }
         }
         CliKind::Antigravity => version_after(base, &["agy-"]),
+        CliKind::Factory => version_after(base, &["droid-"]),
     }
 }
 
@@ -385,11 +451,21 @@ fn version_in_filename(name: &str) -> Option<String> {
     if looks_like_version(name) {
         return Some(name.to_string());
     }
-    version_after(name, &["grok-", "claude-code-", "claude-", "agy-"])
+    version_after(
+        name,
+        &["grok-", "claude-code-", "claude-", "agy-", "droid-"],
+    )
 }
 
 fn probe_agy_version() -> Option<String> {
-    let bin = crate::llm_usage::agy_binary()?;
+    probe_bin_version(crate::llm_usage::agy_binary()?)
+}
+
+fn probe_droid_version() -> Option<String> {
+    probe_bin_version(crate::llm_usage::droid_binary()?)
+}
+
+fn probe_bin_version(bin: std::path::PathBuf) -> Option<String> {
     let mut child = Command::new(bin)
         .arg("--version")
         .stdin(Stdio::null())
@@ -401,7 +477,7 @@ fn probe_agy_version() -> Option<String> {
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() >= AGY_VERSION_TIMEOUT => {
+            Ok(None) if started.elapsed() >= VERSION_TIMEOUT => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -443,6 +519,9 @@ mod tests {
             agy: agy.map(str::to_string),
             agy_pending: pending,
             agy_tried: tried,
+            droid: None,
+            droid_pending: false,
+            droid_tried: false,
             grok_fallback: None,
             claude_fallback: None,
         }
@@ -628,19 +707,57 @@ mod tests {
         );
         let (changes, probe) = plan(&split, &versions);
         assert!(changes.is_empty());
-        assert!(!probe);
+        assert!(!probe.agy && !probe.droid);
 
         let agy = window("shell", vec![pane("agy", "", true)]);
         let (changes, probe) = plan(&agy, &versions);
         assert!(changes.is_empty(), "wait until agy --version returns");
-        assert!(probe);
+        assert!(probe.agy);
+        assert!(!probe.droid);
 
         let grok = window("shell", vec![pane("grok-1.0.62", "", true)]);
         let (changes, probe) = plan(&grok, &versions);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].window_id, "@1");
         assert_eq!(changes[0].name, "Grok v1.0.62");
-        assert!(!probe);
+        assert!(!probe.agy && !probe.droid);
+
+        let droid = window("shell", vec![pane("droid", "", true)]);
+        let (changes, probe) = plan(&droid, &versions);
+        assert!(changes.is_empty(), "wait until droid --version returns");
+        assert!(probe.droid);
+        assert!(!probe.agy);
+    }
+
+    #[test]
+    fn shell_running_droid_becomes_droid_and_a_shell_restores_it() {
+        let mut versions = LabelVersions::bare();
+        versions.droid = Some("0.55.1".into());
+        versions.droid_tried = true;
+        assert_eq!(
+            desired_window_name("shell", "droid", "", &versions).as_deref(),
+            Some("Droid v0.55.1")
+        );
+        assert_eq!(
+            desired_window_name("shell", "droid-0.55.1", "", &LabelVersions::bare()).as_deref(),
+            Some("Droid v0.55.1")
+        );
+        let mut missing = LabelVersions::bare();
+        missing.droid_tried = true;
+        assert_eq!(
+            desired_window_name("shell", "droid", "", &missing).as_deref(),
+            Some("Droid")
+        );
+        assert_eq!(
+            desired_window_name("Droid v0.55.1", "zsh", "", &versions).as_deref(),
+            Some("shell")
+        );
+        assert_eq!(
+            desired_window_name("Droid", "bash", "", &missing).as_deref(),
+            Some("shell")
+        );
+        assert!(is_managed("Droid"));
+        assert!(is_managed("Droid v0.55.1"));
     }
 
     #[test]

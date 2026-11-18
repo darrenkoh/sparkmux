@@ -918,6 +918,7 @@ fn stations_from_records(
         match kind {
             CliKind::Grok => walk_grok(obj, *offset, &mut calls, &mut grok_hits),
             CliKind::Claude => walk_claude(obj, *offset, &mut calls, &mut claude_hits),
+            CliKind::Factory => walk_factory(obj, *offset, &mut calls, &mut claude_hits),
             CliKind::Antigravity => walk_agy(obj, *offset, &mut calls, &mut agy_queue),
         }
     }
@@ -949,7 +950,7 @@ fn stations_from_records(
             }
         }
     }
-    if kind == CliKind::Claude {
+    if kind == CliKind::Claude || kind == CliKind::Factory {
         for call in &mut calls {
             if let Some(id) = &call.tool_id {
                 if let Some(outcome) = claude_hits.get(id) {
@@ -1020,6 +1021,51 @@ fn walk_claude(
         } else if kind == "tool_result" {
             if let Some(id) = block.get("tool_use_id").and_then(Value::as_str) {
                 let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
+                hits.insert(
+                    id.to_string(),
+                    if failed { Outcome::Error } else { Outcome::Ok },
+                );
+            }
+        }
+    }
+}
+
+fn walk_factory(
+    obj: &Map<String, Value>,
+    offset: u64,
+    calls: &mut Vec<Call>,
+    hits: &mut HashMap<String, Outcome>,
+) {
+    if obj.get("type").and_then(Value::as_str) != Some("message") {
+        return;
+    }
+    let Some(message) = obj.get("message").and_then(Value::as_object) else {
+        return;
+    };
+    if let Some("hidden" | "internal") = message.get("visibility").and_then(Value::as_str) {
+        return;
+    }
+    let ts = obj
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(parse_iso_ms);
+    let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    let mut call_index = 0u32;
+    for block in blocks {
+        let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
+        if kind == "tool_use" {
+            push_call(calls, offset, call_index, block, ts);
+            call_index = call_index.saturating_add(1);
+        } else if kind == "tool_result" {
+            let id = block
+                .get("tool_use_id")
+                .and_then(Value::as_str)
+                .or_else(|| block.get("toolUseId").and_then(Value::as_str));
+            if let Some(id) = id {
+                let failed = block.get("is_error").and_then(Value::as_bool) == Some(true)
+                    || block.get("isError").and_then(Value::as_bool) == Some(true);
                 hits.insert(
                     id.to_string(),
                     if failed { Outcome::Error } else { Outcome::Ok },
@@ -1158,7 +1204,9 @@ fn is_mutating(name: &str) -> bool {
             | "write_file"
             | "write_to_file"
             | "create_file"
+            | "create"
             | "apply_patch"
+            | "applypatch"
             | "patch"
             | "delete_file"
             | "notebook_edit"
@@ -1179,12 +1227,12 @@ fn expand_call(
         return Vec::new();
     };
     match call.name_lower.as_str() {
-        "write" | "write_file" | "write_to_file" | "create_file" => {
+        "write" | "write_file" | "write_to_file" | "create_file" | "create" => {
             expand_write(call, map, cwd_canon, cache)
         }
         "delete_file" => expand_delete(call, map, cwd_canon, cache),
         "notebook_edit" => expand_notebook(call, map, cwd_canon, cache),
-        "patch" | "apply_patch" => expand_patch(call, map, cwd_canon, cache),
+        "patch" | "apply_patch" | "applypatch" => expand_patch(call, map, cwd_canon, cache),
         _ => expand_edits(call, map, cwd_canon, cache),
     }
 }
@@ -4408,5 +4456,52 @@ mod tests {
         assert_eq!(moved.diff_kind, "hunk");
         assert!(moved.diff_text.contains("+MOVED"), "{}", moved.diff_text);
         assert!(moved.diff_text.contains("+BODY"), "{}", moved.diff_text);
+    }
+
+    #[test]
+    fn factory_mutating_tools_become_stations() {
+        let dir = scratch("factory-stations");
+        let patch = [
+            "*** Begin Patch",
+            "*** Add File: src/c.rs",
+            "+one",
+            "*** End Patch",
+        ]
+        .join("\n");
+        let row = serde_json::json!({
+            "type": "message",
+            "timestamp": "2026-01-05T20:28:41.248Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type":"tool_use","id":"c","name":"Create","input":{"file_path":"src/a.rs","content":"fn a\n"}},
+                    {"type":"tool_use","id":"e","name":"Edit","input":{"file_path":"src/a.rs","old_str":"fn a","new_str":"fn b"}},
+                    {"type":"tool_use","id":"m","name":"MultiEdit","input":{"file_path":"src/b.rs","edits":[{"old_str":"x","new_str":"y"}]}},
+                    {"type":"tool_use","id":"p","name":"ApplyPatch","input":{"patch": patch}}
+                ]
+            }
+        })
+        .to_string();
+        let loaded = load_in(CliKind::Factory, &dir, &ndjson(&[row]));
+        let kinds: Vec<(&str, &str)> = loaded
+            .session
+            .stations
+            .iter()
+            .map(|station| (station.tool.as_str(), station.path.as_str()))
+            .collect();
+        assert!(kinds.contains(&("Create", "src/a.rs")), "{kinds:?}");
+        assert!(kinds.contains(&("Edit", "src/a.rs")), "{kinds:?}");
+        assert!(kinds.contains(&("MultiEdit", "src/b.rs")), "{kinds:?}");
+        assert!(kinds.contains(&("ApplyPatch", "src/c.rs")), "{kinds:?}");
+        assert!(loaded
+            .session
+            .stations
+            .iter()
+            .any(|station| station.kind == "write" && station.path == "src/a.rs"));
+        assert!(loaded
+            .session
+            .stations
+            .iter()
+            .any(|station| station.kind == "replace"));
     }
 }

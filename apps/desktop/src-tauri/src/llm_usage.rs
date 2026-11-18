@@ -153,6 +153,7 @@ pub async fn llm_usage(command: String, title: String, cwd: String, pid: u32) ->
             }
             u
         }
+        Some(crate::artifacts::CliKind::Factory) => LlmUsage::recognized("factory"),
         None => usage_for(&command, &title, &default_paths(), now),
     };
     if usage.cli.as_deref() == Some("antigravity") {
@@ -165,14 +166,11 @@ pub async fn llm_usage(command: String, title: String, cwd: String, pid: u32) ->
     }
     let is_claude = usage.cli.as_deref() == Some("claude")
         || detected_kind == Some(crate::artifacts::CliKind::Claude);
-    if is_claude {
+    if is_claude || detected_kind.is_none() {
         if let Some(cost) = crate::bedrock_cost::cost_for(&command, &cwd, &title, pid, now) {
             usage.cli = Some("claude".to_string());
             usage.cost = Some(cost);
         }
-    } else if let Some(cost) = crate::bedrock_cost::cost_for(&command, &cwd, &title, pid, now) {
-        usage.cli = Some("claude".to_string());
-        usage.cost = Some(cost);
     }
     if usage.cli.as_deref() == Some("grok") {
         usage.session_usd = grok_session_usd(&command, &cwd, &title, pid);
@@ -286,6 +284,7 @@ fn usage_for(command: &str, title: &str, paths: &UsagePaths, now: i64) -> LlmUsa
         CliKind::Grok => read_grok(&paths.grok_log),
         CliKind::Claude => read_claude(paths.claude_usage.as_deref()),
         CliKind::Antigravity => read_agy(paths.agy_usage.as_deref(), now),
+        CliKind::Factory => LlmUsage::recognized("factory"),
     }
 }
 
@@ -403,6 +402,26 @@ fn run_agy_print(now: i64) -> Option<LlmUsage> {
     let mut usage = parse_agy_print(&text)?;
     usage.fetched_at_ms = Some(now);
     Some(usage)
+}
+
+pub(crate) fn droid_binary() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("droid");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    let dirs = directories::UserDirs::new()?;
+    let home = dirs.home_dir();
+    for rel in [".local/bin/droid", ".factory/bin/droid"] {
+        let candidate = home.join(rel);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 pub(crate) fn agy_binary() -> Option<PathBuf> {
@@ -1235,6 +1254,20 @@ Gemini 4 Argon         Gemini 4 Argon Weekly Limit  1%    2026-10-24 21:53 PDT
         let lib = include_str!("lib.rs");
         assert!(lib.contains("llm_usage::llm_usage"));
         assert!(lib.contains("init_agy_usage"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let usage = rt.block_on(llm_usage(
+            "droid".into(),
+            "claude-3-7-sonnet".into(),
+            "/tmp".into(),
+            0,
+        ));
+        assert_eq!(usage.cli.as_deref(), Some("factory"));
+        assert_eq!(
+            usage_for("droid", "Claude Code", &paths(&std::env::temp_dir()), 0)
+                .cli
+                .as_deref(),
+            Some("factory")
+        );
         let menu = include_str!("menu.rs");
         assert!(!menu.contains("Antigravity (Usage Refresh)"));
         assert!(!menu.contains("agy-usage-"));

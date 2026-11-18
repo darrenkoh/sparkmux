@@ -17,6 +17,25 @@ import {
   sessionCostFromStats,
 } from "./analyticsFormat.ts";
 
+test("sessionCost factory and droid price through the non-cache fallback", () => {
+  const ledger = {
+    provider: "factory" as const,
+    model: "claude-3-7-sonnet",
+    totalCostUSD: 999,
+    inputTokens: 1_000_000,
+    outputTokens: 0,
+    cacheReadTokens: 1_000_000,
+    inputIncludesCache: false,
+  };
+  const cost = sessionCost(ledger);
+  assert.equal(cost.stamped, false);
+  assert.equal(cost.usd, estimateCost("claude-3-7-sonnet", 1_000_000, 0, 1_000_000, 0));
+  assert.notEqual(cost.usd, 999);
+  const droid = sessionCost({ ...ledger, provider: "droid" });
+  assert.equal(droid.usd, cost.usd);
+  assert.equal(droid.stamped, false);
+});
+
 test("formatBytes formats small and large bytes correctly", () => {
   assert.equal(formatBytes(0), "0 B");
   assert.equal(formatBytes(512), "512 B");

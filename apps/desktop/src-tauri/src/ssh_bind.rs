@@ -1,7 +1,7 @@
 //! Decide whether a pane may bind a local CLI transcript.
 //!
 //! An `ssh` foreground command never opens the Mac's `~/.grok`, `~/.claude`,
-//! or `~/.gemini` trees. A readable remote store is a cache directory shaped
+//! `~/.gemini`, or `~/.factory` trees. A readable remote store is a cache directory shaped
 //! like that user's home. Pid 0 never fetches and never sees a staged store.
 //! The fetch parses `ps` argv, then runs `ssh` with that host as its own
 //! argument (`BatchMode`, short connect timeout). It does not use a local shell.
@@ -27,6 +27,7 @@ pub struct RemoteRoots {
     pub claude_projects: PathBuf,
     pub grok_active_sessions: PathBuf,
     pub agy_root: PathBuf,
+    pub factory_sessions: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,10 +67,10 @@ const MAX_FILES: usize = 4_000;
 
 const REMOTE_READ: &str = r#"export LC_ALL=C
 cd "$HOME" || exit 1
-find .grok/sessions .grok/active_sessions.json .claude/projects .gemini/antigravity-cli -type f 2>/dev/null |
+find .grok/sessions .grok/active_sessions.json .claude/projects .gemini/antigravity-cli .factory/sessions -type f 2>/dev/null |
 while IFS= read -r f; do
   case "$f" in
-    .grok/sessions/*|.grok/active_sessions.json|.claude/projects/*|.gemini/antigravity-cli/*) ;;
+    .grok/sessions/*|.grok/active_sessions.json|.claude/projects/*|.gemini/antigravity-cli/*|.factory/sessions/*) ;;
     *) continue ;;
   esac
   case "$f" in
@@ -418,6 +419,7 @@ pub fn roots_under(home: &Path) -> RemoteRoots {
         claude_projects: home.join(".claude").join("projects"),
         grok_active_sessions: home.join(".grok").join("active_sessions.json"),
         agy_root: home.join(".gemini").join("antigravity-cli"),
+        factory_sessions: home.join(".factory").join("sessions"),
     }
 }
 
@@ -426,6 +428,7 @@ fn roots_are_user_home(roots: &RemoteRoots) -> bool {
         || under_user_cli_home(&roots.claude_projects)
         || under_user_cli_home(&roots.grok_active_sessions)
         || under_user_cli_home(&roots.agy_root)
+        || under_user_cli_home(&roots.factory_sessions)
 }
 
 fn under_user_cli_home(path: &Path) -> bool {
@@ -433,7 +436,7 @@ fn under_user_cli_home(path: &Path) -> bool {
         return false;
     };
     let home = dirs.home_dir();
-    [".grok", ".claude", ".gemini"]
+    [".grok", ".claude", ".gemini", ".factory"]
         .into_iter()
         .any(|leaf| path.starts_with(home.join(leaf)))
 }
@@ -687,7 +690,8 @@ fn safe_rel(rel: &str) -> Result<PathBuf, ()> {
     let allowed = rel == ".grok/active_sessions.json"
         || rel.starts_with(".grok/sessions/")
         || rel.starts_with(".claude/projects/")
-        || rel.starts_with(".gemini/antigravity-cli/");
+        || rel.starts_with(".gemini/antigravity-cli/")
+        || rel.starts_with(".factory/sessions/");
     if !allowed {
         return Err(());
     }
@@ -711,6 +715,7 @@ fn cache_has_transcript(roots: &RemoteRoots) -> bool {
     named_file(&roots.grok_sessions, "chat_history.jsonl", 8)
         || jsonl_file(&roots.claude_projects, 6)
         || named_file(&roots.agy_root, "transcript.jsonl", 10)
+        || jsonl_file(&roots.factory_sessions, 6)
 }
 
 fn named_file(root: &Path, name: &str, depth: u8) -> bool {
@@ -871,6 +876,7 @@ mod tests {
                 claude_projects: PathBuf::from("/nope/claude"),
                 grok_active_sessions: PathBuf::from("/nope/active"),
                 agy_root: PathBuf::from("/nope/agy"),
+                factory_sessions: PathBuf::from("/nope/factory"),
             },
         );
         assert!(remote_roots(0).is_none());
@@ -893,8 +899,24 @@ mod tests {
                 claude_projects: home.join(".claude").join("projects"),
                 grok_active_sessions: home.join(".grok").join("active_sessions.json"),
                 agy_root: home.join(".gemini").join("antigravity-cli"),
+                factory_sessions: home.join(".factory").join("sessions"),
             },
         );
         assert_eq!(bind_roots("ssh", pid), BindRoots::Empty);
+        clear_remote_roots(pid);
+        stage_remote_roots(
+            pid,
+            RemoteRoots {
+                grok_sessions: PathBuf::from("/cache/grok"),
+                claude_projects: PathBuf::from("/cache/claude"),
+                grok_active_sessions: PathBuf::from("/cache/active"),
+                agy_root: PathBuf::from("/cache/agy"),
+                factory_sessions: home.join(".factory").join("sessions"),
+            },
+        );
+        assert_eq!(bind_roots("ssh", pid), BindRoots::Empty);
+        assert!(REMOTE_READ.contains(".factory/sessions"));
+        assert!(safe_rel(".factory/sessions/-repo/id.jsonl").is_ok());
+        assert!(safe_rel(".factory/../.ssh/id_rsa").is_err());
     }
 }

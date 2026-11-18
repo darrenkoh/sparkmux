@@ -37,6 +37,8 @@ struct CachedStats {
     usage_mtime: u64,
     /// CLI `/usage` stamp. Compared so a new `costUsdTicks` leaves the cache.
     cost_ledger: String,
+    /// Factory `<uuid>.settings.json` mtime. A token rewrite does not move the chat offset.
+    factory_settings_mtime: u64,
     stats: TabAnalyticsStats,
     lifetime_stats: Option<TabAnalyticsStats>,
 }
@@ -257,6 +259,7 @@ pub async fn tab_analytics(
                 // A cost stamp can change with no new chat bytes. Persist that
                 // cursor or the next launch rereads the ledger from scratch.
                 let ledger_before = cursor.cost_ledger.clone();
+                let factory_mtime_before = cursor.factory_settings_mtime;
                 let agy_mtime_before = (
                     cursor.agy_db_mtime,
                     cursor.agy_summaries_mtime,
@@ -275,6 +278,7 @@ pub async fn tab_analytics(
                     }
                 }
                 let cost_moved = cursor.cost_ledger != ledger_before
+                    || cursor.factory_settings_mtime != factory_mtime_before
                     || (
                         cursor.agy_db_mtime,
                         cursor.agy_summaries_mtime,
@@ -315,6 +319,7 @@ pub async fn tab_analytics(
                 && c.cursor_offset == cursor.offset
                 && c.usage_mtime == cursor.usage_mtime
                 && c.cost_ledger == cursor.cost_ledger
+                && c.factory_settings_mtime == cursor.factory_settings_mtime
             {
                 Some((c.stats.clone(), c.lifetime_stats.clone()))
             } else {
@@ -380,6 +385,7 @@ pub async fn tab_analytics(
                     cursor_offset: cursor.offset,
                     usage_mtime: cursor.usage_mtime,
                     cost_ledger: cursor.cost_ledger.clone(),
+                    factory_settings_mtime: cursor.factory_settings_mtime,
                     stats: stats.clone(),
                     lifetime_stats: lifetime_stats.clone(),
                 },
@@ -511,6 +517,7 @@ mod tests {
                 claude_projects: root.join("claude"),
                 grok_active_sessions: root.join("active_sessions.json"),
                 agy_root: root.join("agy"),
+                factory_sessions: root.join("factory"),
             });
         storage::set_analytics_root_override(Some(root.join("analytics")));
 
@@ -634,6 +641,7 @@ mod tests {
                 claude_projects: root.join("claude"),
                 grok_active_sessions: root.join("active_sessions.json"),
                 agy_root: agy.clone(),
+                factory_sessions: root.join("factory"),
             });
         storage::set_analytics_root_override(Some(root.join("analytics")));
 

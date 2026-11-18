@@ -127,9 +127,12 @@ pub async fn snapshot_core(state: &AppState) -> Result<Snapshot, String> {
 /// Rename default `shell` tabs to the running CLI, off the app-state lock.
 async fn apply_auto_labels(client: TmuxClient, snap: &mut Snapshot) {
     let versions = window_label::cached_versions();
-    let (changes, need_probe) = window_label::plan(snap, &versions);
-    if need_probe {
+    let (changes, probes) = window_label::plan(snap, &versions);
+    if probes.agy {
         window_label::start_agy_probe();
+    }
+    if probes.droid {
+        window_label::start_droid_probe();
     }
     if changes.is_empty() {
         return;

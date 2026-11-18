@@ -92,7 +92,7 @@ function latin1Bytes(text: string): Uint8Array {
 
 /** Grok, Claude, and Antigravity keep the conversation in a transcript file. */
 export function commandHasTranscript(command: string): boolean {
-  return /grok|claude|antigravity|\bagy\b/i.test(command);
+  return /grok|claude|antigravity|\bagy\b|factory|\bdroid\b/i.test(command);
 }
 
 /**

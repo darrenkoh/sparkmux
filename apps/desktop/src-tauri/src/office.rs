@@ -235,7 +235,15 @@ fn activity_for_tool(name: &str, body: &str) -> &'static str {
     }
     if contains_any(
         &lower,
-        &["todowrite", "todo", "exitplanmode", "enterplanmode", "plan"],
+        &[
+            "todowrite",
+            "todo",
+            "exitplanmode",
+            "enterplanmode",
+            "exitspecmode",
+            "proposemission",
+            "plan",
+        ],
     ) {
         return "planning";
     }
@@ -246,7 +254,9 @@ fn activity_for_tool(name: &str, body: &str) -> &'static str {
             "multiedit",
             "notebookedit",
             "apply_patch",
+            "applypatch",
             "create_file",
+            "create",
             "edit",
             "write",
             "replace",
@@ -528,6 +538,24 @@ mod tests {
         assert_eq!(activity_of("Custom", "command: cargo test"), "terminal");
         assert_eq!(activity_of("Custom", "cargo test --lib"), "terminal");
         assert_eq!(activity_of("Custom", "file_path: src/a.rs"), "coding");
+        assert_eq!(activity_of("Create", "file_path: src/a.rs"), "coding");
+        assert_eq!(
+            activity_of("ApplyPatch", "patch: *** Begin Patch"),
+            "coding"
+        );
+        assert_eq!(activity_of("Execute", "command: cargo test"), "terminal");
+        assert_eq!(activity_of("ExitSpecMode", "plan: ship"), "planning");
+        assert_eq!(activity_of("ProposeMission", "name: office"), "planning");
+        assert_eq!(activity_of("Task", "prompt: look"), "delegating");
+        assert_eq!(
+            activity_of("FetchUrl", "url: https://example.com"),
+            "browsing"
+        );
+        assert_eq!(activity_of("WebSearch", "query: sparkmux"), "browsing");
+        assert_eq!(activity_of("Read", "file_path: src/a.rs"), "reading");
+        assert_eq!(activity_of("LS", "directory_path: src"), "reading");
+        assert_eq!(activity_of("Glob", "patterns: *.rs"), "reading");
+        assert_eq!(activity_of("Grep", "pattern: foo"), "reading");
 
         let long = "x".repeat(140);
         let (_, _, arg) = classify_activity(&[entry("tool", "Bash", &long)]);
@@ -568,6 +596,7 @@ mod tests {
             claude_projects: dir.join("claude"),
             grok_active_sessions: dir.join("active_sessions.json"),
             agy_root: dir.join("agy"),
+            factory_sessions: dir.join("factory"),
         }
     }
 

@@ -72,6 +72,10 @@ test("commandHasTranscript matches the agent CLIs", () => {
   assert.equal(commandHasTranscript("grok-1.0.70"), true);
   assert.equal(commandHasTranscript("/opt/homebrew/bin/agy"), true);
   assert.equal(commandHasTranscript("claude"), true);
+  assert.equal(commandHasTranscript("factory"), true);
+  assert.equal(commandHasTranscript("droid"), true);
+  assert.equal(commandHasTranscript("droid-0.55.1"), true);
+  assert.equal(commandHasTranscript("android"), false);
   assert.equal(commandHasTranscript("zsh"), false);
   assert.equal(commandHasTranscript(""), false);
 });

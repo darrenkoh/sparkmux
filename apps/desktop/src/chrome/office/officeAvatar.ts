@@ -173,6 +173,18 @@ export function createAvatar(
     ballR.position.set(0.06, 0.12, 0);
 
     antenna.add(stemL, ballL, stemR, ballR);
+  } else if (cli === "factory") {
+    // Industrial crest: two rails and a wide beacon bar, not a sphere or halo.
+    const railL = new Mesh(new BoxGeometry(0.02, 0.1, 0.02), darkMat);
+    railL.position.set(-0.08, 0.06, 0);
+    const railR = new Mesh(new BoxGeometry(0.02, 0.1, 0.02), darkMat);
+    railR.position.set(0.08, 0.06, 0);
+    const crest = new Mesh(
+      new BoxGeometry(0.2, 0.03, 0.03),
+      new MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.85 }),
+    );
+    crest.position.set(0, 0.12, 0);
+    antenna.add(railL, railR, crest);
   } else {
     // Default single antenna
     const antennaStem = new Mesh(new CylinderGeometry(0.014, 0.014, 0.15, 8), darkMat);

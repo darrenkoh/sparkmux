@@ -30,8 +30,11 @@ const USER_PHRASES: &[&str] = &[
 
 const ASK_MARKERS: &[&str] = &[
     "askuserquestion",
+    "askuser",
     "request_permission",
     "ask_user",
+    "exitspecmode",
+    "exit_spec_mode",
     "exitplanmode",
     "exit_plan_mode",
     "enterplanmode",
@@ -469,6 +472,7 @@ pub(crate) fn cli_label(kind: crate::artifacts::CliKind) -> &'static str {
         crate::artifacts::CliKind::Grok => "Grok",
         crate::artifacts::CliKind::Claude => "Claude",
         crate::artifacts::CliKind::Antigravity => "Antigravity",
+        crate::artifacts::CliKind::Factory => "Factory",
     }
 }
 
@@ -531,6 +535,9 @@ fn ask_source(entries: &[ArtifactEntry]) -> Option<String> {
         entry.kind != "reasoning" && (has_ask_marker(&entry.label) || has_ask_marker(&entry.body))
     }) {
         let label_lower = entry.label.to_ascii_lowercase();
+        if label_lower.contains("exitspecmode") || label_lower.contains("exit_spec_mode") {
+            return Some("Exit spec mode and execute plan?".to_string());
+        }
         if label_lower.contains("exitplanmode") || label_lower.contains("exit_plan_mode") {
             return Some("Exit plan mode and execute plan?".to_string());
         }
@@ -1650,5 +1657,23 @@ mod tests {
             pending_question(&entries_with_plan),
             Some("Exit plan mode and execute plan?".to_string())
         );
+    }
+
+    #[test]
+    fn factory_ask_tools_need_the_user() {
+        let ask = vec![ent("tool", "AskUser", "Which file?")];
+        assert_eq!(classify_entries(&ask), Some(AttentionLabel::NeedsUser));
+        assert_eq!(pending_question(&ask), Some("Which file?".to_string()));
+
+        let spec = vec![
+            ent("assistant", "Assistant", "Here is the spec."),
+            ent("tool", "ExitSpecMode", "plan: ship it"),
+        ];
+        assert_eq!(classify_entries(&spec), Some(AttentionLabel::NeedsUser));
+        assert_eq!(
+            pending_question(&spec),
+            Some("Exit spec mode and execute plan?".to_string())
+        );
+        assert_eq!(cli_label(crate::artifacts::CliKind::Factory), "Factory");
     }
 }

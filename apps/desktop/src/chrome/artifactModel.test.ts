@@ -193,13 +193,15 @@ test("the output pane is the focused pane of the selected tab", () => {
   assert.equal(outputPaneForTab(null, "a"), null);
 });
 
-test("a shell pane and a missing transcript explain themselves", () => {
+test("cliLabel factory and droid are Factory and emptyOutputText names Factory", () => {
   assert.equal(
     emptyOutputText({ ...feed, cli: null, transcript_path: null, entries: [] }, 0, 0),
-    "This pane is not running Grok, Claude, or Antigravity.",
+    "This pane is not running Grok, Claude, Antigravity, or Factory.",
   );
   assert.equal(cliLabel("antigravity"), "Antigravity");
   assert.equal(cliLabel("agy"), "Antigravity");
+  assert.equal(cliLabel("factory"), "Factory");
+  assert.equal(cliLabel("droid"), "Factory");
   assert.equal(cliLabel(null), "");
   assert.equal(
     emptyOutputText({ ...feed, transcript_path: null, entries: [] }, 0, 0),

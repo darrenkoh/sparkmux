@@ -3,7 +3,7 @@ import { agentKey } from "../office/officeModel.ts";
 import type { OfficeAgent, OfficeSnapshot } from "../office/officeTypes.ts";
 
 /** Same sentence as the office empty state. */
-export const EMPTY_COPY = "No agents on this socket. Start `claude`, `grok`, or `agy` in a pane.";
+export const EMPTY_COPY = "No agents on this socket. Start `claude`, `grok`, `agy`, or `droid` in a pane.";
 
 export interface HqCounts {
   working: number;

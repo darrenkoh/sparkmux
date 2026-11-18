@@ -153,9 +153,9 @@ test("running, idle, and failed never produce reply bytes", () => {
   assert.equal(replyBytes({ state: "needs_user", ask: "hello" }, yes), null);
 });
 
-test("empty copy matches the office", () => {
+test("empty copy names droid and matches the office", () => {
   const office = readFileSync(new URL("../office/OfficeView.tsx", import.meta.url), "utf8");
-  assert.equal(EMPTY_COPY, "No agents on this socket. Start `claude`, `grok`, or `agy` in a pane.");
+  assert.equal(EMPTY_COPY, "No agents on this socket. Start `claude`, `grok`, `agy`, or `droid` in a pane.");
   assert.ok(office.includes(EMPTY_COPY));
 });
 

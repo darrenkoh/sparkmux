@@ -1,10 +1,11 @@
-//! Read-only view of a Grok Build, Claude Code, or Antigravity CLI transcript.
+//! Read-only view of a Grok Build, Claude Code, Antigravity, or Factory Droid transcript.
 //!
 //! The pane keeps its own `%output` stream. This module never writes to tmux
 //! or to a CLI's files. It only opens a transcript under the user's home
-//! directory, and only when the focused pane is Grok, Claude, or Antigravity
-//! (`agy`). tmux reports the real executable name, so a `grok` symlink to
-//! `grok-1.0.50` shows up as `grok-1.0.50`. Grok's pane title ends in ` - grok`.
+//! directory, and only when the focused pane is Grok, Claude, Antigravity
+//! (`agy`), or Factory (`droid`). tmux reports the real executable name, so a
+//! `grok` symlink to `grok-1.0.50` shows up as `grok-1.0.50`. Grok's pane title
+//! ends in ` - grok`. Factory sessions live under `~/.factory/sessions/`.
 //!
 //! One project directory holds every console started there. The pane's process
 //! picks its own file: Grok lists `session_id`, `pid`, and `cwd` in
@@ -17,7 +18,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
@@ -40,6 +41,7 @@ pub(crate) enum CliKind {
     Grok,
     Claude,
     Antigravity,
+    Factory,
 }
 
 impl CliKind {
@@ -48,6 +50,7 @@ impl CliKind {
             Self::Grok => "grok",
             Self::Claude => "claude",
             Self::Antigravity => "antigravity",
+            Self::Factory => "factory",
         }
     }
 }
@@ -103,6 +106,8 @@ pub struct TranscriptRoots {
     pub grok_active_sessions: PathBuf,
     /// `~/.gemini/antigravity-cli`. Transcripts live under `brain/<id>/`.
     pub agy_root: PathBuf,
+    /// `~/.factory/sessions`. One `<uuid>.jsonl` beside `<uuid>.settings.json`.
+    pub factory_sessions: PathBuf,
 }
 
 pub(crate) fn default_roots() -> TranscriptRoots {
@@ -114,6 +119,7 @@ pub(crate) fn default_roots() -> TranscriptRoots {
                 claude_projects: home.join(".claude").join("projects"),
                 grok_active_sessions: home.join(".grok").join("active_sessions.json"),
                 agy_root: home.join(".gemini").join("antigravity-cli"),
+                factory_sessions: home.join(".factory").join("sessions"),
             }
         }
         None => TranscriptRoots {
@@ -121,6 +127,7 @@ pub(crate) fn default_roots() -> TranscriptRoots {
             claude_projects: PathBuf::new(),
             grok_active_sessions: PathBuf::new(),
             agy_root: PathBuf::new(),
+            factory_sessions: PathBuf::new(),
         },
     }
 }
@@ -149,6 +156,7 @@ fn remote_transcript_roots(remote: crate::ssh_bind::RemoteRoots) -> TranscriptRo
         claude_projects: remote.claude_projects,
         grok_active_sessions: remote.grok_active_sessions,
         agy_root: remote.agy_root,
+        factory_sessions: remote.factory_sessions,
     }
 }
 
@@ -187,7 +195,12 @@ fn select_remote(cwd: &str, title: &str, roots: &TranscriptRoots) -> Option<(Cli
         return Some((kind, path));
     }
     let mut best: Option<(CliKind, PathBuf, std::time::SystemTime)> = None;
-    for kind in [CliKind::Grok, CliKind::Claude, CliKind::Antigravity] {
+    for kind in [
+        CliKind::Grok,
+        CliKind::Claude,
+        CliKind::Antigravity,
+        CliKind::Factory,
+    ] {
         let Some(path) = select_transcript(kind, cwd, title, &[], roots) else {
             continue;
         };
@@ -222,6 +235,7 @@ pub fn load_artifacts(
                 claude_projects: remote.claude_projects,
                 grok_active_sessions: remote.grok_active_sessions,
                 agy_root: remote.agy_root,
+                factory_sessions: remote.factory_sessions,
             };
             load_remote(cwd, title, &remote_roots)
         }
@@ -297,6 +311,9 @@ pub(crate) fn cli_kind(value: &str) -> Option<CliKind> {
     if lower_val.contains("/.gemini/antigravity-cli/") {
         return Some(CliKind::Antigravity);
     }
+    if lower_val.contains("/.factory/") || lower_val.contains("\\.factory\\") {
+        return Some(CliKind::Factory);
+    }
     let base = value.rsplit(['/', '\\']).next().unwrap_or(value).trim();
     let name = base.strip_prefix('-').unwrap_or(base);
     let name = name.strip_suffix(".exe").unwrap_or(name);
@@ -320,6 +337,14 @@ fn named_cli(name: &str) -> Option<CliKind> {
     }
     if name == "agy" || name.starts_with("agy ") || versioned_bin(name, "agy") {
         return Some(CliKind::Antigravity);
+    }
+    if name == "droid"
+        || name.starts_with("droid ")
+        || versioned_bin(name, "droid")
+        || name == "factory"
+        || name.starts_with("factory ")
+    {
+        return Some(CliKind::Factory);
     }
     None
 }
@@ -353,12 +378,14 @@ fn titled_cli(name: &str) -> Option<CliKind> {
         "grok" => return Some(CliKind::Grok),
         "claude" | "claude code" => return Some(CliKind::Claude),
         "agy" | "antigravity" => return Some(CliKind::Antigravity),
+        "droid" | "factory" | "factory droid" => return Some(CliKind::Factory),
         _ => {}
     }
     match clean_first {
         "grok" => return Some(CliKind::Grok),
         "claude" | "claude code" => return Some(CliKind::Claude),
         "agy" | "antigravity" => return Some(CliKind::Antigravity),
+        "droid" | "factory" | "factory droid" => return Some(CliKind::Factory),
         _ => {}
     }
     if name.contains("claude code") || name.contains("claude-code") {
@@ -369,6 +396,9 @@ fn titled_cli(name: &str) -> Option<CliKind> {
     }
     if name.contains("antigravity") || name.split_whitespace().any(|part| part == "agy") {
         return Some(CliKind::Antigravity);
+    }
+    if name.contains("factory droid") || name.split_whitespace().any(|part| part == "droid") {
+        return Some(CliKind::Factory);
     }
     let trimmed = name.trim_start();
     if (trimmed.starts_with('✳') || trimmed.starts_with('◐') || trimmed.starts_with('◑'))
@@ -498,6 +528,9 @@ pub(crate) fn select_transcript(
     if kind == CliKind::Claude {
         return select_claude(cwd, title, family, roots);
     }
+    if kind == CliKind::Factory {
+        return select_factory(cwd, title, family, roots);
+    }
     if let Some(path) = grok_active_transcript(kind, cwd, title, family, roots) {
         return Some(path);
     }
@@ -554,6 +587,170 @@ fn select_claude(
         return None;
     }
     claude_active_transcript(&available)
+}
+
+/// Factory Droid has no PID session file. An open transcript wins, then a pane
+/// title of at least 12 characters, then worker and child sessions drop out,
+/// then the newest remaining file.
+fn select_factory(
+    cwd: &str,
+    title: &str,
+    family: &[(u32, u8)],
+    roots: &TranscriptRoots,
+) -> Option<PathBuf> {
+    if let Some(path) = open_transcript(CliKind::Factory, family, title, roots) {
+        return Some(path);
+    }
+    let found = transcripts_for_cwd(CliKind::Factory, cwd, roots);
+    if found.is_empty() {
+        return None;
+    }
+    if let Some(path) = match_factory_title(&found, title) {
+        return Some(path);
+    }
+    let available = filter_factory_workers(&found);
+    claude_active_transcript(&available)
+}
+
+struct FactoryStart {
+    id: String,
+    parent: String,
+    worker: bool,
+    title: String,
+    session_title: String,
+    cwd: String,
+}
+
+fn read_factory_start(path: &Path, cap: u64) -> Option<FactoryStart> {
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file.take(cap));
+    let mut line = String::new();
+    if reader.read_line(&mut line).ok()? == 0 {
+        return None;
+    }
+    let value: Value = serde_json::from_str(line.trim_end_matches(['\n', '\r'])).ok()?;
+    let obj = value.as_object()?;
+    if obj.get("type").and_then(Value::as_str) != Some("session_start") {
+        return None;
+    }
+    let text = |key: &str| {
+        obj.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    Some(FactoryStart {
+        id: text("id"),
+        parent: text("parent"),
+        worker: obj.get("decompSessionType").and_then(Value::as_str) == Some("worker"),
+        title: text("title"),
+        session_title: text("sessionTitle"),
+        cwd: text("cwd"),
+    })
+}
+
+fn match_factory_title(paths: &[PathBuf], title: &str) -> Option<PathBuf> {
+    let hay = title.to_ascii_lowercase();
+    if hay.trim().is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, &Path)> = None;
+    for path in paths {
+        let Some(head) = read_factory_start(path, 16 * 1024) else {
+            continue;
+        };
+        for needle_src in [&head.title, &head.session_title] {
+            let needle = needle_src.trim().to_ascii_lowercase();
+            let len = needle.chars().count();
+            if len < 12 || !hay.contains(&needle) {
+                continue;
+            }
+            let replace = match best {
+                None => true,
+                Some((prev, _)) => len > prev,
+            };
+            if replace {
+                best = Some((len, path));
+            }
+        }
+    }
+    best.map(|(_, path)| path.to_path_buf())
+}
+
+/// Drop worker sessions and children whose `parent` is another candidate.
+/// If that would leave nothing, keep the unfiltered set.
+fn filter_factory_workers(found: &[PathBuf]) -> Vec<PathBuf> {
+    let mut ids = HashSet::new();
+    let mut heads = Vec::with_capacity(found.len());
+    for path in found {
+        if let Some(stem) = path.file_stem().and_then(|name| name.to_str()) {
+            if !stem.is_empty() {
+                ids.insert(stem.to_string());
+            }
+        }
+        let head = read_factory_start(path, 16 * 1024);
+        if let Some(head) = &head {
+            if !head.id.is_empty() {
+                ids.insert(head.id.clone());
+            }
+        }
+        heads.push(head);
+    }
+    let mut keep = Vec::new();
+    for (path, head) in found.iter().zip(heads.iter()) {
+        let Some(head) = head else {
+            keep.push(path.clone());
+            continue;
+        };
+        let child = !head.parent.is_empty() && head.parent != head.id && ids.contains(&head.parent);
+        if head.worker || child {
+            continue;
+        }
+        keep.push(path.clone());
+    }
+    if keep.is_empty() {
+        found.to_vec()
+    } else {
+        keep
+    }
+}
+
+/// Top-level `<uuid>.jsonl` files used when Droid had no project cwd.
+fn factory_flat_fallback(cwd: &Path, jail: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(jail) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        if out.len() >= 64 {
+            break;
+        }
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_jsonl = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "jsonl");
+        if !is_jsonl {
+            continue;
+        }
+        let Some(head) = read_factory_start(&path, 16 * 1024) else {
+            continue;
+        };
+        let Some(file_cwd) = normalize_cwd(&head.cwd) else {
+            continue;
+        };
+        if file_cwd != *cwd {
+            continue;
+        }
+        if let Some(canon) = under_jail(jail, &path) {
+            out.push(canon);
+        }
+    }
+    out
 }
 
 fn claude_active_transcript(found: &[PathBuf]) -> Option<PathBuf> {
@@ -1380,12 +1577,14 @@ fn read_active_sessions(path: &Path) -> Vec<ActiveSession> {
 /// The first directory that has any session wins, so a parent project does not
 /// leak into a nested one.
 fn transcripts_for_cwd(kind: CliKind, cwd: &str, roots: &TranscriptRoots) -> Vec<PathBuf> {
-    let Some(mut path) = normalize_cwd(cwd) else {
+    let Some(start) = normalize_cwd(cwd) else {
         return Vec::new();
     };
+    let mut path = start.clone();
     let jail = match kind {
         CliKind::Grok => &roots.grok_sessions,
         CliKind::Claude => &roots.claude_projects,
+        CliKind::Factory => &roots.factory_sessions,
         CliKind::Antigravity => return Vec::new(),
     };
     if jail.as_os_str().is_empty() {
@@ -1394,7 +1593,7 @@ fn transcripts_for_cwd(kind: CliKind, cwd: &str, roots: &TranscriptRoots) -> Vec
     for _ in 0..8 {
         let name = match kind {
             CliKind::Grok => encode_grok_path(&path),
-            CliKind::Claude => match encode_claude_path(&path) {
+            CliKind::Claude | CliKind::Factory => match encode_claude_path(&path) {
                 Some(name) => name,
                 None => break,
             },
@@ -1409,6 +1608,9 @@ fn transcripts_for_cwd(kind: CliKind, cwd: &str, roots: &TranscriptRoots) -> Vec
         if !path.pop() {
             break;
         }
+    }
+    if kind == CliKind::Factory {
+        return factory_flat_fallback(&start, jail);
     }
     Vec::new()
 }
@@ -1428,7 +1630,7 @@ fn transcripts_in(kind: CliKind, dir: &Path, jail: &Path) -> Vec<PathBuf> {
         let candidate = match kind {
             CliKind::Grok => entry.path().join("chat_history.jsonl"),
             CliKind::Antigravity => continue,
-            CliKind::Claude => {
+            CliKind::Claude | CliKind::Factory => {
                 let path = entry.path();
                 let is_jsonl = path
                     .extension()
@@ -1500,10 +1702,14 @@ fn open_transcript(
         CliKind::Grok => &roots.grok_sessions,
         CliKind::Claude => &roots.claude_projects,
         CliKind::Antigravity => &roots.agy_root,
+        CliKind::Factory => &roots.factory_sessions,
     };
     let hits = opened_transcripts(kind, family, jail);
     if hits.len() == 1 {
         return hits.into_iter().next();
+    }
+    if kind == CliKind::Factory {
+        return match_factory_title(&hits, title);
     }
     match_title(kind, &hits, title)
 }
@@ -1544,6 +1750,19 @@ fn transcript_from_open(kind: CliKind, path: &Path, jail: &Path) -> Option<PathB
                 return None;
             }
             under_jail(jail, path)
+        }
+        CliKind::Factory => {
+            let ext = path.extension().and_then(|ext| ext.to_str());
+            if ext == Some("jsonl") {
+                return under_jail(jail, path);
+            }
+            let name = path.file_name().and_then(|n| n.to_str())?;
+            let stem = name.strip_suffix(".settings.json")?;
+            if !safe_component(stem) {
+                return None;
+            }
+            let jsonl = path.parent()?.join(format!("{stem}.jsonl"));
+            under_jail(jail, &jsonl)
         }
         CliKind::Antigravity => {
             let name = path.file_name()?.to_str()?;
@@ -1867,6 +2086,23 @@ pub(crate) fn detect_cli(command: &str, title: &str, family: &[(u32, u8)]) -> Op
         .or_else(|| family_kind(family))
 }
 
+pub(crate) fn factory_settings_path(transcript: &Path) -> Option<PathBuf> {
+    let stem = transcript.file_stem()?.to_str()?;
+    if !safe_component(stem) {
+        return None;
+    }
+    let name = format!("{stem}.settings.json");
+    jailed_sibling(transcript, &name)
+}
+
+pub(crate) fn factory_settings_model(transcript: &Path) -> Option<String> {
+    let path = factory_settings_path(transcript)?;
+    let file = File::open(path).ok()?;
+    let value: Value = serde_json::from_reader(file.take(64 * 1024)).ok()?;
+    let model = value.get("model")?.as_str()?.trim();
+    (!model.is_empty()).then(|| model.to_string())
+}
+
 fn read_transcript(
     kind: CliKind,
     path: &Path,
@@ -1905,6 +2141,12 @@ fn read_transcript(
         HashMap::new()
     };
 
+    let factory_model = if kind == CliKind::Factory {
+        factory_settings_model(path)
+    } else {
+        None
+    };
+
     let mut entries = Vec::new();
     for line in lines {
         let line_off = offset;
@@ -1919,6 +2161,9 @@ fn read_transcript(
         match kind {
             CliKind::Grok => push_grok(&mut entries, line_off, &value),
             CliKind::Claude => push_claude(&mut entries, line_off, &value),
+            CliKind::Factory => {
+                push_factory(&mut entries, line_off, &value, factory_model.as_deref())
+            }
             CliKind::Antigravity => {
                 let step = step_index(&value);
                 push_agy(
@@ -2097,6 +2342,188 @@ fn push_claude(entries: &mut Vec<ArtifactEntry>, offset: u64, value: &Value) {
         push_text(entries, offset, "tool", &name, &summary, ARG_CAP);
     }
     attach_model(entries, offset, recorded_model);
+}
+
+fn push_factory(
+    entries: &mut Vec<ArtifactEntry>,
+    offset: u64,
+    value: &Value,
+    default_model: Option<&str>,
+) {
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    if obj.get("type").and_then(Value::as_str) != Some("message") {
+        return;
+    }
+    let Some(message) = obj.get("message").and_then(Value::as_object) else {
+        return;
+    };
+    if let Some("hidden" | "internal") = message.get("visibility").and_then(Value::as_str) {
+        return;
+    }
+    let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+    if role != "user" && role != "assistant" {
+        return;
+    }
+    let recorded_model = message
+        .get("model")
+        .and_then(Value::as_str)
+        .or(default_model);
+    let mut thinking = factory_reasoning_extra(message);
+    let content = message.get("content").unwrap_or(&Value::Null);
+    let Some(blocks) = content.as_array() else {
+        let raw = text_from_value(content);
+        if role == "assistant" {
+            push_text(
+                entries,
+                offset,
+                "reasoning",
+                "Thinking",
+                &thinking.join("\n"),
+                REASON_CAP,
+            );
+            push_text(
+                entries,
+                offset,
+                "assistant",
+                "Assistant",
+                &raw,
+                ASSISTANT_CAP,
+            );
+        } else {
+            let query = extract_user_query(&raw);
+            if !query.is_empty() && !noise_prompt(&query) {
+                push_text(entries, offset, "user", "You", &query, USER_CAP);
+            }
+        }
+        attach_model(entries, offset, recorded_model);
+        return;
+    };
+
+    let mut text = Vec::new();
+    let mut user_parts = Vec::new();
+    let mut tools = Vec::new();
+    for block in blocks {
+        let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            "text" => {
+                let Some(piece) = block.get("text").and_then(Value::as_str) else {
+                    continue;
+                };
+                if role == "user" {
+                    let query = extract_user_query(piece);
+                    if !query.is_empty() && !noise_prompt(&query) {
+                        user_parts.push(query);
+                    }
+                } else if !piece.trim().is_empty() {
+                    text.push(piece.to_string());
+                }
+            }
+            "thinking" | "redacted_thinking" => {
+                let piece = factory_block_thinking(block);
+                if !piece.is_empty() {
+                    thinking.push(piece);
+                }
+            }
+            "tool_use" => {
+                let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
+                let detail = args_detail(block.get("input").unwrap_or(&Value::Null));
+                tools.push((name.to_string(), detail));
+            }
+            "tool_result" => {
+                let raw = text_from_value(block.get("content").unwrap_or(&Value::Null));
+                push_text(entries, offset, "tool_result", "Result", &raw, RESULT_CAP);
+            }
+            _ => {}
+        }
+    }
+    if role == "assistant" {
+        push_text(
+            entries,
+            offset,
+            "reasoning",
+            "Thinking",
+            &thinking.join("\n"),
+            REASON_CAP,
+        );
+        push_text(
+            entries,
+            offset,
+            "assistant",
+            "Assistant",
+            &text.join("\n"),
+            ASSISTANT_CAP,
+        );
+    } else if !user_parts.is_empty() {
+        push_text(
+            entries,
+            offset,
+            "user",
+            "You",
+            &user_parts.join("\n"),
+            USER_CAP,
+        );
+    }
+    for (name, summary) in tools {
+        push_text(entries, offset, "tool", &name, &summary, ARG_CAP);
+    }
+    attach_model(entries, offset, recorded_model);
+}
+
+fn factory_reasoning_extra(message: &serde_json::Map<String, Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(text) = message
+        .get("chatCompletionReasoningContent")
+        .and_then(Value::as_str)
+    {
+        let text = text.trim();
+        if !text.is_empty() {
+            out.push(text.to_string());
+        }
+    }
+    match message.get("openaiReasoningSummary") {
+        Some(Value::String(text)) => {
+            let text = text.trim();
+            if !text.is_empty() {
+                out.push(text.to_string());
+            }
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(text) = item.as_str() {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        out.push(text.to_string());
+                    }
+                } else if let Some(obj) = item.as_object() {
+                    for key in ["summary", "text", "thinking"] {
+                        if let Some(text) = obj.get(key).and_then(Value::as_str) {
+                            let text = text.trim();
+                            if !text.is_empty() {
+                                out.push(text.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn factory_block_thinking(block: &Value) -> String {
+    for key in ["thinking", "summary", "text"] {
+        if let Some(text) = block.get(key).and_then(Value::as_str) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return text.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 fn step_index(value: &Value) -> Option<i64> {
@@ -2316,11 +2743,33 @@ pub(crate) fn noise_prompt(text: &str) -> bool {
         || head.starts_with("This session is being continued from a previous conversation")
 }
 
+fn extract_goal_prompt(text: &str) -> Option<String> {
+    let marker = "A goal has been set:";
+    let start = text.find(marker)?;
+    let after = text[start + marker.len()..].trim_start();
+    let end = after
+        .find("\n\nYou are working directly on this goal across multiple turns.")
+        .or_else(|| after.find("\n\nA structured plan for this goal is on disk"))
+        .or_else(|| after.find("\n\nPlan:"))
+        .or_else(|| after.find("<task_completion_discipline>"))
+        .or_else(|| after.find("</system-reminder>"))
+        .unwrap_or(after.len());
+    let objective = after[..end].trim();
+    if objective.is_empty() {
+        None
+    } else {
+        Some(format!("/goal {objective}"))
+    }
+}
+
 pub(crate) fn extract_user_query(text: &str) -> String {
     if let Some(query) = last_tag(text, "user_query") {
         let stripped = strip_metadata_tags(&query);
         if !stripped.is_empty() && !noise_prompt(&stripped) {
             return stripped;
+        }
+        if let Some(goal) = extract_goal_prompt(&query) {
+            return goal;
         }
         if !noise_prompt(&query) {
             return query;
@@ -2340,6 +2789,9 @@ pub(crate) fn extract_user_query(text: &str) -> String {
     let stripped = strip_metadata_tags(text);
     if !stripped.is_empty() && !noise_prompt(&stripped) {
         return stripped;
+    }
+    if let Some(goal) = extract_goal_prompt(text) {
+        return goal;
     }
     if text.contains("<user_info>")
         || text.contains("<system_reminder>")
@@ -2582,6 +3034,7 @@ mod tests {
             claude_projects: projects,
             grok_active_sessions: dir.join("active_sessions.json"),
             agy_root: dir.join("no-agy"),
+            factory_sessions: dir.join("no-factory"),
         }
     }
 
@@ -2754,6 +3207,7 @@ mod tests {
             claude_projects: roots.claude_projects.clone(),
             grok_active_sessions: roots.grok_active_sessions.clone(),
             agy_root: roots.agy_root.clone(),
+            factory_sessions: roots.factory_sessions.clone(),
         }
     }
 
@@ -4385,5 +4839,240 @@ mod tests {
             extract_user_query("<command-name>/clear</command-name>"),
             ""
         );
+    }
+
+    fn touch_mtime(path: &Path, secs: u64) {
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+    }
+
+    fn factory_roots(dir: &Path) -> TranscriptRoots {
+        TranscriptRoots {
+            grok_sessions: dir.join("no-grok"),
+            claude_projects: dir.join("no-claude"),
+            grok_active_sessions: dir.join("active_sessions.json"),
+            agy_root: dir.join("no-agy"),
+            factory_sessions: dir.join("factory").join("sessions"),
+        }
+    }
+
+    #[test]
+    fn factory_cli_kind_matches_droid_and_not_a_generic_factory_path() {
+        assert_eq!(cli_kind("droid"), Some(CliKind::Factory));
+        assert_eq!(cli_kind("droid-0.55.1"), Some(CliKind::Factory));
+        assert_eq!(
+            cli_kind("/Users/u/.local/bin/droid"),
+            Some(CliKind::Factory)
+        );
+        assert_eq!(cli_kind("Factory Droid"), Some(CliKind::Factory));
+        assert_eq!(cli_kind("status droid"), Some(CliKind::Factory));
+        assert_eq!(
+            cli_kind("/Users/u/.factory/sessions/-repo/id.jsonl"),
+            Some(CliKind::Factory)
+        );
+        assert_eq!(
+            cli_kind(r"C:\Users\u\.factory\sessions\id.jsonl"),
+            Some(CliKind::Factory)
+        );
+        assert_eq!(cli_kind("/Users/u/github/factory/src/main.rs"), None);
+        assert_eq!(cli_kind("/tmp/factory-widget"), None);
+        assert_eq!(cli_kind("my factory app"), None);
+    }
+
+    #[test]
+    fn select_factory_skips_workers_and_children_then_picks_the_newest() {
+        let dir = scratch("factory-select");
+        let project = dir.join("repo");
+        fs::create_dir_all(&project).unwrap();
+        let roots = factory_roots(&dir);
+        let encoded = encode_claude_path(&project).unwrap();
+        let folder = roots.factory_sessions.join(&encoded);
+        fs::create_dir_all(&folder).unwrap();
+        let parent_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let worker_id = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let child_id = "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let write_start = |id: &str, extra: &str, body: &str| {
+            let path = folder.join(format!("{id}.jsonl"));
+            fs::write(
+                &path,
+                format!(
+                    "{{\"type\":\"session_start\",\"id\":\"{id}\",\"cwd\":\"{}\"{extra}}}\n{body}",
+                    project.display()
+                ),
+            )
+            .unwrap();
+            path
+        };
+        let parent = write_start(
+            parent_id,
+            "",
+            "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"parent\"}}\n",
+        );
+        let worker = write_start(
+            worker_id,
+            &format!(",\"parent\":\"{parent_id}\",\"decompSessionType\":\"worker\""),
+            "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"worker\"}}\n",
+        );
+        let child = write_start(
+            child_id,
+            &format!(",\"parent\":\"{parent_id}\""),
+            "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"child\"}}\n",
+        );
+        touch_mtime(&parent, 1_700_000_000);
+        touch_mtime(&child, 1_700_000_050);
+        touch_mtime(&worker, 1_700_000_100);
+        let cwd = project.to_string_lossy().to_string();
+        let picked = select_factory(&cwd, "", &[], &roots).unwrap();
+        assert_eq!(picked, parent.canonicalize().unwrap());
+
+        let only_worker = folder.join("only-worker.jsonl");
+        fs::write(
+            &only_worker,
+            format!(
+                "{{\"type\":\"session_start\",\"id\":\"only-worker\",\"cwd\":\"{}\",\"decompSessionType\":\"worker\"}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"solo\"}}}}\n",
+                project.display()
+            ),
+        )
+        .unwrap();
+        let _ = fs::remove_file(&parent);
+        let _ = fs::remove_file(&child);
+        touch_mtime(&worker, 1_700_000_010);
+        touch_mtime(&only_worker, 1_700_000_200);
+        let fallback = select_factory(&cwd, "", &[], &roots).unwrap();
+        assert_eq!(fallback, only_worker.canonicalize().unwrap());
+
+        let titled = folder.join("titled.jsonl");
+        fs::write(
+            &titled,
+            format!(
+                "{{\"type\":\"session_start\",\"id\":\"titled\",\"title\":\"Refactor the auth middleware\",\"sessionTitle\":\"Refactor the auth middleware\",\"cwd\":\"{}\"}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"titled\"}}}}\n",
+                project.display()
+            ),
+        )
+        .unwrap();
+        touch_mtime(&titled, 1_700_000_001);
+        let by_title =
+            select_factory(&cwd, "pane: Refactor the auth middleware now", &[], &roots).unwrap();
+        assert_eq!(by_title, titled.canonicalize().unwrap());
+
+        let flat_id = "dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let flat = roots.factory_sessions.join(format!("{flat_id}.jsonl"));
+        fs::create_dir_all(&roots.factory_sessions).unwrap();
+        let other = dir.join("other-project");
+        fs::create_dir_all(&other).unwrap();
+        let _ = fs::remove_dir_all(&folder);
+        fs::write(
+            &flat,
+            format!(
+                "{{\"type\":\"session_start\",\"id\":\"{flat_id}\",\"cwd\":\"{}\"}}\n{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"content\":\"flat\"}}}}\n",
+                other.display()
+            ),
+        )
+        .unwrap();
+        let missed = roots
+            .factory_sessions
+            .join("eeeeeeee-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+        fs::write(
+            &missed,
+            format!(
+                "{{\"type\":\"session_start\",\"id\":\"miss\",\"cwd\":\"{}\"}}\n",
+                project.display()
+            ),
+        )
+        .unwrap();
+        let flat_pick = select_factory(&other.to_string_lossy(), "", &[], &roots).unwrap();
+        assert_eq!(flat_pick, flat.canonicalize().unwrap());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_factory_settings_map_to_the_jsonl_transcript() {
+        let dir = scratch("factory-open");
+        let jail = dir.join("sessions");
+        let slug = jail.join("-repo");
+        fs::create_dir_all(&slug).unwrap();
+        let jsonl = slug.join("abc.jsonl");
+        fs::write(&jsonl, "{\"type\":\"session_start\"}\n").unwrap();
+        fs::write(slug.join("abc.settings.json"), "{\"model\":\"m\"}\n").unwrap();
+        let mapped =
+            transcript_from_open(CliKind::Factory, &slug.join("abc.settings.json"), &jail).unwrap();
+        assert_eq!(mapped, jsonl.canonicalize().unwrap());
+        let direct = transcript_from_open(CliKind::Factory, &jsonl, &jail).unwrap();
+        assert_eq!(direct, jsonl.canonicalize().unwrap());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn push_factory_strips_reminders_and_reads_the_settings_model() {
+        let dir = scratch("factory-push");
+        let path = dir.join("sess.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session_start\",\"id\":\"sess\",\"title\":\"ignored\"}\n",
+                "{\"type\":\"todo_state\",\"todos\":{\"todos\":\"1. step\"}}\n",
+                "{\"type\":\"compaction_state\",\"summaryText\":\"nope\"}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"visibility\":\"hidden\",\"content\":[{\"type\":\"text\",\"text\":\"secret\"}]}}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"<system-reminder>env snapshot</system-reminder>\"},{\"type\":\"text\",\"text\":\"Refactor the auth middleware.\"}]}}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"chatCompletionReasoningContent\":\"extra reason\",\"openaiReasoningSummary\":[\"sum one\"],\"content\":[{\"type\":\"thinking\",\"thinking\":\"look at auth\"},{\"type\":\"text\",\"text\":\"Done.\"},{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/a.rs\"}}]}}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_1\",\"is_error\":false,\"content\":\"file body\"}]}}\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("sess.settings.json"),
+            "{\"model\":\"claude-3-7-sonnet\"}\n",
+        )
+        .unwrap();
+        let (_len, entries) = read_transcript(CliKind::Factory, &path, MAX_TAIL).unwrap();
+        let kinds: Vec<&str> = entries.iter().map(|entry| entry.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["user", "reasoning", "assistant", "tool", "tool_result"]
+        );
+        assert_eq!(entries[0].body, "Refactor the auth middleware.");
+        assert!(!entries.iter().any(|entry| entry.body.contains("secret")));
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.body.contains("system-reminder")));
+        assert!(!entries.iter().any(|entry| entry.body.contains("nope")));
+        assert!(entries[1].body.contains("extra reason"));
+        assert!(entries[1].body.contains("sum one"));
+        assert!(entries[1].body.contains("look at auth"));
+        assert_eq!(entries[2].body, "Done.");
+        assert_eq!(entries[3].label, "Read");
+        assert!(entries[3].body.contains("src/a.rs"));
+        assert_eq!(entries[4].body, "file body");
+        assert!(entries
+            .iter()
+            .any(|entry| entry.model == "claude-3-7-sonnet"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_goal_prompt_unwraps_grok_goal_user_turn() {
+        let dir = scratch("grok-goal-turn");
+        let path = dir.join("chat_history.jsonl");
+        let wrapped = "<user_query>\n<system-reminder>\nA goal has been set: read AGENTS.md and factory_droid_plan.md and implement all phases.\n\nYou are working directly on this goal across multiple turns.\n\nPlan: /tmp/plan.md\n</system-reminder>\n</user_query>";
+        let record = serde_json::json!({
+            "type": "user",
+            "content": [{"type": "text", "text": wrapped}],
+            "prompt_index": 0
+        });
+        fs::write(&path, format!("{record}\n")).unwrap();
+
+        let (_len, entries) = read_transcript(CliKind::Grok, &path, MAX_TAIL).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, "user");
+        assert_eq!(
+            entries[0].body,
+            "/goal read AGENTS.md and factory_droid_plan.md and implement all phases."
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -202,7 +202,7 @@ export default function OfficeView(props: {
         agent.state === "succeeded"
           ? poseAfterSucceeded(Date.now() - (succeededRef.current.get(key) ?? Date.now()))
           : resolvePose(agent);
-      const cli = agent.cli === "grok" || agent.cli === "antigravity" || agent.cli === "claude" ? agent.cli : "claude";
+      const cli = agent.cli === "grok" || agent.cli === "antigravity" || agent.cli === "claude" || agent.cli === "factory" ? agent.cli : "claude";
       return {
         key,
         name: namesRef.current.get(key) ?? "Agent",
@@ -414,7 +414,7 @@ export default function OfficeView(props: {
               {simMode ? "Stop Simulation" : "Simulation"}
             </button>
             {office && office.agents.length === 0 && (
-              <p className="office-empty">No agents on this socket. Start `claude`, `grok`, or `agy` in a pane.</p>
+              <p className="office-empty">No agents on this socket. Start `claude`, `grok`, `agy`, or `droid` in a pane.</p>
             )}
             {hovered && hover && (
               <aside className="office-hover" style={{ left: hover.x + 12, top: hover.y + 12 }}>

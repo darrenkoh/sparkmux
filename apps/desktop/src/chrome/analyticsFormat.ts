@@ -299,7 +299,7 @@ export interface LedgerCategory {
  * Claude `inputTokens` are already uncached.
  */
 export interface UsageLedger {
-  provider?: "grok" | "claude" | "antigravity" | string;
+  provider?: "grok" | "claude" | "antigravity" | "factory" | string;
   model?: string;
   /** Grok session `costUsdTicks`. Absent when the CLI omitted the total. */
   costUsdTicks?: number | null;
@@ -367,6 +367,7 @@ function ledgerProvider(ledger: UsageLedger): string {
   if (named === "grok" || named === "claude" || named === "antigravity" || named === "agy") {
     return named === "agy" ? "antigravity" : named;
   }
+  if (named === "factory" || named === "droid") return "factory";
   if (finiteNumber(ledger.totalCostUSD) || ledger.hasUnknownModelCost === true) return "claude";
   if (
     finiteNumber(ledger.estimatedCostUsd) ||
@@ -591,6 +592,13 @@ export function sessionCost(ledger: UsageLedger): SessionCost {
         models: claudeModelCosts(ledger),
       };
     }
+    return {
+      usd: fallbackFromRates(ledger, ledger.inputIncludesCache === true),
+      stamped: false,
+      models: [],
+    };
+  }
+  if (provider === "factory") {
     return {
       usd: fallbackFromRates(ledger, ledger.inputIncludesCache === true),
       stamped: false,

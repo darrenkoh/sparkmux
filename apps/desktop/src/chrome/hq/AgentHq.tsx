@@ -216,7 +216,7 @@ function Floor(props: {
           const token = visualToken(room.agent.state);
           const name = roomName(room.agent, props.names.get(room.key));
           const line = statusText(room.agent);
-          const cli = room.agent.cli === "grok" || room.agent.cli === "claude" || room.agent.cli === "antigravity"
+          const cli = room.agent.cli === "grok" || room.agent.cli === "claude" || room.agent.cli === "antigravity" || room.agent.cli === "factory"
             ? room.agent.cli
             : "claude";
           return (

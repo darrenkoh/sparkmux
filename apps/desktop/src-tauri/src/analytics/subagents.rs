@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -62,6 +63,11 @@ pub fn ingest_session(
         }
         CliKind::Antigravity => {
             for child in agy_children(path, cur, &roots.agy_root) {
+                ingest_found(kind, child, cur, now, false, &mut seen, &mut out);
+            }
+        }
+        CliKind::Factory => {
+            for child in factory_children(path) {
                 ingest_found(kind, child, cur, now, false, &mut seen, &mut out);
             }
         }
@@ -739,6 +745,126 @@ fn collect_agent_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 
 /// Parent spawn lines, then each child's spawn lines, all stored on the root
 /// cursor so a later poll does not read the same child twice.
+/// Child Factory sessions whose line-0 `parent` is this session, then their children.
+fn factory_children(transcript: &Path) -> Vec<Found> {
+    let Some(parent_id) = factory_session_id(transcript) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let mut seen_ids = HashSet::new();
+    seen_ids.insert(parent_id.clone());
+    let mut queue = VecDeque::new();
+    queue.push_back((transcript.to_path_buf(), parent_id, 0usize));
+    while let Some((path, id, depth)) = queue.pop_front() {
+        if depth >= MAX_DEPTH || found.len() >= MAX_CHILDREN {
+            break;
+        }
+        let Some(dir) = path.parent() else {
+            continue;
+        };
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        let mut files = Vec::new();
+        for entry in entries.flatten() {
+            if files.len() >= 128 {
+                break;
+            }
+            let child = entry.path();
+            if child.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+                continue;
+            }
+            files.push(child);
+        }
+        for child in files {
+            if found.len() >= MAX_CHILDREN {
+                break;
+            }
+            if path_key(&child) == path_key(transcript) || path_key(&child) == path_key(&path) {
+                continue;
+            }
+            let Some(head) = factory_start_line(&child) else {
+                continue;
+            };
+            if head.parent != id {
+                continue;
+            }
+            let cid = if head.id.is_empty() {
+                child
+                    .file_stem()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else {
+                head.id
+            };
+            if cid.is_empty() || !seen_ids.insert(cid.clone()) {
+                continue;
+            }
+            let label_src = if !head.title.is_empty() {
+                head.title
+            } else if !head.session_title.is_empty() {
+                head.session_title
+            } else {
+                head.kind
+            };
+            found.push(Found {
+                path: child.clone(),
+                id: cid.clone(),
+                label: clip_label(&label_src),
+            });
+            if depth + 1 < MAX_DEPTH {
+                queue.push_back((child, cid, depth + 1));
+            }
+        }
+    }
+    found
+}
+
+struct FactoryStartLine {
+    id: String,
+    parent: String,
+    title: String,
+    session_title: String,
+    kind: String,
+}
+
+fn factory_session_id(path: &Path) -> Option<String> {
+    let head = factory_start_line(path)?;
+    if !head.id.is_empty() {
+        return Some(head.id);
+    }
+    path.file_stem()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|id| !id.is_empty())
+}
+
+fn factory_start_line(path: &Path) -> Option<FactoryStartLine> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file.take(4 * 1024));
+    let mut line = String::new();
+    if reader.read_line(&mut line).ok()? == 0 {
+        return None;
+    }
+    let obj = parse_obj(line.as_bytes())?;
+    if str_of_line(&obj, "type") != "session_start" {
+        return None;
+    }
+    Some(FactoryStartLine {
+        id: str_of_line(&obj, "id").trim().to_string(),
+        parent: str_of_line(&obj, "parent").trim().to_string(),
+        title: str_of_line(&obj, "title").trim().to_string(),
+        session_title: str_of_line(&obj, "sessionTitle").trim().to_string(),
+        kind: str_of_line(&obj, "decompSessionType").trim().to_string(),
+    })
+}
+
+fn str_of_line(obj: &serde_json::Map<String, Value>, key: &str) -> String {
+    obj.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
 fn agy_children(transcript: &Path, cur: &mut Cursor, agy_root: &Path) -> Vec<Found> {
     note_agy_spawns(transcript, cur, agy_root);
     let mut found: Vec<Found> = Vec::new();
@@ -939,6 +1065,7 @@ mod tests {
             claude_projects: dir.join("claude"),
             grok_active_sessions: dir.join("active.json"),
             agy_root: dir.join("agy"),
+            factory_sessions: dir.join("factory"),
         }
     }
 
@@ -1516,6 +1643,49 @@ mod tests {
             usage.iter().all(|event| event.to != 77 && event.to != 88),
             "{usage:?}"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn factory_child_parent_rolls_into_parent_subagents() {
+        let dir = scratch("factory-sub");
+        let folder = dir.join("factory").join("sessions").join("-repo");
+        let parent_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let child_id = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let other_id = "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let parent = folder.join(format!("{parent_id}.jsonl"));
+        write(
+            &parent,
+            &format!(
+                "{{\"type\":\"session_start\",\"id\":\"{parent_id}\",\"title\":\"Parent session title\"}}\n{{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:28:41.248Z\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"text\",\"text\":\"fix the hang\"}}]}}}}\n"
+            ),
+        );
+        write(
+            &folder.join(format!("{child_id}.jsonl")),
+            &format!(
+                "{{\"type\":\"session_start\",\"id\":\"{child_id}\",\"parent\":\"{parent_id}\",\"title\":\"Check the hang\",\"decompSessionType\":\"worker\"}}\n{{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:29:41.248Z\",\"tokens\":40,\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"abcdefgh\"}}]}}}}\n"
+            ),
+        );
+        write(
+            &folder.join(format!("{other_id}.jsonl")),
+            "{\"type\":\"session_start\",\"id\":\"cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee\",\"title\":\"Unrelated\"}\n{\"type\":\"message\",\"timestamp\":\"2026-01-05T20:29:41.248Z\",\"tokens\":99,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"nope\"}]}}\n",
+        );
+        let mut cur = Cursor::default();
+        let events = ingest_session(
+            CliKind::Factory,
+            &parent,
+            &mut cur,
+            1_700_000_000_000,
+            &roots(&dir),
+        );
+        let stats = compute_stats(&events, 0, 0, 0, 0, 0, "");
+        assert_eq!(stats.user_prompts, 1);
+        assert_eq!(stats.total_input_tokens, 40);
+        assert_eq!(stats.subagents.len(), 1);
+        assert_eq!(stats.subagents[0].id, child_id);
+        assert_eq!(stats.subagents[0].label, "Check the hang");
+        assert_eq!(stats.subagents[0].input_tokens, 40);
+        assert!(events.iter().all(|event| event.ti != 99));
         let _ = fs::remove_dir_all(&dir);
     }
 }

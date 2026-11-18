@@ -13,7 +13,7 @@ export interface OfficeAgent {
   window_id: string;
   window_name: string;
   pane_id: string;
-  /** "grok" | "claude" | "antigravity" */
+  /** "grok" | "claude" | "antigravity" | "factory" */
   cli: string;
   model: string;
   /** "needs_user" | "failed" | "succeeded" | "running" | "idle" */
