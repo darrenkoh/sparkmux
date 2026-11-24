@@ -36,7 +36,15 @@ Desktop app that owns a private tmux server (`-L sparkmux`) and shows tiled real
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt
-pnpm --dir apps/desktop run build
+npm ci --prefix apps/desktop
+npm run build --prefix apps/desktop
 ```
 
 MSRV: rustc 1.88+. Targets: `aarch64-apple-darwin`, `aarch64-unknown-linux-gnu`.
+
+## Cursor Cloud specific instructions
+
+- Linux desktop builds need tmux 3.2+ and WebKitGTK 4.1 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`, `libssl-dev`, `libxdo-dev`, `pkg-config`, `build-essential`). Pass `-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"` to `apt-get` so `fuse3` does not stop on `/etc/fuse.conf`.
+- The base image can ship Rust older than the 1.88 MSRV. Upgrade with `rustup toolchain install stable && rustup default stable`.
+- `apps/desktop/package-lock.json` is the frontend lockfile, so the Test section uses npm. The Vite build writes `apps/desktop/dist`, which `cargo test --workspace` embeds.
+- Headless check without a display: `cargo build -p sparkmux`, then `sparkmux doctor` and `sparkmux dump` (`dump` starts `-L sparkmux` and the default session). `sparkmux serve --bind 127.0.0.1 --port 7420 --token <token>` serves the UI at `http://127.0.0.1:7420/?token=<token>`.
