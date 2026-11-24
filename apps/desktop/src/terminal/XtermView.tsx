@@ -20,6 +20,7 @@ import {
 import { cursorCup } from "./cursorCup";
 import { findNext, findPrevious, matchLineColumn } from "./scrollbackSearch";
 import { isEmulatorReport } from "./emulatorReports";
+import { PROMPT_NEWLINE_BYTES, shiftReturnAction } from "./promptKeys";
 
 import { applyPaneSeed, withExtraHistory } from "./paneSeed";
 import {
@@ -855,10 +856,11 @@ export default function XtermView({
       }
       // Shift+Return starts a new line in an agent prompt instead of
       // submitting. ESC CR is what Claude, Grok, and Gemini read as a newline.
-      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      const returnAction = shiftReturnAction(ev);
+      if (returnAction !== "pass") {
         // Without this the keypress that follows sends a plain CR.
         ev.preventDefault();
-        if (!ev.isComposing) void paneWrite(paneId, [0x1b, 0x0d]);
+        if (returnAction === "newline") void paneWrite(paneId, [...PROMPT_NEWLINE_BYTES]);
         return false;
       }
       const pasteChord =

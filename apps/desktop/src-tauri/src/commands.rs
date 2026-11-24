@@ -682,17 +682,43 @@ pub async fn paste_into_pane(
     sparkmux_core::pane_id(&pane_id).map_err(|e| map_error(&e))?;
     // Text wins. A clipboard with no text but an image pastes the path of a
     // PNG copy, which agent CLIs attach as an image.
-    let read = arboard::Clipboard::new().and_then(|mut c| c.get_text());
-    let mut text = match read {
-        Ok(text) if !text.is_empty() => text,
-        other => {
-            let image = off_lock(crate::clip_image::save_clipboard_image).await?;
-            match (image, other) {
-                (Some(path), _) => path,
-                (None, Ok(_)) => return Ok(()),
-                (None, Err(e)) => return Err(e.to_string()),
-            }
-        }
+    let read = arboard::Clipboard::new()
+        .and_then(|mut c| c.get_text())
+        .map_err(|e| e.to_string());
+    let image = if matches!(&read, Ok(text) if !text.is_empty()) {
+        None
+    } else {
+        off_lock(crate::clip_image::save_clipboard_image).await?
+    };
+    let Some(text) = paste_payload(read, image, bracket)? else {
+        return Ok(());
+    };
+    let ctl = {
+        let inner = state.inner.lock().await;
+        inner
+            .control
+            .clone()
+            .ok_or_else(|| "control client is not connected".to_string())?
+    };
+    ctl.send_keys_raw(&pane_id, text.as_bytes())
+        .await
+        .map_err(|e| map_error(&e))
+}
+
+/// What a paste sends to the pane. `read` is the clipboard text or the reason
+/// it could not be read; `image` is the pasteable path of a saved clipboard
+/// image. Non-empty text wins, then the image path. `None` means nothing to
+/// paste.
+fn paste_payload(
+    read: Result<String, String>,
+    image: Option<String>,
+    bracket: bool,
+) -> Result<Option<String>, String> {
+    let mut text = match (read, image) {
+        (Ok(text), _) if !text.is_empty() => text,
+        (_, Some(path)) => path,
+        (Ok(_), None) => return Ok(None),
+        (Err(e), None) => return Err(e),
     };
     if text.len() > CLIP_MAX {
         let mut end = CLIP_MAX;
@@ -704,16 +730,7 @@ pub async fn paste_into_pane(
     if bracket {
         text = bracket_paste(&text);
     }
-    let ctl = {
-        let inner = state.inner.lock().await;
-        inner
-            .control
-            .clone()
-            .ok_or_else(|| "control client is not connected".to_string())?
-    };
-    ctl.send_keys_raw(&pane_id, text.as_bytes())
-        .await
-        .map_err(|e| map_error(&e))
+    Ok(Some(text))
 }
 
 fn bracket_paste(text: &str) -> String {
@@ -1218,5 +1235,54 @@ mod tests {
         assert!(hidden.pending_ask.is_empty());
         assert!(!hidden.active);
         assert_eq!(hidden.attention_label.as_deref(), Some("needs_user"));
+    }
+
+    #[test]
+    fn paste_prefers_clipboard_text_over_an_image() {
+        let got = paste_payload(Ok("hello".into()), Some("/tmp/a.png ".into()), false);
+        assert_eq!(got, Ok(Some("hello".into())));
+    }
+
+    #[test]
+    fn paste_falls_back_to_the_image_path() {
+        let path = "/tmp/a.png ".to_string();
+        let empty = paste_payload(Ok(String::new()), Some(path.clone()), false);
+        assert_eq!(empty, Ok(Some(path.clone())));
+        // A screenshot: the clipboard has no text flavor at all.
+        let no_text = paste_payload(Err("no text".into()), Some(path.clone()), false);
+        assert_eq!(no_text, Ok(Some(path)));
+    }
+
+    #[test]
+    fn paste_with_nothing_usable_sends_nothing() {
+        assert_eq!(paste_payload(Ok(String::new()), None, true), Ok(None));
+        assert_eq!(
+            paste_payload(Err("clipboard is busy".into()), None, true),
+            Err("clipboard is busy".into())
+        );
+    }
+
+    #[test]
+    fn paste_brackets_the_image_path_and_never_submits() {
+        let got = paste_payload(Err("no text".into()), Some("/tmp/a.png ".into()), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, "\u{1b}[200~/tmp/a.png \u{1b}[201~");
+        assert!(!got.contains('\r') && !got.contains('\n'));
+    }
+
+    #[test]
+    fn paste_strips_bracket_markers_from_text() {
+        let got = paste_payload(Ok("a\u{1b}[201~b".into()), None, true);
+        assert_eq!(got, Ok(Some("\u{1b}[200~ab\u{1b}[201~".into())));
+    }
+
+    #[test]
+    fn paste_truncates_on_a_char_boundary() {
+        // 'é' is two bytes, so the cap falls inside a character.
+        let text = format!("a{}", "é".repeat(CLIP_MAX / 2));
+        let got = paste_payload(Ok(text), None, false).unwrap().unwrap();
+        assert_eq!(got.len(), CLIP_MAX - 1);
+        assert!(got.ends_with('é'));
     }
 }
