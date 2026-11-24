@@ -5,6 +5,7 @@ mod bedrock_cost;
 mod board_api;
 mod change_graph;
 mod chronicle;
+mod clip_image;
 mod commands;
 mod control;
 mod error;
