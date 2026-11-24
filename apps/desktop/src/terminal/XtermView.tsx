@@ -21,6 +21,7 @@ import { cursorCup } from "./cursorCup";
 import { findNext, findPrevious, matchLineColumn } from "./scrollbackSearch";
 import { isEmulatorReport } from "./emulatorReports";
 import { PROMPT_NEWLINE_BYTES, shiftReturnAction } from "./promptKeys";
+import { canFocusTerminal } from "./terminalFocus";
 
 import { applyPaneSeed, withExtraHistory } from "./paneSeed";
 import {
@@ -414,7 +415,11 @@ export default function XtermView({
           restoreMouse();
           historyRef.current?.replaceChildren();
           syncPhoneHistory();
-          if (focusedRef.current && terminalTouchPolicy(scrollWithoutKeyboardRef.current).focusHelper) {
+          if (
+            focusedRef.current &&
+            terminalTouchPolicy(scrollWithoutKeyboardRef.current).focusHelper &&
+            canFocusTerminal(document.activeElement)
+          ) {
             term.focus();
           }
           requestAnimationFrame(() => {
@@ -1079,7 +1084,9 @@ export default function XtermView({
       const term = termRef.current;
       const policy = terminalTouchPolicy(scrollWithoutKeyboardRef.current);
       if (policy.focusHelper) {
-        term?.focus();
+        if (canFocusTerminal(document.activeElement)) {
+          term?.focus();
+        }
       } else if (term?.textarea) {
         quietTerminalHelper(term.textarea, true);
         term.textarea.blur();

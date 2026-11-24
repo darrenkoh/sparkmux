@@ -292,6 +292,57 @@ body.is-resizing .sidebar-slot {
   -webkit-user-select: none;
 }
 
+.win-row.editing .row-main {
+  padding-top: 3px;
+  padding-bottom: 3px;
+  cursor: default;
+}
+
+.win-row-rename {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  background: #0d0f12;
+  border: 1px solid var(--accent);
+  color: var(--fg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font: inherit;
+  font-weight: 500;
+  line-height: inherit;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.win-rename-btn {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.win-row:hover .win-rename-btn,
+.win-row:focus-within .win-rename-btn {
+  opacity: 1;
+}
+
+.win-rename-btn:hover {
+  color: var(--fg);
+  background: #252c3a;
+}
+
 .win-row.dragging,
 .window-tab.dragging {
   opacity: 0.45;
@@ -671,6 +722,11 @@ body.is-resizing * {
   max-width: 260px;
 }
 
+.window-tab.editing .window-tab-main {
+  padding-top: 4px;
+  padding-bottom: 6px;
+}
+
 .window-tab-rename {
   width: 8rem;
   min-width: 4rem;
@@ -683,6 +739,8 @@ body.is-resizing * {
   border-radius: 4px;
   font: inherit;
   font-weight: 550;
+  line-height: inherit;
+  outline: none;
   user-select: text;
   -webkit-user-select: text;
 }

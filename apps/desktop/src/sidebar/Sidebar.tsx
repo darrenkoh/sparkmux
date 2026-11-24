@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import AgentBoard from "../chrome/AgentBoard.tsx";
 import type { AgentBoardRow } from "../chrome/agentBoard.ts";
 import { onTabPointerDown, shouldIgnoreTabClick } from "../chrome/tabReorder.ts";
 import { useTabDragIndicator } from "../chrome/useTabDragIndicator.ts";
-import type { Selection, Snapshot } from "../types";
+import type { Selection, Snapshot, Window as TmuxWindow } from "../types";
 
 export default function Sidebar({
   snapshot,
@@ -16,6 +16,7 @@ export default function Sidebar({
   onSelectWindow,
   onSelectPane,
   onRenameSession,
+  onRenameTab,
   onCloseSession,
   onNewSession,
   onCollapse,
@@ -31,6 +32,7 @@ export default function Sidebar({
   onSelectWindow: (sessionName: string, windowId: string) => void;
   onSelectPane: (sessionName: string, windowId: string, paneId: string) => void;
   onRenameSession: (name: string) => void;
+  onRenameTab?: (windowId: string, name: string) => void;
   onCloseSession: (name: string) => void;
   onNewSession: () => void;
   onCollapse?: () => void;
@@ -43,7 +45,55 @@ export default function Sidebar({
   onSelectAgent?: (session: string, windowId: string, paneId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [editingWindowId, setEditingWindowId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const editingWindowIdRef = useRef<string | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const { draggingId, hint } = useTabDragIndicator();
+
+  useEffect(() => {
+    if (!editingWindowId) return;
+    const el = renameInputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editingWindowId]);
+
+  useEffect(() => {
+    if (!editingWindowId) return;
+    const exists = snapshot.sessions.some((s) =>
+      s.windows.some((w) => w.id === editingWindowId),
+    );
+    if (!exists) {
+      editingWindowIdRef.current = null;
+      setEditingWindowId(null);
+    }
+  }, [editingWindowId, snapshot]);
+
+  function startRenameTab(win: TmuxWindow) {
+    editingWindowIdRef.current = win.id;
+    setDraft(win.name);
+    setEditingWindowId(win.id);
+  }
+
+  function commitRenameTab() {
+    const id = editingWindowIdRef.current;
+    if (!id) return;
+    editingWindowIdRef.current = null;
+    const name = draft.trim();
+    setEditingWindowId(null);
+    if (!name || !onRenameTab) return;
+    const current = snapshot.sessions
+      .flatMap((s) => s.windows)
+      .find((w) => w.id === id)?.name;
+    if (name !== current) onRenameTab(id, name);
+  }
+
+  function cancelRenameTab() {
+    if (!editingWindowIdRef.current) return;
+    editingWindowIdRef.current = null;
+    setEditingWindowId(null);
+  }
 
   function toggle(id: string) {
     setCollapsed((prev) => {
@@ -174,6 +224,7 @@ export default function Sidebar({
               {!sessCollapsed &&
                 session.windows.map((win) => {
                   const winCollapsed = collapsed.has(win.id);
+                  const winEditing = editingWindowId === win.id;
                   const winSelected =
                     selection?.kind === "window" && selection.id === win.id;
                   const winVisible = visibleWindowId === win.id && live;
@@ -193,7 +244,7 @@ export default function Sidebar({
                       <div
                         className={`row win-row ${winSelected ? "selected" : ""} ${
                           winVisible ? "visible" : ""
-                        } ${draggingId === win.id ? "dragging" : ""} ${
+                        } ${winEditing ? "editing" : ""} ${draggingId === win.id ? "dragging" : ""} ${
                           session.windows.length > 1 ? "can-reorder" : ""
                         } ${
                           hint?.session === session.name && hint.id === win.id
@@ -206,7 +257,7 @@ export default function Sidebar({
                         data-tab-session={session.name}
                         data-tab-axis="vertical"
                         onPointerDown={(event) => {
-                          if (session.windows.length < 2) return;
+                          if (session.windows.length < 2 || winEditing) return;
                           onTabPointerDown(event, { session: session.name, windowId: win.id });
                         }}
                       >
@@ -221,31 +272,97 @@ export default function Sidebar({
                         >
                           {winCollapsed ? "▸" : "▾"}
                         </button>
-                        <button
-                          className="row-main"
-                          aria-label={winLabel}
-                          onClick={() => {
-                            if (shouldIgnoreTabClick()) return;
-                            onSelectWindow(session.name, win.id);
-                          }}
-                        >
-                          <span className="badge">{win.index}</span>
-                          <span className="name-stack">
-                            <span className="name">{win.name}</span>
-                            {pendingAsk && <span className="pending-ask">{pendingAsk}</span>}
-                          </span>
-                          {winAttn && (
-                            <span className="attn" title="unread" aria-hidden="true" />
-                          )}
-                          {winFinished && (
-                            <span
-                              className="attn-finished"
-                              title="finished"
-                              aria-hidden="true"
+                        {winEditing ? (
+                          <div
+                            className="row-main"
+                            onMouseDown={(e) => {
+                              if (e.target !== renameInputRef.current) e.preventDefault();
+                            }}
+                          >
+                            <span className="badge">{win.index}</span>
+                            <input
+                              ref={renameInputRef}
+                              autoFocus
+                              className="win-row-rename"
+                              value={draft}
+                              aria-label="Tab name"
+                              onChange={(e) => setDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.nativeEvent.isComposing) return;
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  commitRenameTab();
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  cancelRenameTab();
+                                }
+                              }}
+                              onBlur={commitRenameTab}
                             />
-                          )}
-                          <span className="meta">{win.panes.length}p</span>
-                        </button>
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              className="row-main"
+                              aria-label={winLabel}
+                              onClick={(e) => {
+                                if (shouldIgnoreTabClick()) return;
+                                if (e.detail > 1) return;
+                                onSelectWindow(session.name, win.id);
+                              }}
+                              onDoubleClick={(e) => {
+                                if (!onRenameTab) return;
+                                e.preventDefault();
+                                e.stopPropagation();
+                                startRenameTab(win);
+                              }}
+                            >
+                              <span className="badge">{win.index}</span>
+                              <span className="name-stack">
+                                <span className="name">{win.name}</span>
+                                {pendingAsk && <span className="pending-ask">{pendingAsk}</span>}
+                              </span>
+                              {winAttn && (
+                                <span className="attn" title="unread" aria-hidden="true" />
+                              )}
+                              {winFinished && (
+                                <span
+                                  className="attn-finished"
+                                  title="finished"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <span className="meta">{win.panes.length}p</span>
+                            </button>
+                            {onRenameTab && (
+                              <button
+                                type="button"
+                                className="win-rename-btn"
+                                data-no-drag=""
+                                title={`Rename tab ${win.name}`}
+                                aria-label={`Rename tab ${win.name}`}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  startRenameTab(win);
+                                }}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                                  <path
+                                    d="M8.5 1.75a1.25 1.25 0 0 1 1.75 1.75L4.4 9.35 2 10l.65-2.4z"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.2"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              </button>
+                            )}
+                          </>
+                        )}
                       </div>
                       {!winCollapsed &&
                         win.panes.length > 1 &&

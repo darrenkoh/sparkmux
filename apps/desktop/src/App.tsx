@@ -116,6 +116,7 @@ import TiledWindow, {
   paneInputModes,
 } from "./terminal/TiledWindow";
 import { canInsertRecipe } from "./terminal/recipes";
+import { canFocusTerminal } from "./terminal/terminalFocus";
 import { getTerm } from "./terminal/XtermView";
 import type {
   GuiError,
@@ -499,8 +500,7 @@ export default function App() {
         const existing = getTerm(pane.id);
         if (existing) {
           existing.scrollToBottom();
-          const activeTag = document.activeElement?.tagName;
-          if (activeTag !== "INPUT" && activeTag !== "TEXTAREA") {
+          if (canFocusTerminal(document.activeElement)) {
             existing.focus();
           }
         }
@@ -1229,11 +1229,11 @@ export default function App() {
           kind: "window",
           id: windowId,
           name,
-          sessionName: attachedRef.current ?? "",
+          sessionName: selectionRef.current.sessionName || attachedRef.current || "",
         });
       }
       await refreshTree();
-      if (focusedRef.current) {
+      if (focusedRef.current && canFocusTerminal(document.activeElement)) {
         getTerm(focusedRef.current)?.focus();
       }
     } catch (e) {
@@ -1630,7 +1630,7 @@ export default function App() {
     setZoomedPaneId(commit.zoom.zoomedPaneId);
     if (paneId) {
       void focusPane(paneId);
-      if (!mobile) getTerm(paneId)?.focus();
+      if (!mobile && canFocusTerminal(document.activeElement)) getTerm(paneId)?.focus();
     }
     if (mobile) setAgentHubOpen(false);
   }
@@ -1696,6 +1696,9 @@ export default function App() {
           });
           setInput(name);
           setDialog({ kind: "rename", value: name });
+        }}
+        onRenameTab={(windowId, name) => {
+          void renameTab(windowId, name);
         }}
         onCloseSession={(name) => requestCloseSession(name)}
       />
@@ -1937,8 +1940,7 @@ export default function App() {
             if (pane) {
               const existing = getTerm(pane.id);
               if (existing) {
-                const activeTag = document.activeElement?.tagName;
-                if (activeTag !== "INPUT" && activeTag !== "TEXTAREA") {
+                if (canFocusTerminal(document.activeElement)) {
                   existing.focus();
                 }
               }
@@ -2509,7 +2511,7 @@ export default function App() {
             <dt>New tab</dt>
             <dd>⌘T / tab bar +</dd>
             <dt>Rename tab</dt>
-            <dd>Double-click the tab name</dd>
+            <dd>Double-click it in the tab bar or the sidebar</dd>
             <dt>Reorder tab</dt>
             <dd>Drag it in the tab bar or the sidebar</dd>
             <dt>Close tab</dt>

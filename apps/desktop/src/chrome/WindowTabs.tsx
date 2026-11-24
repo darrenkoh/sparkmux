@@ -23,6 +23,7 @@ export default function WindowTabs({
 }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const editingIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { draggingId, hint } = useTabDragIndicator();
   const canReorder = windows.length > 1 && sessionName.length > 0;
@@ -35,21 +36,34 @@ export default function WindowTabs({
     el.select();
   }, [editingId]);
 
+  useEffect(() => {
+    if (!editingId) return;
+    if (!windows.some((w) => w.id === editingId)) {
+      editingIdRef.current = null;
+      setEditingId(null);
+    }
+  }, [editingId, windows]);
+
   function startRename(win: TmuxWindow) {
+    editingIdRef.current = win.id;
     setDraft(win.name);
     setEditingId(win.id);
   }
 
   function commitRename() {
-    const id = editingId;
+    const id = editingIdRef.current;
+    if (!id) return;
+    editingIdRef.current = null;
     const name = draft.trim();
     setEditingId(null);
-    if (!id || !name) return;
+    if (!name) return;
     const current = windows.find((w) => w.id === id)?.name;
     if (name !== current) onRenameTab(id, name);
   }
 
   function cancelRename() {
+    if (!editingIdRef.current) return;
+    editingIdRef.current = null;
     setEditingId(null);
   }
 
@@ -107,12 +121,15 @@ export default function WindowTabs({
                   aria-label="Tab name"
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing) return;
                     if (e.key === "Enter") {
                       e.preventDefault();
+                      e.stopPropagation();
                       commitRename();
                     }
                     if (e.key === "Escape") {
                       e.preventDefault();
+                      e.stopPropagation();
                       cancelRename();
                     }
                   }}
