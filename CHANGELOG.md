@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.79
+
+### Features & Improvements
+
+- **Clipboard image paste**: `⌘V` / `Ctrl+Shift+V` with an image and no text on the clipboard saves a PNG under the Sparkmux cache directory (`pasted-images/`) and pastes its shell-quoted path at the prompt without submitting, so agent CLIs attach it as an image.
+- **Shift+Return new line**: Pressing `Shift+Return` in a terminal pane sends `ESC CR` so agent CLI prompts (Claude, Grok, Gemini) start a new line instead of submitting.
+- **Factory Droid transcripts**: Read-only discovery and tracking for Factory Droid sessions under `~/.factory/sessions` (with remote staging for SSH panes), surfaced in analytics, attention, office, chronicle, and the usage chip.
+
 ## 0.1.78
 
 ### Bug Fixes
