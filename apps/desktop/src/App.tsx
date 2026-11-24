@@ -2515,7 +2515,9 @@ export default function App() {
             <dt>Close tab</dt>
             <dd>⌘W / tab × (asks first)</dd>
             <dt>Copy / paste</dt>
-            <dd>⌘C ⌘V / Ctrl+Shift+V</dd>
+            <dd>⌘C ⌘V / Ctrl+Shift+V. A copied image pastes as the path of a saved PNG</dd>
+            <dt>New line in a prompt</dt>
+            <dd>Shift+Return</dd>
             <dt>Drop a file</dt>
             <dd>Pastes its path into the prompt</dd>
             <dt>?</dt>

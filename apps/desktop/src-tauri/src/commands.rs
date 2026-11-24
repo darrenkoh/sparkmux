@@ -680,14 +680,26 @@ pub async fn paste_into_pane(
     bracket: bool,
 ) -> Result<(), String> {
     sparkmux_core::pane_id(&pane_id).map_err(|e| map_error(&e))?;
-    let mut text = arboard::Clipboard::new()
-        .and_then(|mut c| c.get_text())
-        .map_err(|e| e.to_string())?;
+    // Text wins. A clipboard with no text but an image pastes the path of a
+    // PNG copy, which agent CLIs attach as an image.
+    let read = arboard::Clipboard::new().and_then(|mut c| c.get_text());
+    let mut text = match read {
+        Ok(text) if !text.is_empty() => text,
+        other => {
+            let image = off_lock(crate::clip_image::save_clipboard_image).await?;
+            match (image, other) {
+                (Some(path), _) => path,
+                (None, Ok(_)) => return Ok(()),
+                (None, Err(e)) => return Err(e.to_string()),
+            }
+        }
+    };
     if text.len() > CLIP_MAX {
-        text.truncate(CLIP_MAX);
-    }
-    if text.is_empty() {
-        return Ok(());
+        let mut end = CLIP_MAX;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
     }
     if bracket {
         text = bracket_paste(&text);

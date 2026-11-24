@@ -4158,6 +4158,7 @@ dependencies = [
  "directories",
  "libc",
  "mime_guess",
+ "png",
  "qrcode",
  "rand",
  "rusqlite",

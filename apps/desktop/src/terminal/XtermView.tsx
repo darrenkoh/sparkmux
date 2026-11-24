@@ -853,6 +853,14 @@ export default function XtermView({
           return false;
         }
       }
+      // Shift+Return starts a new line in an agent prompt instead of
+      // submitting. ESC CR is what Claude, Grok, and Gemini read as a newline.
+      if (ev.key === "Enter" && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        // Without this the keypress that follows sends a plain CR.
+        ev.preventDefault();
+        if (!ev.isComposing) void paneWrite(paneId, [0x1b, 0x0d]);
+        return false;
+      }
       const pasteChord =
         (isMac && ev.metaKey && ev.key === "v") ||
         (!isMac && ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v"));
